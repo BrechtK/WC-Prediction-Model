@@ -5,11 +5,38 @@ import sys
 import pandas as pd
 
 from wc_predictor.reporting import format_world_cup_console_summary
-from wc_predictor.world_cup import WorldCupPredictionSettings, run_world_cup_predictions
+from wc_predictor.world_cup import (
+    WORLD_CUP_ODDS_MISSING_MESSAGE,
+    WorldCupPredictionSettings,
+    create_world_cup_odds_file,
+    resolve_world_cup_odds_input,
+    run_world_cup_predictions,
+)
 
 
 EXAMPLES = Path("data/examples")
 TEMPLATES = Path("data/templates")
+RUN_SCRIPT = Path("scripts/run_world_cup_predictions.py").resolve()
+CREATE_SCRIPT = Path("scripts/create_world_cup_odds_file.py").resolve()
+ODDS_COLUMNS = [
+    "match_id",
+    "date",
+    "stage",
+    "group",
+    "team_a",
+    "team_b",
+    "bookmaker",
+    "odds_a_win",
+    "odds_draw",
+    "odds_b_win",
+    "odds_over_2_5",
+    "odds_under_2_5",
+    "odds_btts_yes",
+    "odds_btts_no",
+    "odds_a_qualifies",
+    "odds_b_qualifies",
+    "notes",
+]
 
 
 def _settings(tmp_path: Path) -> WorldCupPredictionSettings:
@@ -21,27 +48,12 @@ def _settings(tmp_path: Path) -> WorldCupPredictionSettings:
 
 
 def test_world_cup_templates_have_expected_columns() -> None:
-    odds = pd.read_csv(TEMPLATES / "world_cup_odds_template.csv")
+    csv_odds = pd.read_csv(TEMPLATES / "world_cup_odds_template.csv")
+    xlsx_odds = pd.read_excel(TEMPLATES / "world_cup_odds_template.xlsx")
     predictions = pd.read_csv(TEMPLATES / "friend_predictions_template.csv")
 
-    assert odds.columns.tolist() == [
-        "match_id",
-        "date",
-        "stage",
-        "group",
-        "team_a",
-        "team_b",
-        "bookmaker",
-        "odds_a_win",
-        "odds_draw",
-        "odds_b_win",
-        "odds_over_2_5",
-        "odds_under_2_5",
-        "odds_btts_yes",
-        "odds_btts_no",
-        "odds_a_qualifies",
-        "odds_b_qualifies",
-    ]
+    assert csv_odds.columns.tolist() == ODDS_COLUMNS
+    assert xlsx_odds.columns.tolist() == ODDS_COLUMNS
     assert predictions.columns.tolist() == [
         "match_id",
         "player",
@@ -73,6 +85,55 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
     }.issubset(workflow.match_report.columns)
     assert len(pd.read_csv(settings.csv_output_path)) == 2
     assert len(pd.read_excel(settings.xlsx_output_path)) == 2
+
+
+def test_create_world_cup_odds_file_copies_template(tmp_path: Path) -> None:
+    destination = tmp_path / "raw" / "world_cup_odds.xlsx"
+    path, changed = create_world_cup_odds_file(destination)
+
+    assert changed
+    assert path == destination
+    assert destination.read_bytes() == (TEMPLATES / "world_cup_odds_template.xlsx").read_bytes()
+
+
+def test_create_world_cup_odds_file_does_not_overwrite_existing_file(tmp_path: Path) -> None:
+    destination = tmp_path / "world_cup_odds.xlsx"
+    destination.write_text("manual odds", encoding="utf-8")
+
+    _, changed = create_world_cup_odds_file(destination)
+
+    assert not changed
+    assert destination.read_text(encoding="utf-8") == "manual odds"
+
+    _, changed = create_world_cup_odds_file(destination, overwrite=True)
+
+    assert changed
+    assert destination.read_bytes() == (TEMPLATES / "world_cup_odds_template.xlsx").read_bytes()
+
+
+def test_world_cup_workflow_loads_xlsx_odds_input(tmp_path: Path) -> None:
+    input_path = tmp_path / "world_cup_odds.xlsx"
+    pd.read_csv(EXAMPLES / "example_world_cup_odds.csv").to_excel(input_path, index=False)
+    settings = WorldCupPredictionSettings(
+        input_path=input_path,
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+    )
+
+    workflow = run_world_cup_predictions(settings)
+
+    assert len(workflow.match_report) == 2
+    assert workflow.match_report.loc[0, "match_id"] == "WC001"
+
+
+def test_default_world_cup_input_prefers_xlsx_when_both_exist(tmp_path: Path, monkeypatch) -> None:
+    raw = tmp_path / "data" / "raw"
+    raw.mkdir(parents=True)
+    (raw / "world_cup_odds.csv").touch()
+    (raw / "world_cup_odds.xlsx").touch()
+    monkeypatch.chdir(tmp_path)
+
+    assert resolve_world_cup_odds_input() == Path("data/raw/world_cup_odds.xlsx")
 
 
 def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: Path) -> None:
@@ -118,8 +179,45 @@ def test_world_cup_prediction_script_runs_with_overrides(
         ],
     )
 
-    runpy.run_path("scripts/run_world_cup_predictions.py", run_name="__main__")
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
     assert settings.csv_output_path.exists()
     assert settings.xlsx_output_path.exists()
     assert "WC002 | Gamma vs Delta" in capsys.readouterr().out
+
+
+def test_world_cup_prediction_script_prints_friendly_missing_file_message(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_world_cup_predictions.py"])
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    assert capsys.readouterr().out.strip() == WORLD_CUP_ODDS_MISSING_MESSAGE
+
+
+def test_create_world_cup_odds_file_script_runs_with_overrides(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    destination = tmp_path / "world_cup_odds.xlsx"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "create_world_cup_odds_file.py",
+            "--output",
+            str(destination),
+            "--template",
+            str(TEMPLATES.resolve() / "world_cup_odds_template.xlsx"),
+        ],
+    )
+
+    runpy.run_path(str(CREATE_SCRIPT), run_name="__main__")
+
+    assert destination.exists()
+    assert "Fill in" in capsys.readouterr().out

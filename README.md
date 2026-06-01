@@ -152,17 +152,33 @@ EV-optimal scorelines, and the top five EV predictions.
 
 ## Running Real World Cup Predictions
 
-Start from `data/templates/world_cup_odds_template.csv`, add one row per
-bookmaker and upcoming match, then place the completed file at
-`data/raw/world_cup_odds.csv`. Group-stage rows should include `group`; knockout
-rows may leave it blank. Qualification odds are optional but recommended for
-knockout matches.
+The manual-entry workflow is designed to work directly from VS Code:
 
-Run:
+```powershell
+python scripts/create_world_cup_odds_file.py
+```
+
+1. Run `scripts/create_world_cup_odds_file.py`.
+2. Fill in `data/raw/world_cup_odds.xlsx`, using one row per bookmaker and
+   upcoming match.
+3. Run `scripts/run_world_cup_predictions.py`.
+4. Read `data/processed/world_cup_recommendations.xlsx`.
+
+Both scripts can be opened in VS Code and launched with **Run Python File**.
+The creation script preserves an existing manually edited workbook. Pass
+`--overwrite` only when you intentionally want a fresh copy of the template.
+
+Group-stage rows should include `group`; knockout rows may leave it blank.
+Qualification odds are optional but recommended for knockout matches.
+
+The prediction command is:
 
 ```powershell
 python scripts/run_world_cup_predictions.py
 ```
+
+It prefers `data/raw/world_cup_odds.xlsx` when available and falls back to
+`data/raw/world_cup_odds.csv` for compatibility.
 
 The script removes bookmaker margins, aggregates fair probabilities, calibrates
 the Poisson score model, selects the EV-optimal pool prediction, and writes:

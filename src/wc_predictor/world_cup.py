@@ -4,20 +4,58 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from shutil import copyfile
 
 from wc_predictor.config import ProjectConfig
 from wc_predictor.market_data import load_odds
 from wc_predictor.reporting import export_dataframe, format_world_cup_console_summary
 from wc_predictor.workflow import PredictionWorkflowResult, run_prediction_workflow
 
+DEFAULT_WORLD_CUP_XLSX_INPUT_PATH = Path("data/raw/world_cup_odds.xlsx")
+DEFAULT_WORLD_CUP_CSV_INPUT_PATH = Path("data/raw/world_cup_odds.csv")
+DEFAULT_WORLD_CUP_TEMPLATE_PATH = Path("data/templates/world_cup_odds_template.xlsx")
+WORLD_CUP_ODDS_MISSING_MESSAGE = (
+    "No World Cup odds file found. Run scripts/create_world_cup_odds_file.py first, "
+    "fill in data/raw/world_cup_odds.xlsx, then rerun predictions."
+)
+
 
 @dataclass(frozen=True)
 class WorldCupPredictionSettings:
     """Input and output paths for a real World Cup recommendation run."""
 
-    input_path: Path = Path("data/raw/world_cup_odds.csv")
+    input_path: Path | None = None
     csv_output_path: Path = Path("data/processed/world_cup_recommendations.csv")
     xlsx_output_path: Path = Path("data/processed/world_cup_recommendations.xlsx")
+
+
+def resolve_world_cup_odds_input(input_path: str | Path | None = None) -> Path:
+    """Resolve an explicit odds path or prefer the user-friendly Excel default."""
+
+    if input_path is not None:
+        path = Path(input_path)
+        if path.exists():
+            return path
+        raise FileNotFoundError(WORLD_CUP_ODDS_MISSING_MESSAGE)
+    for path in (DEFAULT_WORLD_CUP_XLSX_INPUT_PATH, DEFAULT_WORLD_CUP_CSV_INPUT_PATH):
+        if path.exists():
+            return path
+    raise FileNotFoundError(WORLD_CUP_ODDS_MISSING_MESSAGE)
+
+
+def create_world_cup_odds_file(
+    output_path: str | Path = DEFAULT_WORLD_CUP_XLSX_INPUT_PATH,
+    template_path: str | Path = DEFAULT_WORLD_CUP_TEMPLATE_PATH,
+    overwrite: bool = False,
+) -> tuple[Path, bool]:
+    """Copy the Excel odds template into the raw-data folder when requested."""
+
+    output_path = Path(output_path)
+    if output_path.exists() and not overwrite:
+        return output_path, False
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    copyfile(template_path, output_path)
+    return output_path, True
 
 
 def run_world_cup_predictions(
@@ -27,7 +65,8 @@ def run_world_cup_predictions(
     """Generate and export recommendations for upcoming tournament matches."""
 
     settings = settings or WorldCupPredictionSettings()
-    workflow = run_prediction_workflow(load_odds(settings.input_path), config=config)
+    input_path = resolve_world_cup_odds_input(settings.input_path)
+    workflow = run_prediction_workflow(load_odds(input_path), config=config)
     export_dataframe(workflow.match_report, settings.csv_output_path)
     export_dataframe(workflow.match_report, settings.xlsx_output_path)
     return workflow
@@ -40,11 +79,17 @@ def run_and_print_world_cup_predictions(
     """Generate, export, and print upcoming tournament recommendations."""
 
     settings = settings or WorldCupPredictionSettings()
-    workflow = run_world_cup_predictions(settings, config)
+    input_path = resolve_world_cup_odds_input(settings.input_path)
+    resolved_settings = WorldCupPredictionSettings(
+        input_path=input_path,
+        csv_output_path=settings.csv_output_path,
+        xlsx_output_path=settings.xlsx_output_path,
+    )
+    workflow = run_world_cup_predictions(resolved_settings, config)
     print(
         format_world_cup_console_summary(
             workflow.match_report,
-            settings.input_path,
+            input_path,
             settings.csv_output_path,
             settings.xlsx_output_path,
         )
