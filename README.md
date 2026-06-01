@@ -101,8 +101,14 @@ The first historical backtester evaluates group-stage-style pool scoring only:
 ```powershell
 python scripts/run_backtest.py `
   --input data/examples/example_historical_matches.csv `
-  --output data/processed/backtest_results.csv
+  --detailed-output data/processed/backtest_results_by_file.csv `
+  --aggregate-output data/processed/backtest_results_aggregate.csv `
+  --skipped-output data/processed/backtest_skipped_by_file.csv
 ```
+
+`--input` may be one CSV file or a folder containing multiple CSV files. Folder
+mode runs each CSV independently, retains `source_file` in per-file output, and
+recomputes aggregate strategy metrics from the pooled match-level records.
 
 The loader accepts Football-Data.co.uk-like columns: `HomeTeam`, `AwayTeam`,
 `FTHG`, `FTAG`, optional `Date`, and average or bookmaker decimal odds such as
@@ -113,7 +119,8 @@ The exported strategy table compares fixed-score baselines, favourite-win
 baselines, the modal Poisson scoreline, 1X2 EV optimisation, and 1X2 plus
 over/under EV optimisation when that optional market is available. Missing
 optional over/under odds fall back to the 1X2 calibration. Skipped rows and
-their reasons are reported per strategy.
+their reasons are reported per strategy. A separate skip-diagnostic CSV groups
+unique skipped matches by source file and reason.
 
 ## Add Your Data
 

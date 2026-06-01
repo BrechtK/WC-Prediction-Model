@@ -181,16 +181,57 @@ class BacktestReport:
         self.summary.to_csv(path, index=False)
 
 
+@dataclass(frozen=True)
+class BatchBacktestSettings:
+    """Output paths for single-file or folder-level historical backtests."""
+
+    detailed_output_path: Path = Path("data/processed/backtest_results_by_file.csv")
+    aggregate_output_path: Path = Path("data/processed/backtest_results_aggregate.csv")
+    skipped_output_path: Path = Path("data/processed/backtest_skipped_by_file.csv")
+
+
+@dataclass(frozen=True)
+class BatchBacktestReport:
+    """Per-file, aggregate, and skip-diagnostic outputs for one or more CSVs."""
+
+    detailed_summary: pd.DataFrame
+    aggregate_summary: pd.DataFrame
+    skipped_by_file_reason: pd.DataFrame
+    predictions: pd.DataFrame
+    skipped: pd.DataFrame
+
+    def export_csvs(self, settings: BatchBacktestSettings) -> None:
+        """Export per-file, aggregate, and skip-diagnostic tables."""
+
+        for path in (
+            settings.detailed_output_path,
+            settings.aggregate_output_path,
+            settings.skipped_output_path,
+        ):
+            ensure_parent_directory(path)
+        self.detailed_summary.to_csv(settings.detailed_output_path, index=False)
+        self.aggregate_summary.to_csv(settings.aggregate_output_path, index=False)
+        self.skipped_by_file_reason.to_csv(settings.skipped_output_path, index=False)
+
+
 @dataclass
 class _StrategyAccumulator:
     """Mutable per-strategy records used while iterating through history."""
 
     name: str
+    source_file: str
     predictions: list[dict[str, object]] = field(default_factory=list)
     skipped: list[dict[str, object]] = field(default_factory=list)
 
     def skip(self, match_id: str, reason: str) -> None:
-        self.skipped.append({"strategy": self.name, "match_id": match_id, "reason": reason})
+        self.skipped.append(
+            {
+                "source_file": self.source_file,
+                "strategy": self.name,
+                "match_id": match_id,
+                "reason": reason,
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -223,16 +264,20 @@ class BacktestRunner:
         loader: HistoricalOddsLoader,
         config: ProjectConfig | None = None,
         settings: BacktestSettings | None = None,
+        source_file: str | None = None,
     ) -> None:
         self.loader = loader
         self.config = config or ProjectConfig()
         self.settings = settings or BacktestSettings()
+        self.source_file = source_file or self._loader_source_file(loader)
 
     def run(self, export: bool = True) -> BacktestReport:
         """Run all group-stage strategies and optionally export summary metrics."""
 
         data = self.loader.load()
-        accumulators = {name: _StrategyAccumulator(name) for name in self.STRATEGY_NAMES}
+        accumulators = {
+            name: _StrategyAccumulator(name, self.source_file) for name in self.STRATEGY_NAMES
+        }
         odds_by_match = {
             str(match_id): group.copy()
             for match_id, group in data.odds.groupby("match_id", sort=False)
@@ -392,6 +437,7 @@ class BacktestRunner:
         actual_a, actual_b = actual
         accumulator.predictions.append(
             {
+                "source_file": accumulator.source_file,
                 "strategy": accumulator.name,
                 "match_id": match["match_id"],
                 "date": match["date"],
@@ -416,6 +462,7 @@ class BacktestRunner:
         skip_reasons = "; ".join(f"{reason}: {count}" for reason, count in sorted(skip_counts.items()))
         if predictions.empty:
             return {
+                "source_file": accumulator.source_file,
                 "strategy": accumulator.name,
                 "average_realised_points": np.nan,
                 "total_points": 0,
@@ -428,6 +475,7 @@ class BacktestRunner:
                 "skip_reasons": skip_reasons,
             }
         return {
+            "source_file": accumulator.source_file,
             "strategy": accumulator.name,
             "average_realised_points": float(predictions["realised_points"].mean()),
             "total_points": int(predictions["realised_points"].sum()),
@@ -439,6 +487,99 @@ class BacktestRunner:
             "skipped_matches": len(accumulator.skipped),
             "skip_reasons": skip_reasons,
         }
+
+    @staticmethod
+    def _loader_source_file(loader: HistoricalOddsLoader) -> str:
+        path = getattr(loader, "path", None)
+        return Path(path).name if path is not None else "historical_data"
+
+
+class BatchBacktestRunner:
+    """Run the group-stage backtest against one CSV or a folder of CSV files."""
+
+    def __init__(
+        self,
+        input_path: str | Path,
+        config: ProjectConfig | None = None,
+        settings: BatchBacktestSettings | None = None,
+    ) -> None:
+        self.input_path = Path(input_path)
+        self.config = config or ProjectConfig()
+        self.settings = settings or BatchBacktestSettings()
+
+    def run(self, export: bool = True) -> BatchBacktestReport:
+        """Backtest every selected CSV and recompute aggregate metrics from match records."""
+
+        reports = [
+            BacktestRunner(
+                FootballDataCSVLoader(path),
+                config=self.config,
+                source_file=path.name,
+            ).run(export=False)
+            for path in self._csv_paths()
+        ]
+        detailed_summary = pd.concat([report.summary for report in reports], ignore_index=True)
+        predictions = self._concat_frames([report.predictions for report in reports])
+        skipped = self._concat_frames([report.skipped for report in reports])
+        aggregate_summary = self._aggregate_summary(predictions, skipped)
+        skipped_by_file_reason = self._skipped_by_file_reason(skipped)
+        report = BatchBacktestReport(
+            detailed_summary,
+            aggregate_summary,
+            skipped_by_file_reason,
+            predictions,
+            skipped,
+        )
+        if export:
+            report.export_csvs(self.settings)
+        return report
+
+    def _csv_paths(self) -> list[Path]:
+        if self.input_path.is_file():
+            if self.input_path.suffix.lower() != ".csv":
+                raise ValueError(f"Historical input file must be CSV: {self.input_path}")
+            return [self.input_path]
+        if self.input_path.is_dir():
+            paths = sorted(
+                path for path in self.input_path.iterdir() if path.is_file() and path.suffix.lower() == ".csv"
+            )
+            if not paths:
+                raise ValueError(f"Historical input folder contains no CSV files: {self.input_path}")
+            return paths
+        raise FileNotFoundError(self.input_path)
+
+    @staticmethod
+    def _concat_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+        available = [frame for frame in frames if not frame.empty]
+        return pd.concat(available, ignore_index=True) if available else pd.DataFrame()
+
+    @staticmethod
+    def _aggregate_summary(predictions: pd.DataFrame, skipped: pd.DataFrame) -> pd.DataFrame:
+        rows: list[dict[str, object]] = []
+        for strategy in BacktestRunner.STRATEGY_NAMES:
+            accumulator = _StrategyAccumulator(strategy, "ALL_FILES")
+            if not predictions.empty:
+                accumulator.predictions = predictions[predictions["strategy"] == strategy].to_dict("records")
+            if not skipped.empty:
+                accumulator.skipped = skipped[skipped["strategy"] == strategy].to_dict("records")
+            rows.append(BacktestRunner._summarise(accumulator))
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _skipped_by_file_reason(skipped: pd.DataFrame) -> pd.DataFrame:
+        columns = ("source_file", "reason", "skipped_matches", "affected_strategies")
+        if skipped.empty:
+            return pd.DataFrame(columns=columns)
+        grouped = (
+            skipped.groupby(["source_file", "reason"], as_index=False)
+            .agg(
+                skipped_matches=("match_id", "nunique"),
+                affected_strategies=("strategy", lambda values: ", ".join(sorted(set(values)))),
+            )
+            .sort_values(["source_file", "reason"])
+            .reset_index(drop=True)
+        )
+        return grouped[list(columns)]
 
 
 def targets_1x2_values(targets: CalibrationTargets) -> tuple[float, float, float]:
