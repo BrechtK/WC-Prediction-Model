@@ -256,3 +256,5 @@ challenger should be evaluated out of sample against the market-implied
 baseline using realised pool points, not just model fit.
 
 See `docs/` for formulas, assumptions, research notes, and the staged roadmap.
+For tournament-specific caveats when interpreting domestic backtests, see
+[`docs/stylised_facts.md`](docs/stylised_facts.md).
