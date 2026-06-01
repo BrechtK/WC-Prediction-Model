@@ -4,9 +4,211 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
+from wc_predictor.backtesting import BatchBacktestReport, BatchBacktestSettings
 from wc_predictor.utils import ensure_parent_directory
+
+
+def _format_signed(value: float) -> str:
+    return f"{value:+.3f}"
+
+
+def _yes_no(value: bool) -> str:
+    return "Yes" if value else "No"
+
+
+def _strategy_average(summary: pd.DataFrame, strategy: str) -> float:
+    row = summary.loc[summary["strategy"] == strategy]
+    if row.empty:
+        raise ValueError(f"Missing strategy summary: {strategy}")
+    return float(row.iloc[0]["average_realised_points"])
+
+
+def _format_overall_strategy_ranking(aggregate_summary: pd.DataFrame) -> str:
+    ranking = aggregate_summary.copy()
+    favourite_average = _strategy_average(ranking, "favourite_1_0")
+    modal_average = _strategy_average(ranking, "most_likely_poisson")
+    ranking["gap_vs_favourite_1_0"] = ranking["average_realised_points"] - favourite_average
+    ranking["gap_vs_most_likely_poisson"] = ranking["average_realised_points"] - modal_average
+    ranking["rank"] = ranking["average_realised_points"].rank(method="min", ascending=False).astype(int)
+    ranking = ranking.sort_values(
+        ["average_realised_points", "total_points", "strategy"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    lines = [
+        "Overall Strategy Ranking",
+        "Rank  Strategy                       Avg pts  Total  Exact    Goal diff  Result   vs fav  vs modal",
+    ]
+    for _, row in ranking.iterrows():
+        lines.append(
+            f"{row['rank']:>4}  {row['strategy']:<29} "
+            f"{row['average_realised_points']:>7.3f}  "
+            f"{int(row['total_points']):>5}  "
+            f"{row['exact_score_hit_rate']:>6.1%}  "
+            f"{row['correct_goal_difference_hit_rate']:>9.1%}  "
+            f"{row['correct_result_hit_rate']:>6.1%}  "
+            f"{_format_signed(row['gap_vs_favourite_1_0']):>7}  "
+            f"{_format_signed(row['gap_vs_most_likely_poisson']):>8}"
+        )
+    return "\n".join(lines)
+
+
+def _format_key_conclusions(aggregate_summary: pd.DataFrame) -> str:
+    ranking = aggregate_summary.sort_values(
+        ["average_realised_points", "total_points", "strategy"],
+        ascending=[False, False, True],
+    )
+    best = ranking.iloc[0]
+    tied_best = ranking[np.isclose(ranking["average_realised_points"], best["average_realised_points"])]
+    best_strategies = ", ".join(sorted(tied_best["strategy"].astype(str)))
+    favourite = _strategy_average(ranking, "favourite_1_0")
+    modal = _strategy_average(ranking, "most_likely_poisson")
+    ev_1x2 = _strategy_average(ranking, "ev_optimal_1x2")
+    ev_over_under = _strategy_average(ranking, "ev_optimal_1x2_over_under")
+    ev_beats_favourite = ev_1x2 > favourite
+    ev_beats_modal = ev_1x2 > modal
+    hypothesis_supported = ev_beats_favourite and ev_beats_modal
+    return "\n".join(
+        [
+            "Key Conclusions",
+            f"- Best strategy overall: {best_strategies} ({best['average_realised_points']:.3f} points per match)",
+            f"- ev_optimal_1x2 beats favourite_1_0: {_yes_no(ev_beats_favourite)} ({_format_signed(ev_1x2 - favourite)} points per match)",
+            f"- ev_optimal_1x2_over_under beats ev_optimal_1x2: {_yes_no(ev_over_under > ev_1x2)} ({_format_signed(ev_over_under - ev_1x2)} points per match)",
+            f"- EV optimisation beats most_likely_poisson: {_yes_no(ev_beats_modal)} ({_format_signed(ev_1x2 - modal)} points per match)",
+            f"- Results support the project hypothesis: {_yes_no(hypothesis_supported)}",
+        ]
+    )
+
+
+def _per_file_winners(detailed_summary: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    winners: list[dict[str, object]] = []
+    first_place_counts: dict[str, int] = {}
+    for source_file, group in detailed_summary.groupby("source_file", sort=True):
+        ranked = group.sort_values(
+            ["average_realised_points", "total_points", "strategy"],
+            ascending=[False, False, True],
+        ).reset_index(drop=True)
+        best = ranked.iloc[0]
+        tied_best = ranked[np.isclose(ranked["average_realised_points"], best["average_realised_points"])]
+        tied_names = sorted(tied_best["strategy"].astype(str))
+        for strategy in tied_names:
+            first_place_counts[strategy] = first_place_counts.get(strategy, 0) + 1
+        remaining = ranked[~np.isclose(ranked["average_realised_points"], best["average_realised_points"])]
+        second = remaining.iloc[0] if not remaining.empty else None
+        winners.append(
+            {
+                "source_file": source_file,
+                "best_strategy": ", ".join(tied_names),
+                "best_average_points": float(best["average_realised_points"]),
+                "second_best_strategy": second["strategy"] if second is not None else "None",
+                "performance_gap": (
+                    float(best["average_realised_points"] - second["average_realised_points"])
+                    if second is not None
+                    else np.nan
+                ),
+            }
+        )
+    winners_frame = pd.DataFrame(winners)
+    win_counts = pd.Series(first_place_counts, dtype=int).sort_index()
+    return winners_frame, win_counts
+
+
+def _format_per_file_winners(detailed_summary: pd.DataFrame) -> str:
+    winners, win_counts = _per_file_winners(detailed_summary)
+    lines = [
+        "Per-File Winners",
+        "Source file                    Best strategy                   Avg pts  Second-best strategy            Gap",
+    ]
+    for _, row in winners.iterrows():
+        lines.append(
+            f"{row['source_file']:<30} "
+            f"{row['best_strategy']:<29} "
+            f"{row['best_average_points']:>7.3f}  "
+            f"{row['second_best_strategy']:<29} "
+            f"{_format_signed(row['performance_gap']) if pd.notna(row['performance_gap']) else 'n/a':>7}"
+        )
+    lines.append("")
+    lines.append("First-Place Counts")
+    for strategy, count in win_counts.items():
+        lines.append(f"- {strategy}: {count}")
+    return "\n".join(lines)
+
+
+def _format_skipped_matches(skipped_by_file_reason: pd.DataFrame) -> str:
+    if skipped_by_file_reason.empty:
+        return "Skipped Matches\nNo skipped matches."
+    compact = (
+        skipped_by_file_reason.groupby("reason", as_index=False)
+        .agg(
+            skipped_matches=("skipped_matches", "sum"),
+            files_affected=("source_file", "nunique"),
+        )
+        .sort_values(["skipped_matches", "reason"], ascending=[False, True])
+    )
+    lines = ["Skipped Matches", "Reason                               Matches  Files"]
+    for _, row in compact.iterrows():
+        lines.append(f"{row['reason']:<36} {int(row['skipped_matches']):>7}  {int(row['files_affected']):>5}")
+    return "\n".join(lines)
+
+
+def format_backtest_console_summary(
+    report: BatchBacktestReport,
+    input_path: str | Path,
+    settings: BatchBacktestSettings,
+    verbose: bool = False,
+) -> str:
+    """Render the default human-readable historical-backtest console report."""
+
+    source_files = report.detailed_summary["source_file"].nunique()
+    total_matches = (
+        report.predictions[["source_file", "match_id"]].drop_duplicates().shape[0]
+        if not report.predictions.empty
+        else 0
+    )
+    total_skipped = (
+        report.skipped[["source_file", "match_id"]].drop_duplicates().shape[0]
+        if not report.skipped.empty
+        else 0
+    )
+    sections = [
+        "\n".join(
+            [
+                "Backtest Scope",
+                f"- Source: {Path(input_path)}",
+                f"- Files processed: {source_files}",
+                f"- Total matches used: {total_matches}",
+                f"- Total skipped matches: {total_skipped}",
+            ]
+        ),
+        _format_overall_strategy_ranking(report.aggregate_summary),
+        _format_key_conclusions(report.aggregate_summary),
+        _format_per_file_winners(report.detailed_summary),
+        _format_skipped_matches(report.skipped_by_file_reason),
+        "\n".join(
+            [
+                "File Outputs",
+                f"- Detailed per-file CSV: {settings.detailed_output_path}",
+                f"- Aggregate strategy CSV: {settings.aggregate_output_path}",
+                f"- Skipped-match CSV: {settings.skipped_output_path}",
+            ]
+        ),
+    ]
+    if verbose:
+        sections.extend(
+            [
+                "Verbose Per-File Strategy Results\n" + report.detailed_summary.to_string(index=False),
+                "Verbose Aggregate Strategy Results\n" + report.aggregate_summary.to_string(index=False),
+                "Verbose Skipped Matches By File And Reason\n"
+                + (
+                    report.skipped_by_file_reason.to_string(index=False)
+                    if not report.skipped_by_file_reason.empty
+                    else "No skipped matches."
+                ),
+            ]
+        )
+    return "\n\n".join(sections)
 
 
 def format_model_inspection_report(match_report: pd.DataFrame) -> str:

@@ -122,6 +122,10 @@ optional over/under odds fall back to the 1X2 calibration. Skipped rows and
 their reasons are reported per strategy. A separate skip-diagnostic CSV groups
 unique skipped matches by source file and reason.
 
+The CLI prints a concise interpretation summary by default: scope, overall
+ranking, baseline gaps, key conclusions, per-file winners, skips, and export
+paths. Add `--verbose` to append the full raw per-file and aggregate tables.
+
 ## Add Your Data
 
 Odds inputs may be CSV or Excel. Required columns are:

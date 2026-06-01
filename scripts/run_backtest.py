@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from wc_predictor.backtesting import BatchBacktestRunner, BatchBacktestSettings
+from wc_predictor.reporting import format_backtest_console_summary
 
 
 def main() -> None:
@@ -27,6 +28,11 @@ def main() -> None:
         "--skipped-output",
         default="data/processed/backtest_skipped_by_file.csv",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print full per-file, aggregate, and skipped-match tables after the summary.",
+    )
     args = parser.parse_args()
 
     settings = BatchBacktestSettings(
@@ -35,18 +41,7 @@ def main() -> None:
         skipped_output_path=Path(args.skipped_output),
     )
     report = BatchBacktestRunner(args.input, settings=settings).run()
-    print("Per-file strategy results")
-    print(report.detailed_summary.to_string(index=False))
-    print("\nAggregate strategy results")
-    print(report.aggregate_summary.to_string(index=False))
-    print("\nSkipped matches by file and reason")
-    if report.skipped_by_file_reason.empty:
-        print("None")
-    else:
-        print(report.skipped_by_file_reason.to_string(index=False))
-    print(f"\nDetailed results written to {settings.detailed_output_path}")
-    print(f"Aggregate results written to {settings.aggregate_output_path}")
-    print(f"Skipped-match report written to {settings.skipped_output_path}")
+    print(format_backtest_console_summary(report, args.input, settings, args.verbose))
 
 
 if __name__ == "__main__":
