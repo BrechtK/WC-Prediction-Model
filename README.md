@@ -79,6 +79,7 @@ Dummy odds, predictions, and results live in `data/examples/`.
 
 ```powershell
 python scripts/run_predictions.py
+python scripts/inspect_predictions.py
 python scripts/update_standings.py
 python scripts/generate_report.py
 pytest
@@ -87,6 +88,10 @@ pytest
 Generated CSV and Excel reports are written to `data/processed/`. Each script
 accepts `--odds`, `--predictions`, `--results`, and `--output-dir` overrides as
 appropriate.
+
+`scripts/inspect_predictions.py` prints a compact per-match audit view with raw
+and fair 1X2 probabilities, calibrated lambdas, fit error, score-grid tail mass,
+the modal scoreline, and the top five EV predictions.
 
 ## Add Your Data
 

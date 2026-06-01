@@ -23,6 +23,13 @@ FAIR_COLUMNS: dict[str, tuple[str, ...]] = {
     "qualification": ("fair_a_qualifies", "fair_b_qualifies"),
 }
 
+RAW_COLUMNS: dict[str, tuple[str, ...]] = {
+    "1x2": ("raw_a_win", "raw_draw", "raw_b_win"),
+    "over_under_2_5": ("raw_over_2_5", "raw_under_2_5"),
+    "btts": ("raw_btts_yes", "raw_btts_no"),
+    "qualification": ("raw_a_qualifies", "raw_b_qualifies"),
+}
+
 
 def decimal_odds_to_implied_probabilities(decimal_odds: Sequence[float]) -> np.ndarray:
     """Convert valid decimal odds O_i into raw implied probabilities 1 / O_i."""
@@ -79,6 +86,7 @@ def process_bookmaker_odds(
             result = fair_probabilities_from_decimal_odds(
                 values.astype(float).tolist(), margin_method, suspicious_low, suspicious_high
             )
+            output.update(zip(RAW_COLUMNS[market_name], result.raw_probabilities, strict=True))
             output.update(zip(FAIR_COLUMNS[market_name], result.fair_probabilities, strict=True))
             output[f"overround_{market_name}"] = result.overround
             output["warnings"].extend(result.warnings)

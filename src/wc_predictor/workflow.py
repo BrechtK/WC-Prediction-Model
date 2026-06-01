@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
@@ -37,14 +38,18 @@ def _optional_probability(row: pd.Series, column: str) -> float | None:
     return float(row[column]) if column in row and pd.notna(row[column]) else None
 
 
-def _format_alternatives(recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation) -> str:
+def _format_evaluations(evaluations: tuple[Any, ...]) -> str:
     formatted: list[str] = []
-    for alternative in recommendation.alternatives:
-        score = f"{alternative.predicted_score[0]}-{alternative.predicted_score[1]}"
-        if hasattr(alternative, "predicted_qualifier"):
-            score += f"/{alternative.predicted_qualifier}"
-        formatted.append(f"{score} ({alternative.expected_points:.3f})")
+    for evaluation in evaluations:
+        score = f"{evaluation.predicted_score[0]}-{evaluation.predicted_score[1]}"
+        if hasattr(evaluation, "predicted_qualifier"):
+            score += f"/{evaluation.predicted_qualifier}"
+        formatted.append(f"{score} ({evaluation.expected_points:.3f})")
     return "; ".join(formatted)
+
+
+def _format_alternatives(recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation) -> str:
+    return _format_evaluations(recommendation.alternatives)
 
 
 def _format_bookmaker_fair_probabilities(bookmaker_probabilities: pd.DataFrame, match_id: str) -> str:
@@ -53,6 +58,19 @@ def _format_bookmaker_fair_probabilities(bookmaker_probabilities: pd.DataFrame, 
         f"{row['bookmaker']}: {row['fair_a_win']:.4f}/{row['fair_draw']:.4f}/{row['fair_b_win']:.4f}"
         for _, row in rows.iterrows()
     )
+
+
+def _format_bookmaker_raw_probabilities(bookmaker_probabilities: pd.DataFrame, match_id: str) -> str:
+    rows = bookmaker_probabilities[bookmaker_probabilities["match_id"] == match_id]
+    return "; ".join(
+        f"{row['bookmaker']}: {row['raw_a_win']:.4f}/{row['raw_draw']:.4f}/{row['raw_b_win']:.4f} "
+        f"(overround={row['overround_1x2']:.4f})"
+        for _, row in rows.iterrows()
+    )
+
+
+def _format_top_ev_predictions(recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation) -> str:
+    return _format_evaluations((recommendation.best, *recommendation.alternatives[:4]))
 
 
 def run_prediction_workflow(
@@ -137,6 +155,7 @@ def run_prediction_workflow(
                 "stage": row["stage"],
                 "team_a": row["team_a"],
                 "team_b": row["team_b"],
+                "bookmaker_raw_1x2": _format_bookmaker_raw_probabilities(bookmaker_probabilities, match_id),
                 "bookmaker_fair_1x2": _format_bookmaker_fair_probabilities(bookmaker_probabilities, match_id),
                 "market_a_win": targets.a_win,
                 "market_draw": targets.draw,
@@ -155,6 +174,7 @@ def run_prediction_workflow(
                 "correct_result_probability": getattr(recommendation.best, "correct_result_probability", pd.NA),
                 "most_likely_scoreline": f"{recommendation.most_likely_scoreline[0]}-{recommendation.most_likely_scoreline[1]}",
                 "ev_optimal_differs_from_most_likely": recommendation.differs_from_most_likely,
+                "top_5_ev_predictions": _format_top_ev_predictions(recommendation),
                 "top_alternatives": _format_alternatives(recommendation),
                 "tail_probability_before_renormalisation": calibration.score_matrix.tail_probability,
                 "warnings": "; ".join(filter(None, [str(row.get("warnings", "")), *notes])),
