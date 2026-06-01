@@ -95,7 +95,8 @@ def run_prediction_workflow(
     if missing_1x2.any():
         match_ids = aggregated.loc[missing_1x2, "match_id"].astype(str).tolist()
         raise ValueError(f"No complete 1X2 market is available for matches: {match_ids}")
-    matches = odds[["match_id", "date", "stage", "team_a", "team_b"]].drop_duplicates("match_id")
+    odds_with_group = odds.assign(group=odds["group"] if "group" in odds else pd.NA)
+    matches = odds_with_group[["match_id", "date", "stage", "group", "team_a", "team_b"]].drop_duplicates("match_id")
     market = matches.merge(aggregated, on="match_id", validate="one_to_one")
 
     report_rows: list[dict[str, object]] = []
@@ -154,6 +155,7 @@ def run_prediction_workflow(
                 "match_id": match_id,
                 "date": row["date"],
                 "stage": row["stage"],
+                "group": row["group"],
                 "team_a": row["team_a"],
                 "team_b": row["team_b"],
                 "bookmaker_raw_1x2": _format_bookmaker_raw_probabilities(bookmaker_probabilities, match_id),

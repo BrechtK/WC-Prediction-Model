@@ -264,6 +264,52 @@ def format_model_inspection_report(match_report: pd.DataFrame) -> str:
     return "\n\n".join(sections)
 
 
+def format_world_cup_console_summary(
+    match_report: pd.DataFrame,
+    input_path: str | Path,
+    csv_output_path: str | Path,
+    xlsx_output_path: str | Path,
+) -> str:
+    """Render the real-tournament recommendation summary."""
+
+    sections = [
+        "\n".join(
+            [
+                "World Cup Predictions",
+                f"- Source: {Path(input_path)}",
+                f"- Matches: {len(match_report)}",
+            ]
+        )
+    ]
+    for _, row in match_report.iterrows():
+        group = f" / {row['group']}" if pd.notna(row.get("group")) and str(row["group"]).strip() else ""
+        qualifier = f"; qualifier={row['recommended_qualifier']}" if row.get("recommended_qualifier") else ""
+        sections.append(
+            "\n".join(
+                [
+                    f"{row['match_id']} | {row['team_a']} vs {row['team_b']}",
+                    f"  Stage/group: {row['stage']}{group}",
+                    f"  Fair 1X2: {row['team_a']}={row['market_a_win']:.2%} Draw={row['market_draw']:.2%} {row['team_b']}={row['market_b_win']:.2%}",
+                    f"  Calibrated lambdas: {row['team_a']}={row['lambda_a']:.4f} {row['team_b']}={row['lambda_b']:.4f}",
+                    f"  Favourite strength: p_fav={row['favourite_probability']:.2%} ({row['favourite_bucket']})",
+                    f"  Modal scoreline: {row['most_likely_scoreline']}",
+                    f"  EV-optimal scoreline: {row['recommended_score']}{qualifier}",
+                    f"  Top 5 EV scorelines: {row['top_5_ev_predictions']}",
+                ]
+            )
+        )
+    sections.append(
+        "\n".join(
+            [
+                "File Outputs",
+                f"- CSV recommendations: {Path(csv_output_path)}",
+                f"- Excel recommendations: {Path(xlsx_output_path)}",
+            ]
+        )
+    )
+    return "\n\n".join(sections)
+
+
 def export_dataframe(frame: pd.DataFrame, path: str | Path) -> None:
     """Export a report as CSV or Excel according to the file suffix."""
 

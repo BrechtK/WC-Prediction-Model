@@ -1,0 +1,5 @@
+match_id,date,stage,group,team_a,team_b,bookmaker,odds_a_win,odds_draw,odds_b_win,odds_over_2_5,odds_under_2_5,odds_btts_yes,odds_btts_no,odds_a_qualifies,odds_b_qualifies
+WC001,2026-06-12,group stage,Group A,Alpha,Beta,MarketOne,1.65,3.90,5.50,1.91,1.91,1.95,1.87,,
+WC001,2026-06-12,group stage,Group A,Alpha,Beta,MarketTwo,1.68,3.85,5.30,1.94,1.88,1.98,1.85,,
+WC002,2026-07-04,round of 32,,Gamma,Delta,MarketOne,1.80,3.60,4.80,1.96,1.86,1.98,1.84,1.40,3.00
+WC002,2026-07-04,round of 32,,Gamma,Delta,MarketTwo,1.82,3.55,4.70,1.94,1.88,2.00,1.82,1.42,2.95

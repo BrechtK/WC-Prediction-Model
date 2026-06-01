@@ -150,6 +150,38 @@ This calibrates synthetic fair 1X2 scenarios from moderate through extreme
 favourites and prints lambdas, model-implied probabilities, modal scorelines,
 EV-optimal scorelines, and the top five EV predictions.
 
+## Running Real World Cup Predictions
+
+Start from `data/templates/world_cup_odds_template.csv`, add one row per
+bookmaker and upcoming match, then place the completed file at
+`data/raw/world_cup_odds.csv`. Group-stage rows should include `group`; knockout
+rows may leave it blank. Qualification odds are optional but recommended for
+knockout matches.
+
+Run:
+
+```powershell
+python scripts/run_world_cup_predictions.py
+```
+
+The script removes bookmaker margins, aggregates fair probabilities, calibrates
+the Poisson score model, selects the EV-optimal pool prediction, and writes:
+
+- `data/processed/world_cup_recommendations.csv`
+- `data/processed/world_cup_recommendations.xlsx`
+
+Its console summary shows each match, stage and group, fair 1X2 probabilities,
+calibrated lambdas, favourite-strength bucket, modal scoreline, EV-optimal
+scoreline, and top five EV predictions. Use
+`data/templates/friend_predictions_template.csv` to collect pool submissions.
+
+For a dry run with the bundled dummy tournament file:
+
+```powershell
+python scripts/run_world_cup_predictions.py `
+  --odds data/examples/example_world_cup_odds.csv
+```
+
 ### Run From VS Code
 
 For the common historical folders, open one of these files in VS Code and press
