@@ -34,7 +34,7 @@ class KnockoutScoringConfig:
 
 @dataclass(frozen=True)
 class BacktestingConfig:
-    """Reserved knobs for the Version 1.5 historical evaluation runner."""
+    """Project-level defaults for historical evaluation outputs."""
 
     enabled: bool = False
     output_path: Path = Path("data/processed/backtest_results.csv")

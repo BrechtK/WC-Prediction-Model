@@ -82,6 +82,7 @@ python scripts/run_predictions.py
 python scripts/inspect_predictions.py
 python scripts/update_standings.py
 python scripts/generate_report.py
+python scripts/run_backtest.py
 pytest
 ```
 
@@ -92,6 +93,27 @@ appropriate.
 `scripts/inspect_predictions.py` prints a compact per-match audit view with raw
 and fair 1X2 probabilities, calibrated lambdas, fit error, score-grid tail mass,
 the modal scoreline, and the top five EV predictions.
+
+## Historical Backtesting
+
+The first historical backtester evaluates group-stage-style pool scoring only:
+
+```powershell
+python scripts/run_backtest.py `
+  --input data/examples/example_historical_matches.csv `
+  --output data/processed/backtest_results.csv
+```
+
+The loader accepts Football-Data.co.uk-like columns: `HomeTeam`, `AwayTeam`,
+`FTHG`, `FTAG`, optional `Date`, and average or bookmaker decimal odds such as
+`AvgH`/`AvgD`/`AvgA` or `B365H`/`B365D`/`B365A`. Optional over/under columns
+include `Avg>2.5`/`Avg<2.5` and `B365>2.5`/`B365<2.5`.
+
+The exported strategy table compares fixed-score baselines, favourite-win
+baselines, the modal Poisson scoreline, 1X2 EV optimisation, and 1X2 plus
+over/under EV optimisation when that optional market is available. Missing
+optional over/under odds fall back to the 1X2 calibration. Skipped rows and
+their reasons are reported per strategy.
 
 ## Add Your Data
 
@@ -115,7 +137,7 @@ Core modules are deliberately separate:
 | `probabilities.py`, `score_models.py`, `calibration.py` | Score matrices and market calibration |
 | `scoring_rules.py`, `optimiser.py` | Pure pool scoring and expected-points optimisation |
 | `friends.py`, `results.py`, `reporting.py`, `workflow.py` | Analysis, standings, exports, orchestration |
-| `strategies.py`, `backtesting.py` | Reusable strategy interface and Version 1.5 scaffold |
+| `strategies.py`, `backtesting.py` | Reusable strategies and group-stage historical backtesting |
 
 ## Limits And Roadmap
 
@@ -124,10 +146,11 @@ fully independent or exactly Poisson distributed. Qualification fallback without
 qualification odds is intentionally marked as weak. Knockout score timing must be
 checked against the competition app before live use.
 
-Historical backtesting is designed for but not implemented. Future challenger
-models such as xG/Elo, Skellam-style, Dixon-Coles, bivariate Poisson, and ML
-models are intentionally absent from Version 1. Every later challenger should be
-evaluated out of sample against the market-implied baseline using realised pool
-points, not just model fit.
+The initial historical backtester covers group-stage-style scoring and common
+Football-Data-like inputs. Knockout backtesting and richer provider adapters are
+future work. Challenger models such as xG/Elo, Skellam-style, Dixon-Coles,
+bivariate Poisson, and ML models are intentionally absent. Every later
+challenger should be evaluated out of sample against the market-implied
+baseline using realised pool points, not just model fit.
 
 See `docs/` for formulas, assumptions, research notes, and the staged roadmap.

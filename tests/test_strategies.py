@@ -1,5 +1,10 @@
 from wc_predictor.probabilities import poisson_score_matrix
-from wc_predictor.strategies import ExpectedPointsOptimalStrategy, FixedScoreStrategy, MostLikelyScoreStrategy
+from wc_predictor.strategies import (
+    ExpectedPointsOptimalStrategy,
+    FavouriteScoreStrategy,
+    FixedScoreStrategy,
+    MostLikelyScoreStrategy,
+)
 
 
 def test_strategy_interface_has_working_baselines() -> None:
@@ -8,3 +13,10 @@ def test_strategy_interface_has_working_baselines() -> None:
     assert isinstance(MostLikelyScoreStrategy().predict(matrix), tuple)
     assert isinstance(ExpectedPointsOptimalStrategy().predict(matrix), tuple)
 
+
+def test_favourite_strategy_predicts_home_away_or_draw() -> None:
+    strategy = FavouriteScoreStrategy(2)
+    assert strategy.predict((0.50, 0.30, 0.20)) == (2, 0)
+    assert strategy.predict((0.20, 0.30, 0.50)) == (0, 2)
+    assert strategy.predict((0.30, 0.40, 0.30)) == (1, 1)
+    assert strategy.predict((0.40, 0.20, 0.40)) == (1, 1)

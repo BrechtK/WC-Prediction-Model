@@ -8,8 +8,9 @@ and track friend submissions and standings.
 
 ## Version 1.5
 
-Implement historical backtesting adapters and compare market-implied strategies
-using realised pool points, hit rates, variance, and cumulative performance.
+Extend the initial group-stage Football-Data-like backtester with additional
+provider adapters, cumulative-performance reporting, and richer historical
+splits.
 
 ## Version 2
 
@@ -33,4 +34,3 @@ tracking-data models, copulas, and hidden-Markov approaches.
 
 Every challenger must be evaluated out of sample by realised competition points,
 not by elegance or in-sample fit.
-
