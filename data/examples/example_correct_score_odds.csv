@@ -1,0 +1,7 @@
+match_id,bookmaker,score_a,score_b,decimal_odds
+M001,MarketOne,0,0,12.00
+M001,MarketOne,1,0,7.00
+M001,MarketOne,1,1,7.50
+M001,MarketOne,2,0,8.00
+M001,MarketOne,2,1,8.50
+

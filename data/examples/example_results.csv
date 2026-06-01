@@ -1,0 +1,5 @@
+match_id,team_a_goals_90,team_b_goals_90,went_to_extra_time,team_a_goals_120,team_b_goals_120,qualifier
+M001,2,0,false,,,
+M002,1,1,false,,,
+M003,1,1,true,2,1,France
+
