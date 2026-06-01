@@ -8,7 +8,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from wc_predictor.config import CalibrationWeights
-from wc_predictor.probabilities import ScoreProbabilityMatrix, poisson_score_matrix
+from wc_predictor.probabilities import ScoreProbabilityMatrix, poisson_market_probabilities, poisson_score_matrix
 
 
 @dataclass(frozen=True)
@@ -59,17 +59,16 @@ def calibrate_poisson_model(
     weights = weights or CalibrationWeights()
 
     def objective(lambdas: np.ndarray) -> float:
-        matrix = poisson_score_matrix(float(lambdas[0]), float(lambdas[1]), max_goals, renormalise)
-        outcomes = matrix.outcome_probabilities()
+        outcomes = poisson_market_probabilities(float(lambdas[0]), float(lambdas[1]))
         loss = weights.one_x_two * (
             (outcomes["a_win"] - targets.a_win) ** 2
             + (outcomes["draw"] - targets.draw) ** 2
             + (outcomes["b_win"] - targets.b_win) ** 2
         )
         if targets.over_2_5 is not None:
-            loss += weights.over_under_2_5 * (matrix.over_2_5_probability() - targets.over_2_5) ** 2
+            loss += weights.over_under_2_5 * (outcomes["over_2_5"] - targets.over_2_5) ** 2
         if targets.btts_yes is not None:
-            loss += weights.btts * (matrix.btts_yes_probability() - targets.btts_yes) ** 2
+            loss += weights.btts * (outcomes["btts_yes"] - targets.btts_yes) ** 2
         return float(loss)
 
     fitted = minimize(
@@ -80,9 +79,7 @@ def calibrate_poisson_model(
     )
     lambda_a, lambda_b = (float(value) for value in fitted.x)
     matrix = poisson_score_matrix(lambda_a, lambda_b, max_goals, renormalise)
-    model_probabilities = matrix.outcome_probabilities()
-    model_probabilities["over_2_5"] = matrix.over_2_5_probability()
-    model_probabilities["btts_yes"] = matrix.btts_yes_probability()
+    model_probabilities = poisson_market_probabilities(lambda_a, lambda_b)
     target_probabilities = {
         "a_win": targets.a_win,
         "draw": targets.draw,
@@ -111,4 +108,3 @@ def calibrate_poisson_model(
         bool(fitted.success),
         tuple(warnings),
     )
-

@@ -56,11 +56,27 @@ class KnockoutPredictionRecommendation:
     differs_from_most_likely: bool
 
 
+def _require_complete_distribution(matrix: ScoreProbabilityMatrix) -> None:
+    if not np.isclose(matrix.grid_probability, 1.0, atol=1e-9):
+        raise ValueError("Expected-points evaluation requires a renormalised score matrix")
+
+
+def _validate_qualifier_probabilities(qualifier_probabilities: dict[str, float]) -> None:
+    probabilities = np.asarray(list(qualifier_probabilities.values()), dtype=float)
+    if len(probabilities) < 2:
+        raise ValueError("At least two qualifier probabilities are required")
+    if not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0) or np.any(probabilities > 1):
+        raise ValueError("Qualification probabilities must lie between zero and one")
+    if not np.isclose(probabilities.sum(), 1.0, atol=1e-9):
+        raise ValueError("Qualification probabilities must sum to one")
+
+
 def evaluate_group_prediction(
     matrix: ScoreProbabilityMatrix, pred_a: int, pred_b: int
 ) -> GroupPredictionEvaluation:
     """Calculate expected pool points and probability diagnostics for one prediction."""
 
+    _require_complete_distribution(matrix)
     expected_points = 0.0
     for actual_a, actual_b in np.ndindex(matrix.probabilities.shape):
         expected_points += (
@@ -116,6 +132,8 @@ def evaluate_knockout_prediction(
     """Calculate additive knockout EV using score and qualifier components separately."""
 
     config = config or KnockoutScoringConfig()
+    _require_complete_distribution(matrix)
+    _validate_qualifier_probabilities(qualifier_probabilities)
     if predicted_qualifier not in qualifier_probabilities:
         raise ValueError(f"No qualification probability for {predicted_qualifier!r}")
     exact_probability = matrix.exact_score_probability(pred_a, pred_b)
@@ -149,6 +167,9 @@ def optimise_knockout_prediction(
 ) -> KnockoutPredictionRecommendation:
     """Rank knockout score and qualifier combinations by expected pool points."""
 
+    if max_candidate_goals < 0:
+        raise ValueError("max_candidate_goals must be non-negative")
+    _validate_qualifier_probabilities(qualifier_probabilities)
     evaluations = [
         evaluate_knockout_prediction(matrix, pred_a, pred_b, qualifier, qualifier_probabilities, config)
         for pred_a in range(max_candidate_goals + 1)

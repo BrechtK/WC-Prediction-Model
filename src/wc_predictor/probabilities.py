@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.stats import poisson
+from scipy.stats import poisson, skellam
 
 
 @dataclass(frozen=True)
@@ -24,8 +24,15 @@ class ScoreProbabilityMatrix:
             raise ValueError("Score probabilities must be a non-empty two-dimensional matrix")
         if not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0):
             raise ValueError("Score probabilities must be finite and non-negative")
-        if probabilities.sum() <= 0:
+        grid_probability = float(probabilities.sum())
+        if grid_probability <= 0:
             raise ValueError("Score probabilities must contain positive mass")
+        if not np.isfinite(self.tail_probability) or not 0 <= self.tail_probability <= 1:
+            raise ValueError("Tail probability must lie between zero and one")
+        if self.renormalised and not np.isclose(grid_probability, 1.0, atol=1e-9):
+            raise ValueError("A renormalised score matrix must sum to one")
+        if not self.renormalised and not np.isclose(grid_probability + self.tail_probability, 1.0, atol=1e-9):
+            raise ValueError("A raw score matrix plus its tail probability must sum to one")
         object.__setattr__(self, "probabilities", probabilities)
 
     @property
@@ -103,3 +110,16 @@ def poisson_score_matrix(
         probabilities = probabilities / represented_mass
     return ScoreProbabilityMatrix(probabilities, tail_probability, renormalise, lambda_a, lambda_b)
 
+
+def poisson_market_probabilities(lambda_a: float, lambda_b: float) -> dict[str, float]:
+    """Return full-distribution market summaries without finite-grid truncation."""
+
+    if not np.isfinite(lambda_a) or not np.isfinite(lambda_b) or lambda_a <= 0 or lambda_b <= 0:
+        raise ValueError("Poisson lambdas must be finite and positive")
+    return {
+        "a_win": float(skellam.sf(0, lambda_a, lambda_b)),
+        "draw": float(skellam.pmf(0, lambda_a, lambda_b)),
+        "b_win": float(skellam.cdf(-1, lambda_a, lambda_b)),
+        "over_2_5": float(poisson.sf(2, lambda_a + lambda_b)),
+        "btts_yes": float((1.0 - np.exp(-lambda_a)) * (1.0 - np.exp(-lambda_b))),
+    }

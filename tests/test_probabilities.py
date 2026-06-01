@@ -1,6 +1,7 @@
+import numpy as np
 import pytest
 
-from wc_predictor.probabilities import poisson_score_matrix
+from wc_predictor.probabilities import ScoreProbabilityMatrix, poisson_market_probabilities, poisson_score_matrix
 
 
 @pytest.mark.parametrize("lambda_a,lambda_b", [(0.05, 0.10), (1.4, 1.1), (5.0, 4.0)])
@@ -20,3 +21,15 @@ def test_invalid_lambda_raises() -> None:
     with pytest.raises(ValueError):
         poisson_score_matrix(0.0, 1.0)
 
+
+def test_full_poisson_market_probabilities_are_not_truncated() -> None:
+    probabilities = poisson_market_probabilities(4.5, 3.8)
+    assert probabilities["a_win"] + probabilities["draw"] + probabilities["b_win"] == pytest.approx(1.0)
+    assert probabilities["over_2_5"] > 0.95
+
+
+def test_score_matrix_rejects_inconsistent_tail_semantics() -> None:
+    with pytest.raises(ValueError, match="renormalised"):
+        ScoreProbabilityMatrix(np.array([[0.40, 0.20], [0.10, 0.10]]))
+    with pytest.raises(ValueError, match="tail probability"):
+        ScoreProbabilityMatrix(np.array([[0.40, 0.20], [0.10, 0.10]]), tail_probability=0.10, renormalised=False)

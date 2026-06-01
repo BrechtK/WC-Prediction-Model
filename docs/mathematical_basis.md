@@ -41,6 +41,16 @@ P(draw)   = sum_{x=y} P(X=x,Y=y)
 P(B wins) = sum_{x<y} P(X=x,Y=y)
 ```
 
+Calibration evaluates these probabilities over the full independent-Poisson
+distribution, not over the finite score grid used for reports and EV
+optimisation. The implementation uses the Skellam distribution for the full
+goal-difference probabilities. It also evaluates:
+
+```text
+P(over 2.5)  = P(X + Y >= 3), where X + Y ~ Poisson(lambda_A + lambda_B)
+P(BTTS yes)  = (1 - exp(-lambda_A)) (1 - exp(-lambda_B))
+```
+
 Lambdas minimise squared calibration error. With optional market constraints:
 
 ```text
@@ -70,3 +80,19 @@ EV(a,b,q)
 Knockout score timing remains configurable because the competition app's exact
 interpretation must be confirmed.
 
+## Finite Score Grid And Tail Mass
+
+The score matrix contains scores from `0-0` through `max_goals-max_goals`.
+Before renormalisation:
+
+```text
+tail mass = 1 - sum_{x=0..max_goals, y=0..max_goals} P(X=x,Y=y)
+```
+
+Version 1 reports this omitted tail mass. By default, the finite grid is
+renormalised before EV optimisation, so optimisation is conditional on scores
+inside the represented grid. This is a controlled approximation and is
+negligible when the reported tail is small. Raw non-renormalised grids remain
+available for diagnostics, but the optimiser rejects them because an incomplete
+grid cannot produce internally consistent pool-point EV without modelling its
+tail outcomes.

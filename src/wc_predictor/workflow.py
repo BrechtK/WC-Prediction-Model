@@ -70,6 +70,13 @@ def run_prediction_workflow(
         config.suspicious_overround_high,
     )
     aggregated = aggregate_bookmaker_probabilities(bookmaker_probabilities, config.bookmaker_aggregation_method)
+    required_1x2 = {"fair_a_win", "fair_draw", "fair_b_win"}
+    if not required_1x2.issubset(aggregated.columns):
+        raise ValueError("No complete 1X2 market is available for calibration")
+    missing_1x2 = aggregated[list(required_1x2)].isna().any(axis=1)
+    if missing_1x2.any():
+        match_ids = aggregated.loc[missing_1x2, "match_id"].astype(str).tolist()
+        raise ValueError(f"No complete 1X2 market is available for matches: {match_ids}")
     matches = odds[["match_id", "date", "stage", "team_a", "team_b"]].drop_duplicates("match_id")
     market = matches.merge(aggregated, on="match_id", validate="one_to_one")
 
@@ -122,7 +129,7 @@ def run_prediction_workflow(
             )
             recommended_qualifier = ""
         recommendations[match_id] = recommendation
-        model_outcomes = calibration.score_matrix.outcome_probabilities()
+        model_outcomes = calibration.model_probabilities
         report_rows.append(
             {
                 "match_id": match_id,

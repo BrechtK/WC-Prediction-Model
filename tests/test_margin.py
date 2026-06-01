@@ -16,8 +16,12 @@ def test_suspicious_overround_creates_warning() -> None:
     assert result.warnings
 
 
+def test_below_one_overround_creates_warning() -> None:
+    result = remove_margin([0.40, 0.30, 0.20])
+    assert result.warnings
+
+
 @pytest.mark.parametrize("method", ["additive", "power"])
 def test_additional_margin_methods_are_pluggable(method: str) -> None:
     result = remove_margin([0.55, 0.30, 0.25], method)
     assert result.fair_probabilities.sum() == pytest.approx(1.0)
-

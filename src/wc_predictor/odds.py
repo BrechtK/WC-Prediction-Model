@@ -97,7 +97,6 @@ def aggregate_bookmaker_probabilities(
 
     if method not in {"mean", "median", "weighted", "sharp"}:
         raise ValueError(f"Unsupported bookmaker aggregation method: {method}")
-    fair_columns = [column for columns in FAIR_COLUMNS.values() for column in columns]
     rows: list[dict[str, object]] = []
     for match_id, group in bookmaker_probabilities.groupby("match_id", sort=False):
         selected = group
@@ -108,34 +107,31 @@ def aggregate_bookmaker_probabilities(
             if selected.empty:
                 raise ValueError(f"No odds found for sharp bookmaker {sharp_bookmaker!r}")
         output: dict[str, object] = {"match_id": match_id}
-        for column in fair_columns:
-            if column not in selected.columns:
+        for columns in FAIR_COLUMNS.values():
+            if not set(columns).issubset(selected.columns):
                 continue
-            available = selected[["bookmaker", column]].dropna()
+            available = selected[["bookmaker", *columns]].dropna()
             if available.empty:
                 continue
             if method == "median":
-                value = available[column].median()
+                values = available[list(columns)].median(axis=0).to_numpy(dtype=float)
             elif method == "weighted":
                 if not bookmaker_weights:
                     raise ValueError("bookmaker_weights are required for weighted aggregation")
                 weights = available["bookmaker"].map(bookmaker_weights).fillna(0.0).astype(float)
-                if weights.sum() <= 0:
-                    raise ValueError(f"No positive bookmaker weights available for match {match_id}")
-                value = np.average(available[column], weights=weights)
+                if not np.all(np.isfinite(weights)) or np.any(weights < 0) or weights.sum() <= 0:
+                    raise ValueError(f"Bookmaker weights must be finite, non-negative, and positive in total for match {match_id}")
+                values = np.average(available[list(columns)].to_numpy(dtype=float), axis=0, weights=weights)
             else:
-                value = available[column].mean()
-            output[column] = float(value)
+                values = available[list(columns)].mean(axis=0).to_numpy(dtype=float)
+            if not np.all(np.isfinite(values)) or np.any(values <= 0) or values.sum() <= 0:
+                raise ValueError(f"Aggregated fair probabilities are invalid for match {match_id}")
+            values = values / values.sum()
+            output.update(zip(columns, (float(value) for value in values), strict=True))
         output["warnings"] = "; ".join(filter(None, selected["warnings"].astype(str).unique()))
         rows.append(output)
 
-    aggregated = pd.DataFrame(rows)
-    for columns in FAIR_COLUMNS.values():
-        present = [column for column in columns if column in aggregated.columns]
-        if len(present) == len(columns):
-            totals = aggregated[present].sum(axis=1)
-            aggregated[present] = aggregated[present].div(totals, axis=0)
-    return aggregated
+    return pd.DataFrame(rows)
 
 
 def process_correct_score_odds(

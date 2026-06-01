@@ -55,7 +55,9 @@ Y ~ Poisson(lambda_B)
 
 The lambdas are calibrated with `scipy.optimize` to fair 1X2 odds. Available
 over/under 2.5 and both-teams-to-score odds become additional constraints.
-Score-grid tail probability is reported before optional renormalisation.
+Calibration uses full-distribution Poisson probabilities. Score-grid tail
+probability is reported before renormalisation; EV optimisation uses the
+renormalised finite grid and is conditional on its represented scores.
 
 Correct-score odds can already be loaded and margin-adjusted in long format.
 Using them as a direct score distribution or a configurable blend is reserved
