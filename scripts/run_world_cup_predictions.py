@@ -19,6 +19,7 @@ def main() -> None:
     parser.add_argument("--odds")
     parser.add_argument("--csv-output", default="data/processed/world_cup_recommendations.csv")
     parser.add_argument("--xlsx-output", default="data/processed/world_cup_recommendations.xlsx")
+    parser.add_argument("--submission-xlsx-output", default="data/processed/world_cup_submission_sheet.xlsx")
     args = parser.parse_args()
 
     try:
@@ -27,6 +28,7 @@ def main() -> None:
                 input_path=Path(args.odds) if args.odds else None,
                 csv_output_path=Path(args.csv_output),
                 xlsx_output_path=Path(args.xlsx_output),
+                submission_xlsx_output_path=Path(args.submission_xlsx_output),
             )
         )
     except FileNotFoundError:

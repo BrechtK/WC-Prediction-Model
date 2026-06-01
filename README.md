@@ -162,7 +162,10 @@ python scripts/create_world_cup_odds_file.py
 2. Fill in `data/raw/world_cup_odds.xlsx`, using one row per bookmaker and
    upcoming match.
 3. Run `scripts/run_world_cup_predictions.py`.
-4. Read `data/processed/world_cup_recommendations.xlsx`.
+4. Read `data/processed/world_cup_submission_sheet.xlsx` for the concise
+   entry-ready recommendations. Use `data/processed/world_cup_recommendations.xlsx`
+   for the full diagnostic report.
+5. Use recommended_score for predictions.
 
 Both scripts can be opened in VS Code and launched with **Run Python File**.
 The creation script preserves an existing manually edited workbook. Pass
@@ -185,6 +188,7 @@ the Poisson score model, selects the EV-optimal pool prediction, and writes:
 
 - `data/processed/world_cup_recommendations.csv`
 - `data/processed/world_cup_recommendations.xlsx`
+- `data/processed/world_cup_submission_sheet.xlsx`
 
 Its console summary shows each match, stage and group, fair 1X2 probabilities,
 calibrated lambdas, favourite-strength bucket, modal scoreline, EV-optimal

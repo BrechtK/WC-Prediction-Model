@@ -11,6 +11,7 @@ from wc_predictor.market_data import load_odds
 from wc_predictor.reporting import (
     export_dataframe,
     export_world_cup_recommendations_excel,
+    export_world_cup_submission_sheet_excel,
     format_world_cup_console_summary,
 )
 from wc_predictor.workflow import PredictionWorkflowResult, run_prediction_workflow
@@ -31,6 +32,7 @@ class WorldCupPredictionSettings:
     input_path: Path | None = None
     csv_output_path: Path = Path("data/processed/world_cup_recommendations.csv")
     xlsx_output_path: Path = Path("data/processed/world_cup_recommendations.xlsx")
+    submission_xlsx_output_path: Path = Path("data/processed/world_cup_submission_sheet.xlsx")
 
 
 def resolve_world_cup_odds_input(input_path: str | Path | None = None) -> Path:
@@ -73,6 +75,7 @@ def run_world_cup_predictions(
     workflow = run_prediction_workflow(load_odds(input_path), config=config)
     export_dataframe(workflow.match_report, settings.csv_output_path)
     export_world_cup_recommendations_excel(workflow.match_report, settings.xlsx_output_path)
+    export_world_cup_submission_sheet_excel(workflow.match_report, settings.submission_xlsx_output_path)
     return workflow
 
 
@@ -88,6 +91,7 @@ def run_and_print_world_cup_predictions(
         input_path=input_path,
         csv_output_path=settings.csv_output_path,
         xlsx_output_path=settings.xlsx_output_path,
+        submission_xlsx_output_path=settings.submission_xlsx_output_path,
     )
     workflow = run_world_cup_predictions(resolved_settings, config)
     print(
@@ -96,6 +100,7 @@ def run_and_print_world_cup_predictions(
             input_path,
             settings.csv_output_path,
             settings.xlsx_output_path,
+            settings.submission_xlsx_output_path,
         )
     )
     return workflow

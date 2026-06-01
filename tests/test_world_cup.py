@@ -45,6 +45,7 @@ def _settings(tmp_path: Path) -> WorldCupPredictionSettings:
         input_path=EXAMPLES / "example_world_cup_odds.csv",
         csv_output_path=tmp_path / "world_cup_recommendations.csv",
         xlsx_output_path=tmp_path / "world_cup_recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "world_cup_submission_sheet.xlsx",
     )
 
 
@@ -70,6 +71,7 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
 
     assert settings.csv_output_path.exists()
     assert settings.xlsx_output_path.exists()
+    assert settings.submission_xlsx_output_path.exists()
     assert len(workflow.match_report) == 2
     assert workflow.match_report.loc[0, "group"] == "Group A"
     assert workflow.match_report.loc[1, "recommended_qualifier"] in {"Gamma", "Delta"}
@@ -102,6 +104,7 @@ def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -
         "group",
         "team_a",
         "team_b",
+        "recommended_score",
         "market_a",
         "market_draw",
         "market_b",
@@ -109,7 +112,6 @@ def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -
         "favourite_bucket",
         "lambda_a",
         "lambda_b",
-        "recommended_score",
         "recommended_qualifier",
         "best_expected_points",
         "most_likely_scoreline",
@@ -124,6 +126,37 @@ def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -
     assert worksheet.cell(2, column["best_expected_points"]).number_format == "0.000"
     assert worksheet.cell(2, column["top_5_ev_predictions"]).alignment.wrap_text
     assert worksheet.cell(2, column["warnings"]).alignment.wrap_text
+    assert worksheet.column_dimensions["A"].width >= len("match_id")
+
+
+def test_world_cup_submission_sheet_contains_only_entry_columns_and_formatting(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    run_world_cup_predictions(settings)
+    worksheet = load_workbook(settings.submission_xlsx_output_path)["submission"]
+    headers = [cell.value for cell in worksheet[1]]
+    column = {name: index + 1 for index, name in enumerate(headers)}
+
+    assert headers == [
+        "match_id",
+        "date",
+        "stage",
+        "group",
+        "team_a",
+        "team_b",
+        "recommended_score",
+        "recommended_qualifier",
+        "best_expected_points",
+        "favourite_bucket",
+        "top_3_alternatives",
+        "notes",
+    ]
+    assert worksheet.freeze_panes == "A2"
+    assert worksheet.cell(2, column["best_expected_points"]).number_format == "0.000"
+    assert worksheet.cell(2, column["top_3_alternatives"]).alignment.wrap_text
+    assert worksheet.cell(2, column["notes"]).alignment.wrap_text
+    assert worksheet.cell(2, column["top_3_alternatives"]).value.count(";") == 2
+    assert worksheet.cell(2, column["match_id"]).value == "WC001"
+    assert worksheet.cell(3, column["match_id"]).value == "WC002"
     assert worksheet.column_dimensions["A"].width >= len("match_id")
 
 
@@ -158,6 +191,7 @@ def test_world_cup_workflow_loads_xlsx_odds_input(tmp_path: Path) -> None:
         input_path=input_path,
         csv_output_path=tmp_path / "recommendations.csv",
         xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
     )
 
     workflow = run_world_cup_predictions(settings)
@@ -184,6 +218,7 @@ def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: P
         settings.input_path,
         settings.csv_output_path,
         settings.xlsx_output_path,
+        settings.submission_xlsx_output_path,
     )
 
     assert "World Cup Predictions" in summary
@@ -197,6 +232,7 @@ def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: P
     assert "Top 5 EV scorelines:" in summary
     assert "CSV recommendations:" in summary
     assert "Excel recommendations:" in summary
+    assert "Submission sheet:" in summary
     assert "Prediction Output Diagnostics" in summary
     assert "Recommended Score Counts" in summary
     assert "Favourite-Strength Bucket Counts" in summary
@@ -243,6 +279,8 @@ def test_world_cup_prediction_script_runs_with_overrides(
             str(settings.csv_output_path),
             "--xlsx-output",
             str(settings.xlsx_output_path),
+            "--submission-xlsx-output",
+            str(settings.submission_xlsx_output_path),
         ],
     )
 
@@ -250,6 +288,7 @@ def test_world_cup_prediction_script_runs_with_overrides(
 
     assert settings.csv_output_path.exists()
     assert settings.xlsx_output_path.exists()
+    assert settings.submission_xlsx_output_path.exists()
     assert "WC002 | Gamma vs Delta" in capsys.readouterr().out
 
 

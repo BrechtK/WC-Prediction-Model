@@ -271,6 +271,7 @@ def format_world_cup_console_summary(
     input_path: str | Path,
     csv_output_path: str | Path,
     xlsx_output_path: str | Path,
+    submission_xlsx_output_path: str | Path,
 ) -> str:
     """Render the real-tournament recommendation summary."""
 
@@ -306,6 +307,7 @@ def format_world_cup_console_summary(
                 "File Outputs",
                 f"- CSV recommendations: {Path(csv_output_path)}",
                 f"- Excel recommendations: {Path(xlsx_output_path)}",
+                f"- Submission sheet: {Path(submission_xlsx_output_path)}",
             ]
         )
     )
@@ -434,6 +436,64 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
                 elif column_name in decimal_columns:
                     value.number_format = "0.0000"
                 elif column_name in ev_columns:
+                    value.number_format = "0.000"
+                if column_name in wrapped_columns:
+                    value.alignment = Alignment(wrap_text=True, vertical="top")
+        contents = [str(cell.value or "")]
+        contents.extend(str(row[0].value or "") for row in worksheet.iter_cols(min_col=index, max_col=index, min_row=2))
+        max_length = max(len(content) for content in contents)
+        maximum_width = 60 if column_name in wrapped_columns else 32
+        worksheet.column_dimensions[get_column_letter(index)].width = min(max(max_length + 2, 10), maximum_width)
+
+    workbook.save(path)
+
+
+def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Path) -> None:
+    """Export a concise World Cup prediction-entry workbook."""
+
+    path = Path(path)
+    ensure_parent_directory(path)
+    submission = frame.copy()
+    submission["top_3_alternatives"] = submission["top_alternatives"].fillna("").map(
+        lambda value: "; ".join(str(value).split("; ")[:3])
+    )
+    submission["notes"] = submission["warnings"]
+    submission = submission[
+        [
+            "match_id",
+            "date",
+            "stage",
+            "group",
+            "team_a",
+            "team_b",
+            "recommended_score",
+            "recommended_qualifier",
+            "best_expected_points",
+            "favourite_bucket",
+            "top_3_alternatives",
+            "notes",
+        ]
+    ].sort_values(["date", "match_id"], kind="stable")
+    submission.to_excel(path, index=False, sheet_name="submission")
+
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path)
+    worksheet = workbook["submission"]
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = worksheet.dimensions
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    wrapped_columns = {"top_3_alternatives", "notes"}
+    for cell in worksheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for index, cell in enumerate(worksheet[1], start=1):
+        column_name = str(cell.value)
+        for value_cell in worksheet.iter_cols(min_col=index, max_col=index, min_row=2):
+            for value in value_cell:
+                if column_name == "best_expected_points":
                     value.number_format = "0.000"
                 if column_name in wrapped_columns:
                     value.alignment = Alignment(wrap_text=True, vertical="top")
