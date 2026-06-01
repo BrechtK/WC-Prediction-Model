@@ -13,6 +13,7 @@ from wc_predictor.backtesting import (
     FootballDataCSVLoader,
 )
 from wc_predictor.strategies import PredictionStrategy
+from wc_predictor.utils import favourite_strength_bucket
 
 
 EXAMPLES = Path("data/examples")
@@ -93,6 +94,7 @@ def test_batch_backtest_runs_folder_and_exports_detailed_aggregate_and_skips(tmp
         detailed_output_path=tmp_path / "detailed.csv",
         aggregate_output_path=tmp_path / "aggregate.csv",
         skipped_output_path=tmp_path / "skipped.csv",
+        favourite_strength_output_path=tmp_path / "favourite_strength.csv",
     )
     report = BatchBacktestRunner(BATCH_EXAMPLES, settings=settings).run()
     detailed = report.detailed_summary.set_index(["source_file", "strategy"])
@@ -101,6 +103,7 @@ def test_batch_backtest_runs_folder_and_exports_detailed_aggregate_and_skips(tmp
     assert settings.detailed_output_path.exists()
     assert settings.aggregate_output_path.exists()
     assert settings.skipped_output_path.exists()
+    assert settings.favourite_strength_output_path.exists()
     assert len(detailed) == 14
     assert set(report.detailed_summary["source_file"]) == {"season_a.csv", "season_b.csv"}
     assert detailed.loc[("season_a.csv", "always_1_1"), "matches_used"] == 3
@@ -123,6 +126,7 @@ def test_batch_backtest_accepts_single_csv_and_includes_source_file(tmp_path: Pa
         detailed_output_path=tmp_path / "detailed.csv",
         aggregate_output_path=tmp_path / "aggregate.csv",
         skipped_output_path=tmp_path / "skipped.csv",
+        favourite_strength_output_path=tmp_path / "favourite_strength.csv",
     )
     report = BatchBacktestRunner(EXAMPLES / "example_historical_matches.csv", settings=settings).run()
     assert set(report.detailed_summary["source_file"]) == {"example_historical_matches.csv"}
@@ -152,6 +156,7 @@ def test_shared_backtest_cli_helper_runs_and_prints_summary(tmp_path: Path, caps
         detailed_output_path=tmp_path / "detailed.csv",
         aggregate_output_path=tmp_path / "aggregate.csv",
         skipped_output_path=tmp_path / "skipped.csv",
+        favourite_strength_output_path=tmp_path / "favourite_strength.csv",
     )
     output = capsys.readouterr().out
     assert "Backtest Scope" in output
@@ -160,6 +165,59 @@ def test_shared_backtest_cli_helper_runs_and_prints_summary(tmp_path: Path, caps
     assert (tmp_path / "detailed.csv").exists()
     assert (tmp_path / "aggregate.csv").exists()
     assert (tmp_path / "skipped.csv").exists()
+    assert (tmp_path / "favourite_strength.csv").exists()
+
+
+@pytest.mark.parametrize(
+    ("probability", "expected"),
+    [
+        (0.44, "balanced"),
+        (0.45, "slight_favourite"),
+        (0.54, "slight_favourite"),
+        (0.55, "clear_favourite"),
+        (0.64, "clear_favourite"),
+        (0.65, "strong_favourite"),
+        (0.74, "strong_favourite"),
+        (0.75, "huge_favourite"),
+        (0.84, "huge_favourite"),
+        (0.85, "extreme_favourite"),
+        (0.95, "extreme_favourite"),
+    ],
+)
+def test_favourite_strength_bucket_assignment(probability: float, expected: str) -> None:
+    assert favourite_strength_bucket(probability) == expected
+
+
+def test_favourite_strength_bucket_summary_aggregates_strategy_points() -> None:
+    rows = []
+    points = {
+        "always_1_1": (1, 1),
+        "always_0_0": (2, 2),
+        "favourite_1_0": (3, 5),
+        "favourite_2_0": (4, 4),
+        "most_likely_poisson": (2, 4),
+        "ev_optimal_1x2": (5, 7),
+        "ev_optimal_1x2_over_under": (6, 8),
+    }
+    for strategy, realised_points in points.items():
+        for match_id, points_for_match in zip(("M1", "M2"), realised_points, strict=True):
+            rows.append(
+                {
+                    "source_file": "season.csv",
+                    "match_id": match_id,
+                    "strategy": strategy,
+                    "realised_points": points_for_match,
+                    "favourite_bucket": "strong_favourite",
+                }
+            )
+    summary = BatchBacktestRunner._favourite_strength_summary(pd.DataFrame(rows)).set_index("favourite_bucket")
+    strong = summary.loc["strong_favourite"]
+    assert strong["matches"] == 2
+    assert strong["average_points_favourite_1_0"] == pytest.approx(4.0)
+    assert strong["best_strategy"] == "ev_optimal_1x2_over_under"
+    assert strong["best_ev_gap_vs_favourite_1_0"] == pytest.approx(3.0)
+    assert strong["best_ev_gap_vs_most_likely_poisson"] == pytest.approx(4.0)
+    assert summary.loc["extreme_favourite", "matches"] == 0
 
 
 def test_strategy_interface_exists() -> None:

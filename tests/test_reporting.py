@@ -17,6 +17,7 @@ def test_model_inspection_report_contains_manual_audit_fields() -> None:
     assert "Raw 1X2 by bookmaker:" in report
     assert "Fair 1X2 by bookmaker:" in report
     assert "Aggregated fair 1X2:" in report
+    assert "Favourite strength: p_fav=" in report
     assert "Calibrated lambdas:" in report
     assert "Model-implied 1X2:" in report
     assert "Calibration error:" in report
@@ -38,6 +39,7 @@ def test_backtest_console_summary_is_compact_and_interpretable(tmp_path: Path) -
         detailed_output_path=tmp_path / "detailed.csv",
         aggregate_output_path=tmp_path / "aggregate.csv",
         skipped_output_path=tmp_path / "skipped.csv",
+        favourite_strength_output_path=tmp_path / "favourite_strength.csv",
     )
     report = BatchBacktestRunner(BATCH_EXAMPLES, settings=settings).run()
     summary = format_backtest_console_summary(report, BATCH_EXAMPLES, settings)
@@ -50,6 +52,8 @@ def test_backtest_console_summary_is_compact_and_interpretable(tmp_path: Path) -
     assert "vs fav" in summary
     assert "vs modal" in summary
     assert "Key Conclusions" in summary
+    assert "Favourite-Strength Analysis" in summary
+    assert "slight_favourite" in summary
     assert "- Best strategy overall:" in summary
     assert "- Results support the project hypothesis:" in summary
     assert "Per-File Winners" in summary
@@ -67,6 +71,7 @@ def test_backtest_console_summary_reports_no_skips_and_verbose_tables(tmp_path: 
         detailed_output_path=tmp_path / "detailed.csv",
         aggregate_output_path=tmp_path / "aggregate.csv",
         skipped_output_path=tmp_path / "skipped.csv",
+        favourite_strength_output_path=tmp_path / "favourite_strength.csv",
     )
     source = BATCH_EXAMPLES / "season_b.csv"
     report = BatchBacktestRunner(source, settings=settings).run()
@@ -76,3 +81,4 @@ def test_backtest_console_summary_reports_no_skips_and_verbose_tables(tmp_path: 
     assert "Verbose Per-File Strategy Results" in summary
     assert "Verbose Aggregate Strategy Results" in summary
     assert "Verbose Skipped Matches By File And Reason" in summary
+    assert "Verbose Favourite-Strength Results" in summary

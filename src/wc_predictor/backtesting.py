@@ -24,7 +24,15 @@ from wc_predictor.optimiser import optimise_group_prediction
 from wc_predictor.probabilities import ScoreProbabilityMatrix
 from wc_predictor.scoring_rules import score_group_prediction
 from wc_predictor.strategies import FavouriteScoreStrategy, FixedScoreStrategy, MostLikelyScoreStrategy
-from wc_predictor.utils import ensure_parent_directory, goal_difference, result_sign
+from wc_predictor.utils import (
+    FAVOURITE_STRENGTH_BUCKETS,
+    ensure_parent_directory,
+    favourite_strength_bucket,
+    goal_difference,
+    result_sign,
+)
+
+EV_STRATEGY_NAMES = ("ev_optimal_1x2", "ev_optimal_1x2_over_under")
 
 
 @dataclass(frozen=True)
@@ -188,6 +196,7 @@ class BatchBacktestSettings:
     detailed_output_path: Path = Path("data/processed/backtest_results_by_file.csv")
     aggregate_output_path: Path = Path("data/processed/backtest_results_aggregate.csv")
     skipped_output_path: Path = Path("data/processed/backtest_skipped_by_file.csv")
+    favourite_strength_output_path: Path = Path("data/processed/backtest_favourite_strength.csv")
 
 
 @dataclass(frozen=True)
@@ -197,6 +206,7 @@ class BatchBacktestReport:
     detailed_summary: pd.DataFrame
     aggregate_summary: pd.DataFrame
     skipped_by_file_reason: pd.DataFrame
+    favourite_strength_summary: pd.DataFrame
     predictions: pd.DataFrame
     skipped: pd.DataFrame
 
@@ -207,11 +217,13 @@ class BatchBacktestReport:
             settings.detailed_output_path,
             settings.aggregate_output_path,
             settings.skipped_output_path,
+            settings.favourite_strength_output_path,
         ):
             ensure_parent_directory(path)
         self.detailed_summary.to_csv(settings.detailed_output_path, index=False)
         self.aggregate_summary.to_csv(settings.aggregate_output_path, index=False)
         self.skipped_by_file_reason.to_csv(settings.skipped_output_path, index=False)
+        self.favourite_strength_summary.to_csv(settings.favourite_strength_output_path, index=False)
 
 
 @dataclass
@@ -241,6 +253,8 @@ class _MarketContext:
     fair_a_win: float
     fair_draw: float
     fair_b_win: float
+    favourite_probability: float
+    favourite_bucket: str
     matrix_1x2: ScoreProbabilityMatrix
     matrix_1x2_over_under: ScoreProbabilityMatrix
     used_over_under: bool
@@ -292,13 +306,14 @@ class BacktestRunner:
                     accumulator.skip(match_id, "missing or invalid full-time result")
                 continue
 
-            self._record_fixed_predictions(accumulators, match, actual)
             try:
                 market = self._build_market_context(odds_by_match.get(match_id))
             except ValueError as exc:
+                self._record_fixed_predictions(accumulators, match, actual)
                 for name in self.STRATEGY_NAMES[2:]:
                     accumulators[name].skip(match_id, str(exc))
                 continue
+            self._record_fixed_predictions(accumulators, match, actual, market)
             self._record_market_predictions(accumulators, match, actual, market)
 
         predictions = pd.DataFrame(
@@ -337,10 +352,13 @@ class BacktestRunner:
             over_2_5=float(row["fair_over_2_5"]) if used_over_under else None,
         )
         matrix_1x2_over_under = self._calibrate(targets_with_over_under) if used_over_under else matrix_1x2
+        favourite_probability = max(targets_1x2.a_win, targets_1x2.b_win)
         return _MarketContext(
             targets_1x2.a_win,
             targets_1x2.draw,
             targets_1x2.b_win,
+            favourite_probability,
+            favourite_strength_bucket(favourite_probability),
             matrix_1x2,
             matrix_1x2_over_under,
             used_over_under,
@@ -379,9 +397,11 @@ class BacktestRunner:
         accumulators: dict[str, _StrategyAccumulator],
         match: pd.Series,
         actual: tuple[int, int],
+        market: _MarketContext | None = None,
     ) -> None:
-        self._record(accumulators["always_1_1"], match, actual, FixedScoreStrategy((1, 1)).predict(None))
-        self._record(accumulators["always_0_0"], match, actual, FixedScoreStrategy((0, 0)).predict(None))
+        diagnostics = self._market_diagnostics(market)
+        self._record(accumulators["always_1_1"], match, actual, FixedScoreStrategy((1, 1)).predict(None), **diagnostics)
+        self._record(accumulators["always_0_0"], match, actual, FixedScoreStrategy((0, 0)).predict(None), **diagnostics)
 
     def _record_market_predictions(
         self,
@@ -391,29 +411,34 @@ class BacktestRunner:
         market: _MarketContext,
     ) -> None:
         fair_probabilities = (market.fair_a_win, market.fair_draw, market.fair_b_win)
+        diagnostics = self._market_diagnostics(market)
         self._record(
             accumulators["favourite_1_0"],
             match,
             actual,
             FavouriteScoreStrategy(1).predict(fair_probabilities),
+            **diagnostics,
         )
         self._record(
             accumulators["favourite_2_0"],
             match,
             actual,
             FavouriteScoreStrategy(2).predict(fair_probabilities),
+            **diagnostics,
         )
         self._record(
             accumulators["most_likely_poisson"],
             match,
             actual,
             MostLikelyScoreStrategy().predict(market.matrix_1x2),
+            **diagnostics,
         )
         self._record(
             accumulators["ev_optimal_1x2"],
             match,
             actual,
             optimise_group_prediction(market.matrix_1x2, self.config.max_candidate_goals).best.predicted_score,
+            **diagnostics,
         )
         self._record(
             accumulators["ev_optimal_1x2_over_under"],
@@ -423,7 +448,15 @@ class BacktestRunner:
                 market.matrix_1x2_over_under, self.config.max_candidate_goals
             ).best.predicted_score,
             used_over_under=market.used_over_under,
+            **diagnostics,
         )
+
+    @staticmethod
+    def _market_diagnostics(market: _MarketContext | None) -> dict[str, object]:
+        return {
+            "favourite_probability": market.favourite_probability if market is not None else np.nan,
+            "favourite_bucket": market.favourite_bucket if market is not None else pd.NA,
+        }
 
     @staticmethod
     def _record(
@@ -432,6 +465,8 @@ class BacktestRunner:
         actual: tuple[int, int],
         prediction: tuple[int, int],
         used_over_under: bool = False,
+        favourite_probability: float = np.nan,
+        favourite_bucket: object = pd.NA,
     ) -> None:
         pred_a, pred_b = prediction
         actual_a, actual_b = actual
@@ -452,6 +487,8 @@ class BacktestRunner:
                 "is_correct_goal_difference": goal_difference(pred_a, pred_b) == goal_difference(actual_a, actual_b),
                 "is_correct_result": result_sign(pred_a, pred_b) == result_sign(actual_a, actual_b),
                 "used_over_under_2_5": used_over_under,
+                "favourite_probability": favourite_probability,
+                "favourite_bucket": favourite_bucket,
             }
         )
 
@@ -523,10 +560,12 @@ class BatchBacktestRunner:
         skipped = self._concat_frames([report.skipped for report in reports])
         aggregate_summary = self._aggregate_summary(predictions, skipped)
         skipped_by_file_reason = self._skipped_by_file_reason(skipped)
+        favourite_strength_summary = self._favourite_strength_summary(predictions)
         report = BatchBacktestReport(
             detailed_summary,
             aggregate_summary,
             skipped_by_file_reason,
+            favourite_strength_summary,
             predictions,
             skipped,
         )
@@ -585,6 +624,75 @@ class BatchBacktestRunner:
             .reset_index(drop=True)
         )
         return grouped[list(columns)]
+
+    @staticmethod
+    def _favourite_strength_summary(predictions: pd.DataFrame) -> pd.DataFrame:
+        """Summarise realised strategy points by post-margin favourite-probability bucket."""
+
+        average_columns = [f"average_points_{strategy}" for strategy in BacktestRunner.STRATEGY_NAMES]
+        columns = [
+            "favourite_bucket",
+            "matches",
+            *average_columns,
+            "best_strategy",
+            "best_average_points",
+            "best_ev_strategy",
+            "best_ev_average_points",
+            "best_ev_gap_vs_favourite_1_0",
+            "best_ev_gap_vs_most_likely_poisson",
+        ]
+        bucketed = predictions.dropna(subset=["favourite_bucket"]) if not predictions.empty else pd.DataFrame()
+        rows: list[dict[str, object]] = []
+        for bucket in FAVOURITE_STRENGTH_BUCKETS:
+            group = bucketed[bucketed["favourite_bucket"] == bucket] if not bucketed.empty else pd.DataFrame()
+            row: dict[str, object] = {
+                "favourite_bucket": bucket,
+                "matches": (
+                    group[["source_file", "match_id"]].drop_duplicates().shape[0]
+                    if not group.empty
+                    else 0
+                ),
+            }
+            averages = (
+                group.groupby("strategy")["realised_points"].mean().to_dict()
+                if not group.empty
+                else {}
+            )
+            for strategy in BacktestRunner.STRATEGY_NAMES:
+                row[f"average_points_{strategy}"] = averages.get(strategy, np.nan)
+            if averages:
+                best_average = max(averages.values())
+                best_strategies = sorted(
+                    strategy for strategy, average in averages.items() if np.isclose(average, best_average)
+                )
+                ev_averages = {strategy: averages[strategy] for strategy in EV_STRATEGY_NAMES}
+                best_ev_average = max(ev_averages.values())
+                best_ev_strategies = sorted(
+                    strategy for strategy, average in ev_averages.items() if np.isclose(average, best_ev_average)
+                )
+                row.update(
+                    {
+                        "best_strategy": ", ".join(best_strategies),
+                        "best_average_points": best_average,
+                        "best_ev_strategy": ", ".join(best_ev_strategies),
+                        "best_ev_average_points": best_ev_average,
+                        "best_ev_gap_vs_favourite_1_0": best_ev_average - averages["favourite_1_0"],
+                        "best_ev_gap_vs_most_likely_poisson": best_ev_average - averages["most_likely_poisson"],
+                    }
+                )
+            else:
+                row.update(
+                    {
+                        "best_strategy": "",
+                        "best_average_points": np.nan,
+                        "best_ev_strategy": "",
+                        "best_ev_average_points": np.nan,
+                        "best_ev_gap_vs_favourite_1_0": np.nan,
+                        "best_ev_gap_vs_most_likely_poisson": np.nan,
+                    }
+                )
+            rows.append(row)
+        return pd.DataFrame(rows, columns=columns)
 
 
 def targets_1x2_values(targets: CalibrationTargets) -> tuple[float, float, float]:

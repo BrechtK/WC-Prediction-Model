@@ -13,9 +13,9 @@ def main() -> None:
         detailed_output_path="data/processed/backtest_england_by_file.csv",
         aggregate_output_path="data/processed/backtest_england_aggregate.csv",
         skipped_output_path="data/processed/backtest_england_skipped.csv",
+        favourite_strength_output_path="data/processed/backtest_england_favourite_strength.csv",
     )
 
 
 if __name__ == "__main__":
     main()
-

@@ -13,6 +13,7 @@ def run_and_print_backtest(
     detailed_output_path: str | Path,
     aggregate_output_path: str | Path,
     skipped_output_path: str | Path,
+    favourite_strength_output_path: str | Path = "data/processed/backtest_favourite_strength.csv",
     verbose: bool = False,
 ) -> BatchBacktestReport:
     """Run an existing batch backtest configuration and print its console summary."""
@@ -21,8 +22,8 @@ def run_and_print_backtest(
         detailed_output_path=Path(detailed_output_path),
         aggregate_output_path=Path(aggregate_output_path),
         skipped_output_path=Path(skipped_output_path),
+        favourite_strength_output_path=Path(favourite_strength_output_path),
     )
     report = BatchBacktestRunner(input_path, settings=settings).run()
     print(format_backtest_console_summary(report, input_path, settings, verbose))
     return report
-

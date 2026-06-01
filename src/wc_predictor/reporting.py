@@ -153,6 +153,26 @@ def _format_skipped_matches(skipped_by_file_reason: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def _format_favourite_strength_analysis(favourite_strength_summary: pd.DataFrame) -> str:
+    lines = [
+        "Favourite-Strength Analysis",
+        "---------------------------",
+        "Bucket              Matches  Best strategy                   Avg pts  EV vs fav_1_0",
+    ]
+    for _, row in favourite_strength_summary.iterrows():
+        if int(row["matches"]) == 0:
+            lines.append(f"{row['favourite_bucket']:<19} {0:>7}  {'n/a':<29} {'n/a':>7}  {'n/a':>13}")
+            continue
+        lines.append(
+            f"{row['favourite_bucket']:<19} "
+            f"{int(row['matches']):>7}  "
+            f"{row['best_strategy']:<29} "
+            f"{row['best_average_points']:>7.3f}  "
+            f"{_format_signed(row['best_ev_gap_vs_favourite_1_0']):>13}"
+        )
+    return "\n".join(lines)
+
+
 def format_backtest_console_summary(
     report: BatchBacktestReport,
     input_path: str | Path,
@@ -184,6 +204,7 @@ def format_backtest_console_summary(
         ),
         _format_overall_strategy_ranking(report.aggregate_summary),
         _format_key_conclusions(report.aggregate_summary),
+        _format_favourite_strength_analysis(report.favourite_strength_summary),
         _format_per_file_winners(report.detailed_summary),
         _format_skipped_matches(report.skipped_by_file_reason),
         "\n".join(
@@ -192,6 +213,7 @@ def format_backtest_console_summary(
                 f"- Detailed per-file CSV: {settings.detailed_output_path}",
                 f"- Aggregate strategy CSV: {settings.aggregate_output_path}",
                 f"- Skipped-match CSV: {settings.skipped_output_path}",
+                f"- Favourite-strength CSV: {settings.favourite_strength_output_path}",
             ]
         ),
     ]
@@ -206,6 +228,8 @@ def format_backtest_console_summary(
                     if not report.skipped_by_file_reason.empty
                     else "No skipped matches."
                 ),
+                "Verbose Favourite-Strength Results\n"
+                + report.favourite_strength_summary.to_string(index=False),
             ]
         )
     return "\n\n".join(sections)
@@ -225,6 +249,7 @@ def format_model_inspection_report(match_report: pd.DataFrame) -> str:
                     f"  Raw 1X2 by bookmaker: {row['bookmaker_raw_1x2']}",
                     f"  Fair 1X2 by bookmaker: {row['bookmaker_fair_1x2']}",
                     f"  Aggregated fair 1X2: A={row['market_a_win']:.4f} D={row['market_draw']:.4f} B={row['market_b_win']:.4f}",
+                    f"  Favourite strength: p_fav={row['favourite_probability']:.4f} ({row['favourite_bucket']})",
                     f"  Calibrated lambdas: A={row['lambda_a']:.4f} B={row['lambda_b']:.4f}",
                     f"  Model-implied 1X2: A={row['model_a_win']:.4f} D={row['model_draw']:.4f} B={row['model_b_win']:.4f}",
                     f"  Calibration error: {row['calibration_loss']:.6f}",

@@ -103,7 +103,8 @@ python scripts/run_backtest.py `
   --input data/examples/example_historical_matches.csv `
   --detailed-output data/processed/backtest_results_by_file.csv `
   --aggregate-output data/processed/backtest_results_aggregate.csv `
-  --skipped-output data/processed/backtest_skipped_by_file.csv
+  --skipped-output data/processed/backtest_skipped_by_file.csv `
+  --favourite-strength-output data/processed/backtest_favourite_strength.csv
 ```
 
 `--input` may be one CSV file or a folder containing multiple CSV files. Folder
@@ -130,6 +131,24 @@ unique skipped matches by source file and reason.
 The CLI prints a concise interpretation summary by default: scope, overall
 ranking, baseline gaps, key conclusions, per-file winners, skips, and export
 paths. Add `--verbose` to append the full raw per-file and aggregate tables.
+
+### Favourite-Strength Diagnostics
+
+Domestic league backtests may underrepresent extreme international mismatches.
+The backtest therefore groups matches by the post-margin probability of the
+stronger home or away team and exports a favourite-strength report. The console
+summary shows whether EV optimisation improves on `favourite_1_0` as the market
+favourite becomes stronger.
+
+For a transparent stress test, run:
+
+```powershell
+python scripts/inspect_synthetic_mismatches.py
+```
+
+This calibrates synthetic fair 1X2 scenarios from moderate through extreme
+favourites and prints lambdas, model-implied probabilities, modal scorelines,
+EV-optimal scorelines, and the top five EV predictions.
 
 ### Run From VS Code
 

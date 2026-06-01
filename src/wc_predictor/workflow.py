@@ -18,7 +18,7 @@ from wc_predictor.optimiser import (
     optimise_knockout_prediction,
 )
 from wc_predictor.probabilities import ScoreProbabilityMatrix
-from wc_predictor.utils import is_knockout_stage
+from wc_predictor.utils import favourite_strength_bucket, is_knockout_stage
 
 
 @dataclass(frozen=True)
@@ -148,6 +148,7 @@ def run_prediction_workflow(
             recommended_qualifier = ""
         recommendations[match_id] = recommendation
         model_outcomes = calibration.model_probabilities
+        favourite_probability = max(targets.a_win, targets.b_win)
         report_rows.append(
             {
                 "match_id": match_id,
@@ -160,6 +161,8 @@ def run_prediction_workflow(
                 "market_a_win": targets.a_win,
                 "market_draw": targets.draw,
                 "market_b_win": targets.b_win,
+                "favourite_probability": favourite_probability,
+                "favourite_bucket": favourite_strength_bucket(favourite_probability),
                 "lambda_a": calibration.lambda_a,
                 "lambda_b": calibration.lambda_b,
                 "model_a_win": model_outcomes["a_win"],
