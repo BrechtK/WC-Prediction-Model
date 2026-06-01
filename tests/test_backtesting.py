@@ -1,8 +1,10 @@
 from pathlib import Path
+from shutil import copyfile
 
 import pandas as pd
 import pytest
 
+from wc_predictor.backtest_cli import run_and_print_backtest
 from wc_predictor.backtesting import (
     BatchBacktestRunner,
     BatchBacktestSettings,
@@ -126,6 +128,38 @@ def test_batch_backtest_accepts_single_csv_and_includes_source_file(tmp_path: Pa
     assert set(report.detailed_summary["source_file"]) == {"example_historical_matches.csv"}
     assert set(report.predictions["source_file"]) == {"example_historical_matches.csv"}
     assert set(report.skipped["source_file"]) == {"example_historical_matches.csv"}
+
+
+def test_batch_backtest_recurses_into_nested_folders_and_uses_relative_source_paths(tmp_path: Path) -> None:
+    history = tmp_path / "history"
+    belgium = history / "Belgium"
+    england = history / "England"
+    belgium.mkdir(parents=True)
+    england.mkdir(parents=True)
+    copyfile(BATCH_EXAMPLES / "season_a.csv", belgium / "season_a.csv")
+    copyfile(BATCH_EXAMPLES / "season_b.csv", england / "season_b.csv")
+
+    report = BatchBacktestRunner(history).run(export=False)
+    assert set(report.detailed_summary["source_file"]) == {
+        "Belgium/season_a.csv",
+        "England/season_b.csv",
+    }
+
+
+def test_shared_backtest_cli_helper_runs_and_prints_summary(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    report = run_and_print_backtest(
+        input_path=BATCH_EXAMPLES,
+        detailed_output_path=tmp_path / "detailed.csv",
+        aggregate_output_path=tmp_path / "aggregate.csv",
+        skipped_output_path=tmp_path / "skipped.csv",
+    )
+    output = capsys.readouterr().out
+    assert "Backtest Scope" in output
+    assert "- Files processed: 2" in output
+    assert len(report.detailed_summary) == 14
+    assert (tmp_path / "detailed.csv").exists()
+    assert (tmp_path / "aggregate.csv").exists()
+    assert (tmp_path / "skipped.csv").exists()
 
 
 def test_strategy_interface_exists() -> None:

@@ -115,6 +115,11 @@ The loader accepts Football-Data.co.uk-like columns: `HomeTeam`, `AwayTeam`,
 `AvgH`/`AvgD`/`AvgA` or `B365H`/`B365D`/`B365A`. Optional over/under columns
 include `Avg>2.5`/`Avg<2.5` and `B365>2.5`/`B365<2.5`.
 
+Football-Data formats vary by league and season. Older files may use `BbAv*`
+aggregate columns, which are not currently consumed by the loader. See
+[`docs/backtesting.md`](docs/backtesting.md) for the full column map, supported
+columns, and the exact loader priority rule.
+
 The exported strategy table compares fixed-score baselines, favourite-win
 baselines, the modal Poisson scoreline, 1X2 EV optimisation, and 1X2 plus
 over/under EV optimisation when that optional market is available. Missing
@@ -125,6 +130,21 @@ unique skipped matches by source file and reason.
 The CLI prints a concise interpretation summary by default: scope, overall
 ranking, baseline gaps, key conclusions, per-file winners, skips, and export
 paths. Add `--verbose` to append the full raw per-file and aggregate tables.
+
+### Run From VS Code
+
+For the common historical folders, open one of these files in VS Code and press
+**Run Python File**:
+
+- `scripts/run_backtest_belgium.py`
+- `scripts/run_backtest_england.py`
+- `scripts/run_backtest_all.py`
+
+The Belgium and England runners process their corresponding folders below
+`data/raw/`. The all-data runner recursively processes every CSV below
+`data/raw/`, including league subfolders. Each runner prints the same concise
+summary as `scripts/run_backtest.py` and writes clearly named CSVs below
+`data/processed/`.
 
 ## Add Your Data
 

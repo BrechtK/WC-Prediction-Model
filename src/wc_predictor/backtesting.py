@@ -514,7 +514,7 @@ class BatchBacktestRunner:
             BacktestRunner(
                 FootballDataCSVLoader(path),
                 config=self.config,
-                source_file=path.name,
+                source_file=self._source_file(path),
             ).run(export=False)
             for path in self._csv_paths()
         ]
@@ -541,12 +541,17 @@ class BatchBacktestRunner:
             return [self.input_path]
         if self.input_path.is_dir():
             paths = sorted(
-                path for path in self.input_path.iterdir() if path.is_file() and path.suffix.lower() == ".csv"
+                path for path in self.input_path.rglob("*") if path.is_file() and path.suffix.lower() == ".csv"
             )
             if not paths:
                 raise ValueError(f"Historical input folder contains no CSV files: {self.input_path}")
             return paths
         raise FileNotFoundError(self.input_path)
+
+    def _source_file(self, path: Path) -> str:
+        if self.input_path.is_dir():
+            return path.relative_to(self.input_path).as_posix()
+        return path.name
 
     @staticmethod
     def _concat_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:

@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
-from wc_predictor.backtesting import BatchBacktestRunner, BatchBacktestSettings
-from wc_predictor.reporting import format_backtest_console_summary
+from wc_predictor.backtest_cli import run_and_print_backtest
 
 
 def main() -> None:
@@ -35,13 +33,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    settings = BatchBacktestSettings(
-        detailed_output_path=Path(args.detailed_output),
-        aggregate_output_path=Path(args.aggregate_output),
-        skipped_output_path=Path(args.skipped_output),
+    run_and_print_backtest(
+        input_path=args.input,
+        detailed_output_path=args.detailed_output,
+        aggregate_output_path=args.aggregate_output,
+        skipped_output_path=args.skipped_output,
+        verbose=args.verbose,
     )
-    report = BatchBacktestRunner(args.input, settings=settings).run()
-    print(format_backtest_console_summary(report, args.input, settings, args.verbose))
 
 
 if __name__ == "__main__":
