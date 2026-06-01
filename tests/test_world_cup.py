@@ -3,8 +3,9 @@ import runpy
 import sys
 
 import pandas as pd
+from openpyxl import load_workbook
 
-from wc_predictor.reporting import format_world_cup_console_summary
+from wc_predictor.reporting import format_world_cup_console_summary, format_world_cup_prediction_diagnostics
 from wc_predictor.world_cup import (
     WORLD_CUP_ODDS_MISSING_MESSAGE,
     WorldCupPredictionSettings,
@@ -87,6 +88,45 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
     assert len(pd.read_excel(settings.xlsx_output_path)) == 2
 
 
+def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    run_world_cup_predictions(settings)
+    worksheet = load_workbook(settings.xlsx_output_path)["recommendations"]
+    headers = [cell.value for cell in worksheet[1]]
+
+    assert worksheet.freeze_panes == "A2"
+    assert headers[:19] == [
+        "match_id",
+        "date",
+        "stage",
+        "group",
+        "team_a",
+        "team_b",
+        "market_a",
+        "market_draw",
+        "market_b",
+        "favourite_probability",
+        "favourite_bucket",
+        "lambda_a",
+        "lambda_b",
+        "recommended_score",
+        "recommended_qualifier",
+        "best_expected_points",
+        "most_likely_scoreline",
+        "ev_optimal_differs",
+        "top_5_ev_predictions",
+    ]
+    column = {name: index + 1 for index, name in enumerate(headers)}
+    assert worksheet.cell(2, column["market_a"]).number_format == "0.00%"
+    assert worksheet.cell(2, column["favourite_probability"]).number_format == "0.00%"
+    assert worksheet.cell(2, column["lambda_a"]).number_format == "0.0000"
+    assert worksheet.cell(2, column["calibration_loss"]).number_format == "0.0000"
+    assert worksheet.cell(2, column["best_expected_points"]).number_format == "0.000"
+    assert worksheet.cell(2, column["top_5_ev_predictions"]).alignment.wrap_text
+    assert worksheet.cell(2, column["warnings"]).alignment.wrap_text
+    assert worksheet.column_dimensions["A"].width >= len("match_id")
+
+
 def test_create_world_cup_odds_file_copies_template(tmp_path: Path) -> None:
     destination = tmp_path / "raw" / "world_cup_odds.xlsx"
     path, changed = create_world_cup_odds_file(destination)
@@ -157,6 +197,33 @@ def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: P
     assert "Top 5 EV scorelines:" in summary
     assert "CSV recommendations:" in summary
     assert "Excel recommendations:" in summary
+    assert "Prediction Output Diagnostics" in summary
+    assert "Recommended Score Counts" in summary
+    assert "Favourite-Strength Bucket Counts" in summary
+    assert "- Average lambda_a:" in summary
+    assert "- Average lambda_b:" in summary
+    assert "- EV-optimal score differs from modal scoreline:" in summary
+    assert "Top 10 Matches By Favourite Probability" in summary
+    assert "market_a=" in summary
+    assert "market_draw=" in summary
+    assert "market_b=" in summary
+
+
+def test_world_cup_prediction_diagnostics_show_only_ten_strongest_favourites(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(_settings(tmp_path)).match_report
+    rows = []
+    for index in range(11):
+        row = report.iloc[0].copy()
+        row["match_id"] = f"M{index:02d}"
+        row["favourite_probability"] = 0.40 + index / 100
+        rows.append(row)
+
+    diagnostics = format_world_cup_prediction_diagnostics(pd.DataFrame(rows))
+
+    assert "M10 | Alpha vs Beta | p_fav=50.00%" in diagnostics
+    assert "M01 | Alpha vs Beta | p_fav=41.00%" in diagnostics
+    assert "M00 | Alpha vs Beta" not in diagnostics
+    assert diagnostics.index("M10 | Alpha vs Beta") < diagnostics.index("M09 | Alpha vs Beta")
 
 
 def test_world_cup_prediction_script_runs_with_overrides(

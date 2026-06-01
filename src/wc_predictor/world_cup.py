@@ -8,7 +8,11 @@ from shutil import copyfile
 
 from wc_predictor.config import ProjectConfig
 from wc_predictor.market_data import load_odds
-from wc_predictor.reporting import export_dataframe, format_world_cup_console_summary
+from wc_predictor.reporting import (
+    export_dataframe,
+    export_world_cup_recommendations_excel,
+    format_world_cup_console_summary,
+)
 from wc_predictor.workflow import PredictionWorkflowResult, run_prediction_workflow
 
 DEFAULT_WORLD_CUP_XLSX_INPUT_PATH = Path("data/raw/world_cup_odds.xlsx")
@@ -68,7 +72,7 @@ def run_world_cup_predictions(
     input_path = resolve_world_cup_odds_input(settings.input_path)
     workflow = run_prediction_workflow(load_odds(input_path), config=config)
     export_dataframe(workflow.match_report, settings.csv_output_path)
-    export_dataframe(workflow.match_report, settings.xlsx_output_path)
+    export_world_cup_recommendations_excel(workflow.match_report, settings.xlsx_output_path)
     return workflow
 
 

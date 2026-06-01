@@ -6,6 +6,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from wc_predictor.backtesting import BatchBacktestReport, BatchBacktestSettings
 from wc_predictor.utils import ensure_parent_directory
@@ -307,7 +309,42 @@ def format_world_cup_console_summary(
             ]
         )
     )
+    sections.append(format_world_cup_prediction_diagnostics(match_report))
     return "\n\n".join(sections)
+
+
+def format_world_cup_prediction_diagnostics(match_report: pd.DataFrame) -> str:
+    """Render compact post-generation diagnostics for real-tournament output."""
+
+    score_counts = match_report["recommended_score"].value_counts().sort_index()
+    bucket_counts = match_report["favourite_bucket"].value_counts().sort_index()
+    differs_count = int(match_report["ev_optimal_differs_from_most_likely"].sum())
+    lines = [
+        "Prediction Output Diagnostics",
+        "Recommended Score Counts",
+        *(f"- {score}: {count}" for score, count in score_counts.items()),
+        "",
+        "Favourite-Strength Bucket Counts",
+        *(f"- {bucket}: {count}" for bucket, count in bucket_counts.items()),
+        "",
+        f"- Average lambda_a: {match_report['lambda_a'].mean():.4f}",
+        f"- Average lambda_b: {match_report['lambda_b'].mean():.4f}",
+        f"- EV-optimal score differs from modal scoreline: {differs_count}",
+        "",
+        "Top 10 Matches By Favourite Probability",
+    ]
+    strongest_favourites = match_report.nlargest(10, "favourite_probability")
+    for _, row in strongest_favourites.iterrows():
+        lines.extend(
+            [
+                f"{row['match_id']} | {row['team_a']} vs {row['team_b']} | p_fav={row['favourite_probability']:.2%}",
+                f"  Fair 1X2: market_a={row['market_a_win']:.2%} market_draw={row['market_draw']:.2%} market_b={row['market_b_win']:.2%}",
+                f"  Lambdas: lambda_a={row['lambda_a']:.4f} lambda_b={row['lambda_b']:.4f}",
+                f"  Scorelines: recommended={row['recommended_score']} modal={row['most_likely_scoreline']}",
+                f"  Top 5 EV predictions: {row['top_5_ev_predictions']}",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def export_dataframe(frame: pd.DataFrame, path: str | Path) -> None:
@@ -321,6 +358,92 @@ def export_dataframe(frame: pd.DataFrame, path: str | Path) -> None:
         frame.to_excel(path, index=False)
     else:
         raise ValueError(f"Unsupported report file type: {path.suffix}")
+
+
+def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path) -> None:
+    """Export readable real-tournament recommendations with Excel formatting."""
+
+    path = Path(path)
+    ensure_parent_directory(path)
+    aliases = {
+        "market_a_win": "market_a",
+        "market_b_win": "market_b",
+        "ev_optimal_differs_from_most_likely": "ev_optimal_differs",
+    }
+    key_columns = [
+        "match_id",
+        "date",
+        "stage",
+        "group",
+        "team_a",
+        "team_b",
+        "market_a_win",
+        "market_draw",
+        "market_b_win",
+        "favourite_probability",
+        "favourite_bucket",
+        "lambda_a",
+        "lambda_b",
+        "recommended_score",
+        "recommended_qualifier",
+        "best_expected_points",
+        "most_likely_scoreline",
+        "ev_optimal_differs_from_most_likely",
+        "top_5_ev_predictions",
+        "warnings",
+    ]
+    ordered_columns = [column for column in key_columns if column in frame]
+    ordered_columns.extend(column for column in frame.columns if column not in ordered_columns)
+    display_frame = frame[ordered_columns].rename(columns=aliases)
+    display_frame.to_excel(path, index=False, sheet_name="recommendations")
+
+    probability_columns = {
+        "market_a",
+        "market_draw",
+        "market_b",
+        "favourite_probability",
+        "model_a_win",
+        "model_draw",
+        "model_b_win",
+        "exact_score_probability",
+        "correct_goal_difference_probability",
+        "correct_result_probability",
+        "tail_probability_before_renormalisation",
+    }
+    decimal_columns = {"lambda_a", "lambda_b", "calibration_loss"}
+    ev_columns = {"best_expected_points"}
+    wrapped_columns = {"top_5_ev_predictions", "warnings"}
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path)
+    worksheet = workbook["recommendations"]
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = worksheet.dimensions
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    for cell in worksheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for index, cell in enumerate(worksheet[1], start=1):
+        column_name = str(cell.value)
+        for value_cell in worksheet.iter_cols(min_col=index, max_col=index, min_row=2):
+            for value in value_cell:
+                if column_name in probability_columns:
+                    value.number_format = "0.00%"
+                elif column_name in decimal_columns:
+                    value.number_format = "0.0000"
+                elif column_name in ev_columns:
+                    value.number_format = "0.000"
+                if column_name in wrapped_columns:
+                    value.alignment = Alignment(wrap_text=True, vertical="top")
+        contents = [str(cell.value or "")]
+        contents.extend(str(row[0].value or "") for row in worksheet.iter_cols(min_col=index, max_col=index, min_row=2))
+        max_length = max(len(content) for content in contents)
+        maximum_width = 60 if column_name in wrapped_columns else 32
+        worksheet.column_dimensions[get_column_letter(index)].width = min(max(max_length + 2, 10), maximum_width)
+
+    workbook.save(path)
 
 
 def export_report_bundle(
