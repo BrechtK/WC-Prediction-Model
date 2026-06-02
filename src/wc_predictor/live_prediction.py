@@ -33,6 +33,13 @@ from wc_predictor.oddsportal_core import (
     OddsPortalCoreParseResult,
     parse_oddsportal_core_odds_folder,
 )
+from wc_predictor.oddsportal_schedule import (
+    DEFAULT_SCHEDULE_INPUT_PATH,
+    DEFAULT_SCHEDULE_OUTPUT_PATH,
+    DEFAULT_SCHEDULE_REPORT_PATH,
+    OddsPortalScheduleParseResult,
+    prepare_schedule_metadata,
+)
 from wc_predictor.world_cup import WorldCupPredictionSettings, run_world_cup_predictions
 from wc_predictor.workflow import PredictionWorkflowResult
 
@@ -56,6 +63,10 @@ class LivePredictionSettings:
     strict: bool = False
     skip_weight_sensitivity: bool = False
     metadata_odds_path: Path | None = DEFAULT_METADATA_ODDS_PATH
+    schedule_input_path: Path | None = DEFAULT_SCHEDULE_INPUT_PATH
+    schedule_output_path: Path = DEFAULT_SCHEDULE_OUTPUT_PATH
+    schedule_parse_report_path: Path = DEFAULT_SCHEDULE_REPORT_PATH
+    skip_schedule_parse: bool = False
     core_odds_output_path: Path = DEFAULT_CORE_OUTPUT_PATH
     total_goals_output_path: Path = DEFAULT_TOTAL_GOALS_OUTPUT_PATH
     core_parse_report_path: Path = DEFAULT_CORE_REPORT_PATH
@@ -78,6 +89,28 @@ class LivePredictionResult:
     workflow: PredictionWorkflowResult
     weight_comparison: CorrectScoreWeightComparison | None
     paste_warnings: dict[str, tuple[str, ...]]
+    schedule_metadata: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class ParsedLivePredictionInputs:
+    """Parsed OddsPortal inputs shared by live recommendations and diagnostics."""
+
+    settings: LivePredictionSettings
+    selected_match_ids: tuple[str, ...]
+    core_parse: OddsPortalCoreParseResult
+    correct_score_parse: OddsPortalParseResult
+    paste_warnings: dict[str, tuple[str, ...]]
+    schedule_metadata: pd.DataFrame
+    schedule_parse: OddsPortalScheduleParseResult | None
+
+    @property
+    def has_total_goals(self) -> bool:
+        return not self.core_parse.total_goals_odds.empty
+
+    @property
+    def has_correct_scores(self) -> bool:
+        return not self.correct_score_parse.odds.empty
 
 
 def discover_live_paste_markets(input_folder: str | Path) -> dict[str, set[str]]:
@@ -190,25 +223,10 @@ def run_live_prediction(
 
     settings = settings or LivePredictionSettings()
     config = config or ProjectConfig(correct_score_poisson_weight=0.85)
-    selected, mutable_warnings = _select_and_validate_pastes(settings.input_folder, settings.match_id, settings.strict)
-    core_parse = parse_oddsportal_core_odds_folder(
-        settings.input_folder,
-        settings.core_odds_output_path,
-        settings.core_parse_report_path,
-        total_goals_output_path=settings.total_goals_output_path,
-        metadata_odds_path=settings.metadata_odds_path,
-        match_ids=selected,
-    )
-    correct_score_parse = parse_oddsportal_correct_score_folder(
-        settings.input_folder,
-        settings.correct_score_output_path,
-        settings.correct_score_parse_report_path,
-        match_ids=selected,
-    )
-    _validate_parsed_markets(selected, core_parse, correct_score_parse, settings.strict, mutable_warnings)
-
-    has_total_goals = not core_parse.total_goals_odds.empty
-    has_correct_scores = not correct_score_parse.odds.empty
+    parsed = parse_live_prediction_inputs(settings)
+    has_total_goals = parsed.has_total_goals
+    has_correct_scores = parsed.has_correct_scores
+    mutable_warnings = {match_id: list(values) for match_id, values in parsed.paste_warnings.items()}
     workflow = run_world_cup_predictions(
         WorldCupPredictionSettings(
             input_path=settings.core_odds_output_path,
@@ -232,16 +250,57 @@ def run_live_prediction(
         )
         export_correct_score_weight_comparison(weight_comparison, settings.weight_comparison_output_path)
     elif not has_correct_scores and not settings.skip_weight_sensitivity:
-        for selected_match_id in selected:
+        for selected_match_id in parsed.selected_match_ids:
             _append_warning(mutable_warnings, selected_match_id, "weight_sensitivity_skipped:no_correct_score_odds")
 
     return LivePredictionResult(
         settings,
-        core_parse,
-        correct_score_parse,
+        parsed.core_parse,
+        parsed.correct_score_parse,
         workflow,
         weight_comparison,
         {match_id: tuple(values) for match_id, values in mutable_warnings.items()},
+        parsed.schedule_metadata,
+    )
+
+
+def parse_live_prediction_inputs(
+    settings: LivePredictionSettings | None = None,
+) -> ParsedLivePredictionInputs:
+    """Parse and validate the live OddsPortal pastes without running recommendations."""
+
+    settings = settings or LivePredictionSettings()
+    prepared_schedule = prepare_schedule_metadata(
+        settings.schedule_input_path,
+        settings.schedule_output_path,
+        settings.schedule_parse_report_path,
+        existing_metadata_path=settings.metadata_odds_path,
+        skip_parse=settings.skip_schedule_parse,
+    )
+    selected, mutable_warnings = _select_and_validate_pastes(settings.input_folder, settings.match_id, settings.strict)
+    core_parse = parse_oddsportal_core_odds_folder(
+        settings.input_folder,
+        settings.core_odds_output_path,
+        settings.core_parse_report_path,
+        total_goals_output_path=settings.total_goals_output_path,
+        metadata_odds_path=prepared_schedule.metadata_path,
+        match_ids=selected,
+    )
+    correct_score_parse = parse_oddsportal_correct_score_folder(
+        settings.input_folder,
+        settings.correct_score_output_path,
+        settings.correct_score_parse_report_path,
+        match_ids=selected,
+    )
+    _validate_parsed_markets(selected, core_parse, correct_score_parse, settings.strict, mutable_warnings)
+    return ParsedLivePredictionInputs(
+        settings,
+        selected,
+        core_parse,
+        correct_score_parse,
+        {match_id: tuple(values) for match_id, values in mutable_warnings.items()},
+        prepared_schedule.schedule,
+        prepared_schedule.parse_result,
     )
 
 
@@ -287,6 +346,15 @@ def format_live_prediction_summary(result: LivePredictionResult) -> str:
     """Render a concise submission-focused live terminal report."""
 
     sections = ["# Live Prediction Summary"]
+    if not result.schedule_metadata.empty:
+        selected = set(result.workflow.match_report["match_id"].astype(str))
+        schedule = result.schedule_metadata[result.schedule_metadata["match_id"].astype(str).isin(selected)]
+        sections.extend(
+            [
+                "Schedule mapping:",
+                *(f"  {row['match_id']} | {row['team_a']} vs {row['team_b']}" for _, row in schedule.iterrows()),
+            ]
+        )
     final_submissions: list[str] = []
     for _, row in result.workflow.match_report.iterrows():
         match_id = str(row["match_id"])

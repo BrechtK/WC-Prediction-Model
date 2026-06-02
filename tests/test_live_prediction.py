@@ -95,12 +95,58 @@ def _write_pastes(
         (folder / f"{match_id}_correct_score.txt").write_text("\n\n".join(blocks), encoding="utf-8")
 
 
+def _write_combined_paste(folder: Path, match_id: str = "M001") -> None:
+    source_folder = folder.parent / "combined_source"
+    _write_pastes(source_folder, match_id)
+    sections = [
+        ("1X2", source_folder / f"{match_id}_1x2.txt"),
+        ("OVER_UNDER", source_folder / f"{match_id}_over_under.txt"),
+        ("BTTS", source_folder / f"{match_id}_btts.txt"),
+        ("CORRECT_SCORE", source_folder / f"{match_id}_correct_score.txt"),
+    ]
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{match_id}_all_odds.txt").write_text(
+        "\n\n".join(f"### {header}\n{path.read_text(encoding='utf-8')}" for header, path in sections),
+        encoding="utf-8",
+    )
+
+
+def _write_schedule(path: Path, fixtures: list[tuple[str, str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blocks = []
+    for date, team_a, team_b in fixtures:
+        blocks.append(
+            "\n".join(
+                [
+                    date,
+                    "1",
+                    "X",
+                    "2",
+                    "",
+                    "21:00",
+                    team_a,
+                    team_a,
+                    "-",
+                    team_b,
+                    team_b,
+                    "1.50",
+                    "4.00",
+                    "7.00",
+                ]
+            )
+        )
+    path.write_text("\n\n".join(blocks), encoding="utf-8")
+
+
 def _settings(tmp_path: Path, **overrides) -> LivePredictionSettings:
     raw = tmp_path / "data" / "raw"
     processed = tmp_path / "data" / "processed"
     defaults = {
         "input_folder": raw / "oddsportal_pastes",
         "metadata_odds_path": raw / "world_cup_odds.xlsx",
+        "schedule_input_path": raw / "oddsportal_schedule.txt",
+        "schedule_output_path": raw / "world_cup_schedule_from_paste.csv",
+        "schedule_parse_report_path": processed / "oddsportal_schedule_parse_report.csv",
         "core_odds_output_path": raw / "world_cup_odds_from_pastes.csv",
         "total_goals_output_path": raw / "world_cup_total_goals_odds_from_pastes.csv",
         "core_parse_report_path": processed / "oddsportal_core_odds_parse_report.csv",
@@ -226,3 +272,88 @@ def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
     assert "Final recommended submission:" in output
     assert "M001 M001 Alpha vs M001 Beta:" in output
     assert (tmp_path / "data/processed/world_cup_recommendations.xlsx").exists()
+
+
+def test_live_runner_script_splits_combined_pastes_before_parsing(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    raw = tmp_path / "data" / "raw"
+    _write_metadata(raw / "world_cup_odds.xlsx")
+    _write_combined_paste(raw / "oddsportal_combined_pastes")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    assert "Combined OddsPortal Paste Split" in output
+    assert "- Files processed: 1" in output
+    assert "- Files written: 4" in output
+    assert "Final recommended submission:" in output
+    assert (raw / "oddsportal_pastes/M001_1x2.txt").exists()
+    assert (tmp_path / "data/processed/world_cup_recommendations.xlsx").exists()
+
+
+def test_live_runner_script_can_skip_combined_paste_split(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw = tmp_path / "data" / "raw"
+    _write_metadata(raw / "world_cup_odds.xlsx")
+    _write_combined_paste(raw / "oddsportal_combined_pastes")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--skip-combined-split", "--skip-weight-sensitivity"],
+    )
+
+    with pytest.raises(SystemExit, match="No recognised OddsPortal paste files"):
+        runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    assert not (raw / "oddsportal_pastes/M001_1x2.txt").exists()
+
+
+def test_live_runner_script_uses_schedule_mapping_for_combined_paste(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    raw = tmp_path / "data" / "raw"
+    _write_metadata(raw / "world_cup_odds.xlsx")
+    _write_schedule(raw / "oddsportal_schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
+    _write_combined_paste(raw / "oddsportal_combined_pastes")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    parsed_odds = pd.read_csv(raw / "world_cup_odds_from_pastes.csv")
+    assert "Schedule Paste Parse" in output
+    assert "Schedule mapping:" in output
+    assert "M001 | Schedule Alpha vs Schedule Beta" in output
+    assert parsed_odds["team_a"].eq("Schedule Alpha").all()
+    assert parsed_odds["team_b"].eq("Schedule Beta").all()
+
+
+def test_live_runner_script_rejects_combined_paste_unknown_to_schedule(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw = tmp_path / "data" / "raw"
+    _write_metadata(raw / "world_cup_odds.xlsx")
+    _write_schedule(raw / "oddsportal_schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
+    _write_combined_paste(raw / "oddsportal_combined_pastes", "M999")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+
+    with pytest.raises(
+        SystemExit,
+        match=r"M999_all_odds\.txt was found, but M999 is not present in the parsed schedule\.",
+    ):
+        runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    assert not (raw / "oddsportal_pastes/M999_1x2.txt").exists()

@@ -611,6 +611,7 @@ def run_prediction_workflow(
                 "model_disagreement_warning": model_disagreement_warning,
                 "dixon_coles_rho": config.dixon_coles_rho,
                 "dixon_coles_recommended_score": f"{dixon_coles_recommended_score[0]}-{dixon_coles_recommended_score[1]}",
+                "dixon_coles_best_expected_points": dixon_coles_recommendation.best.expected_points,
                 "dixon_coles_ev_gap_best_vs_second": _ev_gap_best_vs_second(dixon_coles_recommendation),
                 "dixon_coles_top_5_ev_predictions": _format_top_ev_predictions(dixon_coles_recommendation),
                 "dixon_coles_changes_recommendation": dixon_coles_recommended_score != final_live_recommended_score,

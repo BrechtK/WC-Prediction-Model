@@ -101,10 +101,48 @@ python -m pip install -e ".[dev]"
 
 ## Primary Live Workflow
 
-For normal live tournament use, fill the OddsPortal paste files and run one
-script.
+For normal live tournament use, paste the OddsPortal text and run one script.
 
-1. Paste the visible OddsPortal text into:
+### Option A: Combined Paste File (Preferred)
+
+1. Create one file per match:
+
+```text
+data/raw/oddsportal_combined_pastes/M001_all_odds.txt
+```
+
+2. Paste all available market tables below clearly marked sections:
+
+```text
+### 1X2
+<pasted 1X2 table>
+
+### OVER_UNDER
+<pasted over/under table>
+
+### BTTS
+<pasted BTTS table>
+
+### CORRECT_SCORE
+<pasted correct-score table>
+```
+
+3. Open `scripts/run_live_prediction.py`.
+4. Press **Run Python File** in VS Code.
+5. Read the `Final recommended submission` block in the terminal.
+6. Open `data/processed/world_cup_recommendations.xlsx` for full diagnostics
+   and `data/processed/correct_score_weight_comparison.xlsx` for blend-weight
+   sensitivity when useful.
+
+The runner automatically splits combined files into the existing parser inputs
+below `data/raw/oddsportal_pastes/`, then continues through the same live
+workflow. Existing split files are preserved by default. Use
+`--overwrite-combined-split` to intentionally replace them or
+`--skip-combined-split` to bypass this preprocessing step.
+
+### Option B: Separate Paste Files (Advanced)
+
+Paste the visible OddsPortal tables directly into:
 
 ```text
 data/raw/oddsportal_pastes/M001_1x2.txt
@@ -113,12 +151,16 @@ data/raw/oddsportal_pastes/M001_btts.txt
 data/raw/oddsportal_pastes/M001_correct_score.txt
 ```
 
-2. Open `scripts/run_live_prediction.py`.
-3. Press **Run Python File** in VS Code.
-4. Read the `Final recommended submission` block in the terminal.
-5. Open `data/processed/world_cup_recommendations.xlsx` for full diagnostics
-   and `data/processed/correct_score_weight_comparison.xlsx` for blend-weight
-   sensitivity when useful.
+The standalone splitter is also available for manual inspection:
+
+```powershell
+python scripts/split_oddsportal_combined_pastes.py
+```
+
+Supported combined-file aliases include `### MATCH_ODDS`,
+`### FULL_TIME_RESULT`, `### OVER UNDER`, `### O/U`,
+`### BOTH_TEAMS_TO_SCORE`, `### BOTH TEAMS TO SCORE`, and
+`### CORRECT SCORE`.
 
 The runner parses all available pastes, uses the half-goal total-goals ladder,
 runs the prediction model, writes the normal Excel outputs, and performs
@@ -135,6 +177,66 @@ The live report includes a model-comparison block for each match: baseline
 Poisson score, correct-score blended score, final live score, EV gaps,
 agreement status, disagreement warning, Dixon-Coles rho, Dixon-Coles top-five
 EV predictions, and whether Dixon-Coles changes the recommendation.
+
+### Schedule Paste And Match-ID Mapping
+
+To reduce the risk of attaching odds to the wrong fixture, paste the full
+group-stage schedule into:
+
+```text
+data/raw/oddsportal_schedule.txt
+```
+
+Then either parse it explicitly:
+
+```powershell
+python scripts/parse_oddsportal_schedule.py
+```
+
+or simply run:
+
+```powershell
+python scripts/run_live_prediction.py
+```
+
+The one-click runner automatically parses and uses the schedule when the raw
+schedule file exists. It writes:
+
+```text
+data/raw/world_cup_schedule_from_paste.csv
+data/processed/oddsportal_schedule_parse_report.csv
+```
+
+Match IDs are assigned sequentially in pasted fixture order. For example:
+
+```text
+M001 = Mexico vs South Africa
+M002 = South Korea vs Czech Republic
+M003 = Canada vs Bosnia & Herzegovina
+```
+
+Create combined odds files using those IDs:
+
+```text
+data/raw/oddsportal_combined_pastes/M001_all_odds.txt
+data/raw/oddsportal_combined_pastes/M002_all_odds.txt
+data/raw/oddsportal_combined_pastes/M003_all_odds.txt
+```
+
+Before splitting combined files, the live runner verifies that every filename
+ID exists in the parsed schedule. Detectable team-name contradictions in a
+combined paste are reported as warnings. The live summary prints the selected
+schedule mapping for manual review.
+
+Metadata priority is:
+
+1. `data/raw/world_cup_schedule_from_paste.csv`;
+2. `data/raw/world_cup_odds.xlsx` when no parsed schedule is available;
+3. blank metadata when neither file exists.
+
+Use `--schedule path/to/schedule.txt` to select another schedule paste or
+`--skip-schedule-parse` to reuse an existing parsed schedule CSV without
+reparsing the raw text.
 
 ## Run The Example
 
@@ -349,6 +451,24 @@ around `w=0.85`. A custom grid can be passed with
 This is a live sensitivity diagnostic, not empirical proof of the best blend
 weight. Historical validation is still needed before selecting a weight for
 final submissions.
+
+### Dixon-Coles Challenger Sensitivity
+
+Compare the diagnostic Dixon-Coles recommendation across rho values with:
+
+```powershell
+python scripts/compare_dixon_coles_rho.py
+```
+
+The script uses the current live OddsPortal paste folder, keeps the final live
+recommendation unchanged, and writes
+`data/processed/dixon_coles_rho_comparison.xlsx`. The workbook contains detailed
+low-score probabilities for each match and rho plus a match-level summary of
+recommendation changes and the stable rho interval around `0`. Pass a custom
+grid with `--rhos=-0.20,-0.10,0,0.10,0.20`.
+
+This is sensitivity analysis only. It does not choose an optimal rho or promote
+Dixon-Coles to the default recommendation model.
 
 ### OddsPortal Core Odds Paste Workflow
 

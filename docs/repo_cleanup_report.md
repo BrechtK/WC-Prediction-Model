@@ -5,13 +5,23 @@
 This cleanup pass keeps the one-click live workflow as the primary user path:
 
 ```text
-data/raw/oddsportal_pastes/*_1x2.txt
-data/raw/oddsportal_pastes/*_over_under.txt
-data/raw/oddsportal_pastes/*_btts.txt
-data/raw/oddsportal_pastes/*_correct_score.txt
+data/raw/oddsportal_schedule.txt
     -> scripts/run_live_prediction.py
+    -> data/raw/world_cup_schedule_from_paste.csv
+    -> fixture metadata and match-ID validation
+
+data/raw/oddsportal_combined_pastes/*_all_odds.txt
+    -> scripts/run_live_prediction.py
+    -> split into:
+       data/raw/oddsportal_pastes/*_1x2.txt
+       data/raw/oddsportal_pastes/*_over_under.txt
+       data/raw/oddsportal_pastes/*_btts.txt
+       data/raw/oddsportal_pastes/*_correct_score.txt
+    -> existing parsers and prediction workflow
     -> terminal recommendation and Excel reports
 ```
+
+The four split files remain supported as direct advanced inputs.
 
 No model logic, scoring rules, calibration logic, correct-score aggregation,
 or EV optimisation behavior was changed.
@@ -37,6 +47,8 @@ independently:
 
 | Script | Purpose |
 | --- | --- |
+| `scripts/parse_oddsportal_schedule.py` | Parse schedule metadata and sequential live match IDs |
+| `scripts/split_oddsportal_combined_pastes.py` | Split preferred combined per-match pastes into existing parser inputs |
 | `scripts/parse_oddsportal_core_odds.py` | Parse 1X2, BTTS, and total-goals ladder pastes |
 | `scripts/parse_oddsportal_correct_scores.py` | Parse correct-score pastes |
 | `scripts/run_world_cup_predictions.py` | Run recommendations from prepared CSV or Excel inputs |

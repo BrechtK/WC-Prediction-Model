@@ -502,6 +502,7 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "model_disagreement_warning",
         "dixon_coles_rho",
         "dixon_coles_recommended_score",
+        "dixon_coles_best_expected_points",
         "dixon_coles_ev_gap_best_vs_second",
         "dixon_coles_top_5_ev_predictions",
         "dixon_coles_changes_recommendation",
@@ -588,6 +589,7 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "correct_score_blended_ev_gap_best_vs_second",
         "final_live_ev_gap_best_vs_second",
         "dixon_coles_ev_gap_best_vs_second",
+        "dixon_coles_best_expected_points",
     }
     wrapped_columns = {
         "top_5_ev_predictions",
