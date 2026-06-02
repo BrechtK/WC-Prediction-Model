@@ -80,6 +80,40 @@ EV(a,b,q)
 Knockout score timing remains configurable because the competition app's exact
 interpretation must be confirmed.
 
+## Optional Correct-Score Market Blend
+
+Correct-score odds may be supplied in long format:
+
+```text
+match_id,bookmaker,score_a,score_b,decimal_odds
+```
+
+Margin is removed within each bookmaker's correct-score market. The fair
+bookmaker matrices are averaged to produce:
+
+```text
+P_market(score)
+```
+
+When this optional market is supplied, optimisation uses:
+
+```text
+P_final(score)
+= w P_poisson(score)
+  + (1 - w) P_market(score)
+```
+
+where `0 <= w <= 1`. The default `w=1` exactly preserves the Poisson-only
+workflow. Diagnostics report the top market-implied and blended scorelines plus:
+
+```text
+D_KL(P_market || P_poisson)
+```
+
+The direct market matrix is conditional on the explicitly supplied scorelines.
+Correct-score markets should therefore be collected consistently across
+bookmakers and interpreted with care because their margins can be substantial.
+
 ## Finite Score Grid And Tail Mass
 
 The score matrix contains scores from `0-0` through `max_goals-max_goals`.

@@ -59,9 +59,15 @@ Calibration uses full-distribution Poisson probabilities. Score-grid tail
 probability is reported before renormalisation; EV optimisation uses the
 renormalised finite grid and is conditional on its represented scores.
 
-Correct-score odds can already be loaded and margin-adjusted in long format.
-Using them as a direct score distribution or a configurable blend is reserved
-for a later increment.
+Correct-score odds can optionally be loaded and margin-adjusted in long format.
+When supplied, they are aggregated into a direct scoreline market distribution
+and blended with the Poisson matrix:
+
+```text
+P_final = w * P_poisson + (1 - w) * P_market
+```
+
+The default `w=1.0` preserves the Poisson-only baseline.
 
 ## Install
 
@@ -204,6 +210,26 @@ python scripts/run_world_cup_predictions.py `
   --odds data/examples/example_world_cup_odds.csv
 ```
 
+To add the optional correct-score enhancement:
+
+```powershell
+python scripts/run_world_cup_predictions.py `
+  --odds data/examples/example_world_cup_odds.csv `
+  --correct-score-odds data/examples/example_world_cup_correct_score_odds.csv `
+  --correct-score-poisson-weight 0.75
+```
+
+Correct-score odds use the long-format template at
+`data/templates/correct_score_odds_template.csv`. The full recommendations
+report includes the top ten market and blended scorelines plus
+`D_KL(P_market || P_poisson)`.
+
+Backtest the standard blend-weight grid `{0, 0.25, 0.5, 0.75, 1}` with:
+
+```powershell
+python scripts/run_correct_score_backtest.py
+```
+
 ### Run From VS Code
 
 For the common historical folders, open one of these files in VS Code and press
@@ -281,7 +307,7 @@ The live report flags timestamps older than 24 hours as stale for manual review.
 ## Future Modelling Roadmap
 
 The next major modelling improvements are robust comparison of margin-removal
-methods and careful use of correct-score odds. Richer O/U and BTTS diagnostics,
-low-score corrections, strategic pool simulation, and xG/Elo challengers follow
-after the market-implied baseline is measured. See
+methods and continued validation of optional correct-score blending. Richer O/U
+and BTTS diagnostics, low-score corrections, strategic pool simulation, and
+xG/Elo challengers follow after the market-implied baseline is measured. See
 [`docs/model_roadmap.md`](docs/model_roadmap.md).

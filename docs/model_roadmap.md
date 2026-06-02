@@ -19,16 +19,16 @@ Backtest each approach under the pool scoring rules. Record odds timing and
 source quality so early recreational prices are not confused with sharper
 closing markets.
 
-## Priority 2: Correct-Score Odds Support
+## Priority 2: Correct-Score Odds Validation
 
-Accept optional long-format inputs:
+The project now accepts optional long-format inputs:
 
 ```text
 match_id,bookmaker,score_a,score_b,decimal_odds
 ```
 
-Remove margin within each correct-score market and convert the results to a
-scoreline probability matrix. Explore explicit blend weights:
+It removes margin within each correct-score market, converts results to a
+scoreline probability matrix, and supports explicit blend weights:
 
 ```text
 score_matrix_final
@@ -36,7 +36,9 @@ score_matrix_final
   + (1 - w) * correct_score_market_matrix
 ```
 
-Backtest blend weights rather than choosing one subjectively.
+Continue validating blend weights across larger historical samples rather than
+choosing one subjectively. Investigate incomplete correct-score market coverage,
+liquidity, and bookmaker selection before treating the enhancement as a default.
 
 ## Priority 3: Improved Use Of O/U And BTTS
 
@@ -73,4 +75,3 @@ Only after the market baseline is robust:
 
 No challenger should replace the market-implied baseline merely because it is
 more elaborate.
-

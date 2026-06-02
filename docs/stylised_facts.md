@@ -103,7 +103,6 @@ favourite strength from the total-goals environment. This is why the
 | Odds timing | Early prices may omit material late information. | Optional `odds_timestamp` plus stale-odds flags. | Compare early and closing prices in historical evaluation. |
 | Margin-removal choice | Fair probabilities feed every later step. | Transparent proportional baseline. | Backtest additive, power, Shin, and bias-adjusted alternatives. |
 | Favourite-longshot and public-team effects | Extreme prices may be systematically distorted. | Multiple-bookmaker aggregation, source-quality metadata, and extreme-favourite flags. | Prefer sharp closing sources and evaluate bias-adjusted methods. |
-| Correct-score market information | Direct score prices may improve prediction-pool decisions but have high margins. | Loader support exists without automatic blending. | Build validated correct-score matrices and backtest blend weights. |
+| Correct-score market information | Direct score prices may improve prediction-pool decisions but have high margins. | Optional explicit Poisson-market blending with top-score and KL diagnostics. | Validate blend weights on larger samples and study market coverage quality. |
 | Independent Poisson low-score limitations | Draw and low-score probabilities may be inaccurate. | Calibration warnings, tail diagnostics, and a transparent baseline. | Test Dixon-Coles against independent Poisson. |
 | Total-goals environment | Identical 1X2 prices can imply different optimal scores. | Optional O/U and BTTS calibration targets with presence flags. | Review weights and compare market combinations by favourite bucket. |
-

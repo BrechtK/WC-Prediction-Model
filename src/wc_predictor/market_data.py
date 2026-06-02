@@ -38,7 +38,7 @@ def load_odds(path: str | Path) -> pd.DataFrame:
 
 
 def load_correct_score_odds(path: str | Path) -> pd.DataFrame:
-    """Load optional long-format correct-score odds for future direct-market blending."""
+    """Load optional long-format correct-score odds for direct-market blending."""
 
     required = {"match_id", "bookmaker", "score_a", "score_b", "decimal_odds"}
     return _require_columns(load_tabular_data(path), required, "Correct-score odds")

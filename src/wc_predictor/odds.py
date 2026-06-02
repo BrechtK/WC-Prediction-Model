@@ -148,8 +148,8 @@ def process_correct_score_odds(
 ) -> pd.DataFrame:
     """Remove margin from long-format correct-score odds for each bookmaker.
 
-    The resulting probabilities are ready for a future direct-scoreline model or
-    configurable market/Poisson blend. Version 1 does not blend them automatically.
+    The resulting probabilities are ready for optional direct-scoreline
+    aggregation and configurable market/Poisson blending.
     """
 
     required = {"match_id", "bookmaker", "score_a", "score_b", "decimal_odds"}

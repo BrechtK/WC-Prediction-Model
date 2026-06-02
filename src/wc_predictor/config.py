@@ -59,8 +59,13 @@ class ProjectConfig:
     suspicious_overround_low: float = 1.0
     suspicious_overround_high: float = 1.20
     poor_calibration_loss_threshold: float = 0.01
+    correct_score_poisson_weight: float = 1.0
     output_dir: Path = Path("data/processed")
     calibration_weights: CalibrationWeights = field(default_factory=CalibrationWeights)
     knockout_scoring: KnockoutScoringConfig = field(default_factory=KnockoutScoringConfig)
     backtesting: BacktestingConfig = field(default_factory=BacktestingConfig)
     strategies: StrategyConfig = field(default_factory=StrategyConfig)
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.correct_score_poisson_weight <= 1:
+            raise ValueError("correct_score_poisson_weight must lie between zero and one")

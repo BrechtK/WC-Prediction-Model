@@ -109,6 +109,25 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
     assert len(pd.read_excel(settings.xlsx_output_path)) == 2
 
 
+def test_world_cup_workflow_optionally_uses_correct_score_blend(tmp_path: Path) -> None:
+    settings = WorldCupPredictionSettings(
+        input_path=EXAMPLES / "example_world_cup_odds.csv",
+        correct_score_input_path=EXAMPLES / "example_world_cup_correct_score_odds.csv",
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+    workflow = run_world_cup_predictions(settings, ProjectConfig(correct_score_poisson_weight=0.5))
+    report = workflow.match_report.set_index("match_id")
+
+    assert report["has_correct_score_market"].all()
+    assert (report["correct_score_poisson_weight"] == 0.5).all()
+    assert report["correct_score_market_top_10"].str.len().gt(0).all()
+    assert report["correct_score_blended_top_10"].str.len().gt(0).all()
+    assert report["correct_score_kl_divergence"].gt(0).all()
+
+
 def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     run_world_cup_predictions(settings)

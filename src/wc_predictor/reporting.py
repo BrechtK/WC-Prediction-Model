@@ -244,6 +244,16 @@ def format_model_inspection_report(match_report: pd.DataFrame) -> str:
     for _, row in match_report.iterrows():
         qualifier = f"; qualifier={row['recommended_qualifier']}" if row.get("recommended_qualifier") else ""
         warnings = f"\n  Warnings: {row['warnings']}" if row.get("warnings") else ""
+        correct_score_diagnostics = (
+            [
+                f"  Correct-score Poisson weight: {row['correct_score_poisson_weight']:.2f}",
+                f"  Correct-score market top 10: {row['correct_score_market_top_10']}",
+                f"  Blended score top 10: {row['correct_score_blended_top_10']}",
+                f"  Correct-score market-to-Poisson KL divergence: {row['correct_score_kl_divergence']:.6f}",
+            ]
+            if row.get("has_correct_score_market")
+            else []
+        )
         sections.append(
             "\n".join(
                 [
@@ -259,6 +269,7 @@ def format_model_inspection_report(match_report: pd.DataFrame) -> str:
                     f"  Most likely scoreline: {row['most_likely_scoreline']}",
                     f"  EV-optimal prediction: {row['recommended_score']}{qualifier} ({row['best_expected_points']:.3f} EV)",
                     f"  Top 5 EV predictions: {row['top_5_ev_predictions']}",
+                    *correct_score_diagnostics,
                 ]
             )
             + warnings
@@ -287,6 +298,15 @@ def format_world_cup_console_summary(
     for _, row in match_report.iterrows():
         group = f" / {row['group']}" if pd.notna(row.get("group")) and str(row["group"]).strip() else ""
         qualifier = f"; qualifier={row['recommended_qualifier']}" if row.get("recommended_qualifier") else ""
+        correct_score_diagnostics = (
+            [
+                f"  Correct-score blend: poisson_weight={row['correct_score_poisson_weight']:.2f} KL={row['correct_score_kl_divergence']:.6f}",
+                f"  Correct-score market top 10: {row['correct_score_market_top_10']}",
+                f"  Blended score top 10: {row['correct_score_blended_top_10']}",
+            ]
+            if row.get("has_correct_score_market")
+            else []
+        )
         sections.append(
             "\n".join(
                 [
@@ -298,6 +318,7 @@ def format_world_cup_console_summary(
                     f"  Modal scoreline: {row['most_likely_scoreline']}",
                     f"  EV-optimal scoreline: {row['recommended_score']}{qualifier}",
                     f"  Top 5 EV scorelines: {row['top_5_ev_predictions']}",
+                    *correct_score_diagnostics,
                 ]
             )
         )
@@ -418,6 +439,11 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "has_over_under",
         "has_btts",
         "has_qualification_odds",
+        "has_correct_score_market",
+        "correct_score_poisson_weight",
+        "correct_score_kl_divergence",
+        "correct_score_market_top_10",
+        "correct_score_blended_top_10",
         "ev_gap_best_vs_second",
         "ev_gap_best_vs_modal",
         "warning_flags",
@@ -440,9 +466,20 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "correct_result_probability",
         "tail_probability_before_renormalisation",
     }
-    decimal_columns = {"lambda_a", "lambda_b", "calibration_loss"}
+    decimal_columns = {
+        "lambda_a",
+        "lambda_b",
+        "calibration_loss",
+        "correct_score_kl_divergence",
+    }
     ev_columns = {"best_expected_points", "ev_gap_best_vs_second", "ev_gap_best_vs_modal"}
-    wrapped_columns = {"top_5_ev_predictions", "warning_flags", "warnings"}
+    wrapped_columns = {
+        "top_5_ev_predictions",
+        "correct_score_market_top_10",
+        "correct_score_blended_top_10",
+        "warning_flags",
+        "warnings",
+    }
     from openpyxl import load_workbook
 
     workbook = load_workbook(path)

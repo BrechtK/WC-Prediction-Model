@@ -9,8 +9,14 @@ import pandas as pd
 
 from wc_predictor.calibration import CalibrationTargets, calibrate_poisson_model
 from wc_predictor.config import ProjectConfig
+from wc_predictor.correct_scores import (
+    blend_score_matrices,
+    correct_score_market_matrix,
+    format_top_scorelines,
+    market_to_poisson_kl_divergence,
+)
 from wc_predictor.friends import analyse_friend_predictions
-from wc_predictor.odds import aggregate_bookmaker_probabilities, process_bookmaker_odds
+from wc_predictor.odds import aggregate_bookmaker_probabilities, process_bookmaker_odds, process_correct_score_odds
 from wc_predictor.optimiser import (
     GroupPredictionRecommendation,
     KnockoutPredictionRecommendation,
@@ -37,6 +43,8 @@ class PredictionWorkflowResult:
     score_matrices: dict[str, ScoreProbabilityMatrix]
     recommendations: dict[str, GroupPredictionRecommendation | KnockoutPredictionRecommendation]
     qualifier_probabilities: dict[str, dict[str, float]]
+    processed_correct_score_probabilities: pd.DataFrame
+    correct_score_market_matrices: dict[str, ScoreProbabilityMatrix]
 
 
 def _optional_probability(row: pd.Series, column: str) -> float | None:
@@ -180,6 +188,7 @@ def run_prediction_workflow(
     odds: pd.DataFrame,
     predictions: pd.DataFrame | None = None,
     config: ProjectConfig | None = None,
+    correct_score_odds: pd.DataFrame | None = None,
 ) -> PredictionWorkflowResult:
     """Produce market-implied score recommendations and optional friend EV analysis."""
 
@@ -191,6 +200,11 @@ def run_prediction_workflow(
         config.suspicious_overround_high,
     )
     odds_metadata = _summarise_odds_metadata(odds, bookmaker_probabilities)
+    processed_correct_scores = (
+        process_correct_score_odds(correct_score_odds, config.margin_removal_method)
+        if correct_score_odds is not None
+        else pd.DataFrame()
+    )
     aggregated = aggregate_bookmaker_probabilities(bookmaker_probabilities, config.bookmaker_aggregation_method)
     required_1x2 = {"fair_a_win", "fair_draw", "fair_b_win"}
     if not required_1x2.issubset(aggregated.columns):
@@ -207,6 +221,7 @@ def run_prediction_workflow(
     matrices: dict[str, ScoreProbabilityMatrix] = {}
     recommendations: dict[str, GroupPredictionRecommendation | KnockoutPredictionRecommendation] = {}
     qualification: dict[str, dict[str, float]] = {}
+    correct_score_matrices: dict[str, ScoreProbabilityMatrix] = {}
     for _, row in market.iterrows():
         match_id = str(row["match_id"])
         metadata = odds_metadata[match_id]
@@ -224,7 +239,35 @@ def run_prediction_workflow(
             config.renormalise_score_matrix,
             config.poor_calibration_loss_threshold,
         )
-        matrices[match_id] = calibration.score_matrix
+        poisson_matrix = calibration.score_matrix
+        correct_score_rows = (
+            processed_correct_scores[processed_correct_scores["match_id"].astype(str) == match_id]
+            if not processed_correct_scores.empty
+            else pd.DataFrame()
+        )
+        if not correct_score_rows.empty:
+            correct_score_matrix = correct_score_market_matrix(
+                correct_score_rows,
+                match_id,
+                config.max_goals_score_matrix,
+            )
+            correct_score_matrices[match_id] = correct_score_matrix
+            score_matrix = blend_score_matrices(
+                poisson_matrix,
+                correct_score_matrix,
+                config.correct_score_poisson_weight,
+            )
+            correct_score_market_top_10 = format_top_scorelines(correct_score_matrix)
+            correct_score_blended_top_10 = format_top_scorelines(score_matrix)
+            correct_score_kl_divergence = market_to_poisson_kl_divergence(poisson_matrix, correct_score_matrix)
+            has_correct_score_market = True
+        else:
+            score_matrix = poisson_matrix
+            correct_score_market_top_10 = ""
+            correct_score_blended_top_10 = ""
+            correct_score_kl_divergence = pd.NA
+            has_correct_score_market = False
+        matrices[match_id] = score_matrix
         notes = list(calibration.warnings)
         knockout = is_knockout_stage(str(row["stage"]))
         has_over_under = pd.notna(row.get("fair_over_2_5"))
@@ -244,7 +287,7 @@ def run_prediction_workflow(
                 notes.append("Qualification odds unavailable; used weak 90-minute draw-split approximation")
             qualification[match_id] = qualifier_probabilities
             recommendation = optimise_knockout_prediction(
-                calibration.score_matrix,
+                score_matrix,
                 qualifier_probabilities,
                 config.max_candidate_goals,
                 config.strategies.top_alternatives,
@@ -253,7 +296,7 @@ def run_prediction_workflow(
             recommended_qualifier = recommendation.best.predicted_qualifier
         else:
             recommendation = optimise_group_prediction(
-                calibration.score_matrix, config.max_candidate_goals, config.strategies.top_alternatives
+                score_matrix, config.max_candidate_goals, config.strategies.top_alternatives
             )
             recommended_qualifier = ""
         recommendations[match_id] = recommendation
@@ -267,7 +310,7 @@ def run_prediction_workflow(
         )
         ev_gap_best_vs_modal = _ev_gap_vs_modal(
             recommendation,
-            calibration.score_matrix,
+            score_matrix,
             qualification.get(match_id),
             config,
         )
@@ -279,7 +322,7 @@ def run_prediction_workflow(
             knockout=knockout,
             favourite_bucket=bucket,
             calibration_loss=calibration.loss,
-            tail_mass=calibration.score_matrix.tail_probability,
+            tail_mass=poisson_matrix.tail_probability,
             latest_odds_timestamp=metadata["latest_odds_timestamp"],
             poor_calibration_loss_threshold=config.poor_calibration_loss_threshold,
         )
@@ -308,6 +351,11 @@ def run_prediction_workflow(
                 "has_over_under": has_over_under,
                 "has_btts": has_btts,
                 "has_qualification_odds": has_qualification_odds,
+                "has_correct_score_market": has_correct_score_market,
+                "correct_score_poisson_weight": config.correct_score_poisson_weight,
+                "correct_score_market_top_10": correct_score_market_top_10,
+                "correct_score_blended_top_10": correct_score_blended_top_10,
+                "correct_score_kl_divergence": correct_score_kl_divergence,
                 "lambda_a": calibration.lambda_a,
                 "lambda_b": calibration.lambda_b,
                 "model_a_win": model_outcomes["a_win"],
@@ -326,7 +374,7 @@ def run_prediction_workflow(
                 "ev_optimal_differs_from_most_likely": recommendation.differs_from_most_likely,
                 "top_5_ev_predictions": _format_top_ev_predictions(recommendation),
                 "top_alternatives": _format_alternatives(recommendation),
-                "tail_probability_before_renormalisation": calibration.score_matrix.tail_probability,
+                "tail_probability_before_renormalisation": poisson_matrix.tail_probability,
                 "warnings": "; ".join(filter(None, [str(row.get("warnings", "")), *notes])),
                 "warning_flags": warning_flags,
             }
@@ -345,4 +393,6 @@ def run_prediction_workflow(
         matrices,
         recommendations,
         qualification,
+        processed_correct_scores,
+        correct_score_matrices,
     )
