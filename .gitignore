@@ -1,13 +1,28 @@
+# Local Python environments and caches
 .venv/
-__pycache__/
+**/__pycache__/
 *.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+*.egg-info/
 .ipynb_checkpoints/
 .env
 
-data/raw/
-data/processed/
+# Temporary Excel files created while a workbook is open
+~$*.xlsx
+
+# Local inputs and generated reports. Keep only directory placeholders tracked.
+data/raw/*
+!data/raw/.gitkeep
+data/raw/oddsportal_pastes/
+data/processed/*
+!data/processed/.gitkeep
+
+# Intentionally tracked sample inputs, templates, and parser fixtures
 !data/examples/
-!data/examples/*.csv
-
-*.egg-info/
-
+!data/examples/**
+!data/templates/
+!data/templates/**
+!tests/fixtures/
+!tests/fixtures/**

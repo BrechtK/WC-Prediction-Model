@@ -93,6 +93,36 @@ python -m venv .venv
 python -m pip install -e ".[dev]"
 ```
 
+## Primary Live Workflow
+
+For normal live tournament use, fill the OddsPortal paste files and run one
+script.
+
+1. Paste the visible OddsPortal text into:
+
+```text
+data/raw/oddsportal_pastes/M001_1x2.txt
+data/raw/oddsportal_pastes/M001_over_under.txt
+data/raw/oddsportal_pastes/M001_btts.txt
+data/raw/oddsportal_pastes/M001_correct_score.txt
+```
+
+2. Open `scripts/run_live_prediction.py`.
+3. Press **Run Python File** in VS Code.
+4. Read the `Final recommended submission` block in the terminal.
+5. Open `data/processed/world_cup_recommendations.xlsx` for full diagnostics
+   and `data/processed/correct_score_weight_comparison.xlsx` for blend-weight
+   sensitivity when useful.
+
+The runner parses all available pastes, uses the half-goal total-goals ladder,
+runs the prediction model, writes the normal Excel outputs, and performs
+correct-score blend sensitivity when correct-score odds are available.
+
+`*_1x2.txt` is required. Missing O/U, BTTS, or correct-score pastes produce
+warnings in the default non-strict mode. Use `--strict` to require all four
+paste types, `--match-id M001` to process one match, or
+`--skip-weight-sensitivity` for a faster run without the comparison workbook.
+
 ## Run The Example
 
 Dummy odds, predictions, and results live in `data/examples/`.
@@ -193,7 +223,13 @@ This calibrates synthetic fair 1X2 scenarios from moderate through extreme
 favourites and prints lambdas, model-implied probabilities, modal scorelines,
 EV-optimal scorelines, and the top five EV predictions.
 
-## Running Real World Cup Predictions
+## Advanced Individual Scripts
+
+The scripts below remain available for manual inspection, debugging, research,
+and workflows that start from a hand-edited workbook. They are not required
+for the normal one-click OddsPortal paste workflow.
+
+### Manual Workbook Predictions
 
 The manual-entry workflow is designed to work directly from VS Code:
 
@@ -300,38 +336,6 @@ around `w=0.85`. A custom grid can be passed with
 This is a live sensitivity diagnostic, not empirical proof of the best blend
 weight. Historical validation is still needed before selecting a weight for
 final submissions.
-
-### One-Click Live Prediction Workflow
-
-For live tournament use, the complete paste-to-submission workflow can run from
-one VS Code action.
-
-1. Fill the visible OddsPortal paste files below `data/raw/oddsportal_pastes/`:
-
-```text
-M001_1x2.txt
-M001_over_under.txt
-M001_btts.txt
-M001_correct_score.txt
-```
-
-2. Open `scripts/run_live_prediction.py`.
-3. Press **Run Python File**.
-4. Read the `Final recommended submission` block in the terminal.
-5. Open `data/processed/world_cup_recommendations.xlsx` for full diagnostics.
-6. Open `data/processed/correct_score_weight_comparison.xlsx` for optional
-   blend-weight sensitivity.
-
-The runner parses core odds, parses correct-score odds, uses the long
-total-goals ladder during calibration, writes the normal recommendation files,
-and runs correct-score blend sensitivity when correct-score rows are present.
-It defaults to `correct_score_poisson_weight=0.85` and
-`correct_score_aggregation_method=auto`.
-
-`*_1x2.txt` is required. Missing O/U, BTTS, or correct-score pastes produce
-warnings in the default non-strict mode. Use `--strict` to require all four
-paste types, `--match-id M001` to process one match, or
-`--skip-weight-sensitivity` for a faster run without the comparison workbook.
 
 ### OddsPortal Core Odds Paste Workflow
 
@@ -484,6 +488,22 @@ Core modules are deliberately separate:
 | `scoring_rules.py`, `optimiser.py` | Pure pool scoring and expected-points optimisation |
 | `friends.py`, `results.py`, `reporting.py`, `workflow.py` | Analysis, standings, exports, orchestration |
 | `strategies.py`, `backtesting.py` | Reusable strategies and group-stage historical backtesting |
+
+## Project Structure
+
+| Path | Purpose |
+| --- | --- |
+| `src/wc_predictor/` | Package code for parsing, calibration, optimisation, reporting, and backtesting |
+| `scripts/` | Runnable live-use, advanced, and research scripts |
+| `data/templates/` | Tracked input templates |
+| `data/examples/` | Tracked dummy data for examples and tests |
+| `data/raw/` | Ignored local pastes, workbooks, and downloaded historical data |
+| `data/processed/` | Ignored generated CSV and Excel reports |
+| `tests/` | Automated tests and tracked parser fixtures |
+| `docs/` | Mathematical basis, caveats, roadmap, and cleanup notes |
+
+See [`docs/repo_cleanup_report.md`](docs/repo_cleanup_report.md) for the
+repository hygiene classification and retained advanced scripts.
 
 ## Limits And Roadmap
 
