@@ -1,0 +1,135 @@
+Over/Under +0.5
+Bookmakers
+Total
+Over
+Under
+888sport
+888sport
++0.5
+1.05
+9.00
+bet365
+bet365
++0.5
+1.06
+8.50
+
+Over/Under +1.5
+Bookmakers
+Total
+Over
+Under
+Payout
+888sport
+888sport
+claim bonus
++1.5
+1.20
+4.50
+90.1%
+bet365
+bet365
+claim bonus
++1.5
+1.22
+4.40
+90.4%
+
+Over/Under +2
+Bookmakers
+Total
+Over
+Under
+888sport
+888sport
++2
+1.50
+2.60
+bet365
+bet365
++2
+1.52
+2.55
+
+Over/Under +2.25
+Bookmakers
+Total
+Over
+Under
+888sport
+888sport
++2.25
+1.72
+2.15
+bet365
+bet365
++2.25
+1.75
+2.10
+
+Over/Under +2.5
+Bookmakers
+Total
+Over
+Under
+Payout
+888sport
+888sport
+claim bonus
++2.5
+2.00
+1.75
+93.3%
+bet365
+bet365
+claim bonus
++2.5
+2.10
+1.73
+94.9%
+
+Betting Exchanges
+Betfair Exchange
+Back
+Lay
++2.5
+2.50
+1.50
+
+My coupon
+User Predictions
+OddsAlert
+Looking for the best value?
+
+Over/Under +3
+Bookmakers
+Total
+Over
+Under
+888sport
+888sport
++3
+2.60
+1.50
+bet365
+bet365
++3
+2.65
+1.48
+
+Over/Under +3.5
+Bookmakers
+Total
+Over
+Under
+Payout
+888sport
+888sport
++3.5
+3.10
+1.30
+bet365
+bet365
++3.5
+3.20
+1.28

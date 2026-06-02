@@ -12,6 +12,7 @@ class CalibrationWeights:
 
     one_x_two: float = 1.0
     over_under_2_5: float = 0.75
+    total_goals_lines: float = 0.75
     btts: float = 0.50
 
 

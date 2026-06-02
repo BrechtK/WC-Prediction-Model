@@ -40,6 +40,21 @@ COMMON_CORRECT_SCORELINES = {
     (2, 1),
     (1, 2),
 }
+TOTAL_GOALS_OUTPUT_COLUMNS = [
+    "match_id",
+    "bookmaker",
+    "line",
+    "odds_over",
+    "odds_under",
+    "raw_over",
+    "raw_under",
+    "fair_over",
+    "fair_under",
+    "total_goals_overround",
+    "line_kind",
+    "used_for_calibration",
+    "warnings",
+]
 
 
 def decimal_odds_to_implied_probabilities(decimal_odds: Sequence[float]) -> np.ndarray:
@@ -203,3 +218,95 @@ def process_correct_score_odds(
             ]
         )
     return pd.concat(frames, ignore_index=True)
+
+
+def total_goals_line_kind(line: float) -> str:
+    """Classify totals lines without silently applying Asian settlement rules."""
+
+    # TODO: add explicit push and quarter-line half-stake settlement formulas
+    # before integer or quarter Asian totals become calibration constraints.
+    remainder = float(line) % 1
+    if np.isclose(remainder, 0.5):
+        return "half_goal"
+    if np.isclose(remainder, 0.0):
+        return "integer_asian"
+    if np.isclose(remainder, 0.25) or np.isclose(remainder, 0.75):
+        return "quarter_asian"
+    return "unsupported"
+
+
+def process_total_goals_odds(
+    total_goals_odds: pd.DataFrame,
+    margin_method: str = "proportional",
+    suspicious_low: float = 1.0,
+    suspicious_high: float = 1.20,
+) -> pd.DataFrame:
+    """Remove margin within each bookmaker's two-way totals line."""
+
+    required = {"match_id", "bookmaker", "line", "odds_over", "odds_under"}
+    missing = required - set(total_goals_odds.columns)
+    if missing:
+        raise ValueError(f"Total-goals odds are missing required columns: {sorted(missing)}")
+    rows: list[dict[str, object]] = []
+    for _, source_row in total_goals_odds.iterrows():
+        line = float(source_row["line"])
+        fair = fair_probabilities_from_decimal_odds(
+            [float(source_row["odds_over"]), float(source_row["odds_under"])],
+            margin_method,
+            suspicious_low,
+            suspicious_high,
+        )
+        kind = total_goals_line_kind(line)
+        rows.append(
+            {
+                **source_row.to_dict(),
+                "line": line,
+                "raw_over": float(fair.raw_probabilities[0]),
+                "raw_under": float(fair.raw_probabilities[1]),
+                "fair_over": float(fair.fair_probabilities[0]),
+                "fair_under": float(fair.fair_probabilities[1]),
+                "total_goals_overround": fair.overround,
+                "line_kind": kind,
+                "used_for_calibration": kind == "half_goal",
+                "warnings": "; ".join(fair.warnings),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=TOTAL_GOALS_OUTPUT_COLUMNS)
+    return pd.DataFrame(rows)
+
+
+def aggregate_total_goals_probabilities(processed_total_goals: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate fair over probabilities across bookmakers for each totals line."""
+
+    if processed_total_goals.empty:
+        return pd.DataFrame(
+            columns=[
+                "match_id",
+                "line",
+                "fair_over",
+                "fair_under",
+                "bookmakers_count",
+                "average_total_goals_overround",
+                "line_kind",
+                "used_for_calibration",
+                "warnings",
+            ]
+        )
+    rows: list[dict[str, object]] = []
+    for (match_id, line), group in processed_total_goals.groupby(["match_id", "line"], sort=True):
+        fair_over = float(group["fair_over"].mean())
+        rows.append(
+            {
+                "match_id": match_id,
+                "line": float(line),
+                "fair_over": fair_over,
+                "fair_under": 1.0 - fair_over,
+                "bookmakers_count": int(group["bookmaker"].nunique()),
+                "average_total_goals_overround": float(group["total_goals_overround"].mean()),
+                "line_kind": total_goals_line_kind(float(line)),
+                "used_for_calibration": bool(group["used_for_calibration"].all()),
+                "warnings": "; ".join(filter(None, group["warnings"].astype(str).unique())),
+            }
+        )
+    return pd.DataFrame(rows)

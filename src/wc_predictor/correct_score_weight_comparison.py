@@ -12,7 +12,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from wc_predictor.config import ProjectConfig
-from wc_predictor.market_data import load_correct_score_odds, load_odds
+from wc_predictor.market_data import load_correct_score_odds, load_odds, load_total_goals_odds
 from wc_predictor.utils import ensure_parent_directory
 from wc_predictor.workflow import run_prediction_workflow
 
@@ -179,16 +179,23 @@ def compare_correct_score_weights(
     *,
     weights: Sequence[float] = DEFAULT_CORRECT_SCORE_WEIGHTS,
     config: ProjectConfig | None = None,
+    total_goals_odds_path: str | Path | None = None,
 ) -> CorrectScoreWeightComparison:
     """Run the existing recommendation workflow across one live weight grid."""
 
     odds = load_odds(odds_path)
     correct_score_odds = load_correct_score_odds(correct_score_odds_path)
+    total_goals_odds = load_total_goals_odds(total_goals_odds_path) if total_goals_odds_path is not None else None
     base_config = config or ProjectConfig()
     rows: list[pd.DataFrame] = []
     for weight in validate_weight_grid(weights):
         weighted_config = replace(base_config, correct_score_poisson_weight=weight)
-        report = run_prediction_workflow(odds, config=weighted_config, correct_score_odds=correct_score_odds).match_report
+        report = run_prediction_workflow(
+            odds,
+            config=weighted_config,
+            correct_score_odds=correct_score_odds,
+            total_goals_odds=total_goals_odds,
+        ).match_report
         report = report[report["has_correct_score_market"]].copy()
         report["weight"] = weight
         report["correct_score_outlier_count"] = report["outlier_count"]

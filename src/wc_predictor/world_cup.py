@@ -7,7 +7,7 @@ from pathlib import Path
 from shutil import copyfile
 
 from wc_predictor.config import ProjectConfig
-from wc_predictor.market_data import load_correct_score_odds, load_odds
+from wc_predictor.market_data import load_correct_score_odds, load_odds, load_total_goals_odds
 from wc_predictor.reporting import (
     export_dataframe,
     export_world_cup_recommendations_excel,
@@ -31,6 +31,7 @@ class WorldCupPredictionSettings:
 
     input_path: Path | None = None
     correct_score_input_path: Path | None = None
+    total_goals_input_path: Path | None = None
     csv_output_path: Path = Path("data/processed/world_cup_recommendations.csv")
     xlsx_output_path: Path = Path("data/processed/world_cup_recommendations.xlsx")
     submission_xlsx_output_path: Path = Path("data/processed/world_cup_submission_sheet.xlsx")
@@ -78,7 +79,17 @@ def run_world_cup_predictions(
         if settings.correct_score_input_path is not None
         else None
     )
-    workflow = run_prediction_workflow(load_odds(input_path), config=config, correct_score_odds=correct_score_odds)
+    total_goals_odds = (
+        load_total_goals_odds(settings.total_goals_input_path)
+        if settings.total_goals_input_path is not None
+        else None
+    )
+    workflow = run_prediction_workflow(
+        load_odds(input_path),
+        config=config,
+        correct_score_odds=correct_score_odds,
+        total_goals_odds=total_goals_odds,
+    )
     export_dataframe(workflow.match_report, settings.csv_output_path)
     export_world_cup_recommendations_excel(workflow.match_report, settings.xlsx_output_path)
     export_world_cup_submission_sheet_excel(workflow.match_report, settings.submission_xlsx_output_path)
@@ -96,6 +107,7 @@ def run_and_print_world_cup_predictions(
     resolved_settings = WorldCupPredictionSettings(
         input_path=input_path,
         correct_score_input_path=settings.correct_score_input_path,
+        total_goals_input_path=settings.total_goals_input_path,
         csv_output_path=settings.csv_output_path,
         xlsx_output_path=settings.xlsx_output_path,
         submission_xlsx_output_path=settings.submission_xlsx_output_path,

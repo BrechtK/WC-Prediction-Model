@@ -33,6 +33,7 @@ class CalibrationTargets:
     b_win: float
     over_2_5: float | None = None
     btts_yes: float | None = None
+    total_goals_over: tuple[tuple[float, float], ...] = ()
 
     def __post_init__(self) -> None:
         one_x_two = np.asarray([self.a_win, self.draw, self.b_win], dtype=float)
@@ -44,6 +45,11 @@ class CalibrationTargets:
             value = getattr(self, name)
             if value is not None and (not np.isfinite(value) or not 0 < value < 1):
                 raise ValueError(f"{name} target must lie strictly between zero and one")
+        for line, probability in self.total_goals_over:
+            if not np.isfinite(line) or not np.isclose(line % 1, 0.5):
+                raise ValueError("Multi-line total-goals calibration currently supports half-goal lines only")
+            if not np.isfinite(probability) or not 0 < probability < 1:
+                raise ValueError("Multi-line total-goals probabilities must lie strictly between zero and one")
 
 
 @dataclass(frozen=True)
@@ -84,6 +90,10 @@ def calibrate_poisson_model(
         )
         if targets.over_2_5 is not None:
             loss += weights.over_under_2_5 * (outcomes["over_2_5"] - targets.over_2_5) ** 2
+        for line, probability in targets.total_goals_over:
+            loss += weights.total_goals_lines * (
+                poisson_over_total_probability(float(lambdas[0]), float(lambdas[1]), line) - probability
+            ) ** 2
         if targets.btts_yes is not None:
             loss += weights.btts * (outcomes["btts_yes"] - targets.btts_yes) ** 2
         return float(loss)
@@ -122,6 +132,8 @@ def calibrate_poisson_model(
     }
     if targets.over_2_5 is not None:
         target_probabilities["over_2_5"] = targets.over_2_5
+    for line, probability in targets.total_goals_over:
+        target_probabilities[f"over_{line:g}"] = probability
     if targets.btts_yes is not None:
         target_probabilities["btts_yes"] = targets.btts_yes
 
@@ -147,3 +159,13 @@ def calibrate_poisson_model(
         True,
         tuple(warnings),
     )
+
+
+def poisson_over_total_probability(lambda_a: float, lambda_b: float, line: float) -> float:
+    """Return full-distribution P(total goals > line) for a half-goal line."""
+
+    if not np.isclose(line % 1, 0.5):
+        raise ValueError("Poisson over-total probability currently supports half-goal lines only")
+    from scipy.stats import poisson
+
+    return float(poisson.sf(int(np.floor(line)), lambda_a + lambda_b))

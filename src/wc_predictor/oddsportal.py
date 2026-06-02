@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
+from collections.abc import Iterable
 
 import pandas as pd
 
@@ -316,6 +317,7 @@ def parse_oddsportal_correct_score_folder(
     odds_source_url: str = "",
     has_other_bucket: bool = False,
     notes: str = "",
+    match_ids: Iterable[str] | None = None,
 ) -> OddsPortalParseResult:
     """Parse all named paste files in a folder and export model-ready CSVs."""
 
@@ -324,7 +326,13 @@ def parse_oddsportal_correct_score_folder(
     report_path = Path(report_path)
     input_folder.mkdir(parents=True, exist_ok=True)
     results: list[OddsPortalParseResult] = []
-    for path in sorted(input_folder.glob("*_correct_score.txt")):
+    selected_match_ids = {str(match_id) for match_id in match_ids} if match_ids is not None else None
+    paths = sorted(
+        path
+        for path in input_folder.glob("*_correct_score.txt")
+        if selected_match_ids is None or infer_match_id_from_filename(path) in selected_match_ids
+    )
+    for path in paths:
         results.append(
             parse_oddsportal_correct_score_text(
                 path.read_text(encoding="utf-8-sig"),

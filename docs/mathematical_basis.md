@@ -51,6 +51,27 @@ P(over 2.5)  = P(X + Y >= 3), where X + Y ~ Poisson(lambda_A + lambda_B)
 P(BTTS yes)  = (1 - exp(-lambda_A)) (1 - exp(-lambda_B))
 ```
 
+When a long totals ladder is supplied, each bookmaker's two-way line is
+margin-adjusted separately and fair over probabilities are aggregated across
+bookmakers. The original baseline used only over/under `2.5`: it is a common,
+simple binary market. The full ladder contains more information about the
+shape of the total-goals distribution. Half-goal lines can add constraints:
+
+```text
+P(over L) = P(X + Y > L), for L in {0.5, 1.5, 2.5, ...}
+```
+
+Integer and quarter Asian totals are stored for diagnostics but do not yet
+enter calibration. Integer lines require an explicit push treatment. Quarter
+lines require their split-line half-stake settlement formula. Adding those
+formulas is a deliberate future task rather than silently treating Asian
+totals as ordinary binary markets.
+
+The recommendation report lists all available ladder lines, the half-goal
+lines actually used as targets, and the skipped Asian lines. For each used
+half-goal line it also reports the aggregated fair market over probability,
+the fitted Poisson over probability, and their signed difference.
+
 Lambdas minimise squared calibration error. Calibration runs the bounded
 optimiser from several starting points and keeps the best converged fit. This
 improves robustness for extreme favourites without changing the loss function.
@@ -60,6 +81,7 @@ With optional market constraints:
 ```text
 loss = w_1x2 * sum(outcome errors squared)
      + w_ou  * (P(X+Y >= 3) - P_market(over 2.5))^2
+     + w_totals * sum_L (P(X+Y > L) - P_market(over L))^2
      + w_btts * (P(X>0 and Y>0) - P_market(BTTS yes))^2
 ```
 

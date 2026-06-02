@@ -1,0 +1,11 @@
+Bookmakers
+1
+X
+2
+Payout
+OnlyBook
+OnlyBook
+1.80
+3.50
+4.50
+92.0%

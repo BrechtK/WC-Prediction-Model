@@ -301,6 +301,108 @@ This is a live sensitivity diagnostic, not empirical proof of the best blend
 weight. Historical validation is still needed before selecting a weight for
 final submissions.
 
+### One-Click Live Prediction Workflow
+
+For live tournament use, the complete paste-to-submission workflow can run from
+one VS Code action.
+
+1. Fill the visible OddsPortal paste files below `data/raw/oddsportal_pastes/`:
+
+```text
+M001_1x2.txt
+M001_over_under.txt
+M001_btts.txt
+M001_correct_score.txt
+```
+
+2. Open `scripts/run_live_prediction.py`.
+3. Press **Run Python File**.
+4. Read the `Final recommended submission` block in the terminal.
+5. Open `data/processed/world_cup_recommendations.xlsx` for full diagnostics.
+6. Open `data/processed/correct_score_weight_comparison.xlsx` for optional
+   blend-weight sensitivity.
+
+The runner parses core odds, parses correct-score odds, uses the long
+total-goals ladder during calibration, writes the normal recommendation files,
+and runs correct-score blend sensitivity when correct-score rows are present.
+It defaults to `correct_score_poisson_weight=0.85` and
+`correct_score_aggregation_method=auto`.
+
+`*_1x2.txt` is required. Missing O/U, BTTS, or correct-score pastes produce
+warnings in the default non-strict mode. Use `--strict` to require all four
+paste types, `--match-id M001` to process one match, or
+`--skip-weight-sensitivity` for a faster run without the comparison workbook.
+
+### OddsPortal Core Odds Paste Workflow
+
+Core match odds can be collected by manually copying visible OddsPortal tables
+into separate text files. This does not scrape OddsPortal or automate website
+access. Use filenames such as:
+
+```text
+data/raw/oddsportal_pastes/M001_1x2.txt
+data/raw/oddsportal_pastes/M001_btts.txt
+data/raw/oddsportal_pastes/M001_over_under.txt
+data/raw/oddsportal_pastes/M001_correct_score.txt
+```
+
+The core parser extracts bookmaker-specific 1X2 and BTTS rows plus the visible
+over/under totals ladder. It keeps the familiar wide over/under `+2.5` columns,
+ignores visible page noise and exchange sections, merges core markets by
+`match_id` and bookmaker, and writes:
+
+```powershell
+python scripts/parse_oddsportal_core_odds.py
+```
+
+```text
+data/raw/world_cup_odds_from_pastes.csv
+data/raw/world_cup_total_goals_odds_from_pastes.csv
+data/processed/oddsportal_core_odds_parse_report.csv
+```
+
+The parser joins match metadata from `data/raw/world_cup_odds.xlsx` when that
+file is available. Review the compact console summary and parse report for
+missing markets, sparse bookmaker coverage, suspicious prices, and ignored
+exchange sections.
+
+Parse optional correct-score text separately, then run predictions with the
+generated CSV files. Pass the long totals ladder when you want multi-line
+half-goal calibration:
+
+```powershell
+python scripts/parse_oddsportal_core_odds.py
+python scripts/parse_oddsportal_correct_scores.py
+python scripts/run_world_cup_predictions.py `
+  --odds data/raw/world_cup_odds_from_pastes.csv `
+  --total-goals-odds data/raw/world_cup_total_goals_odds_from_pastes.csv `
+  --correct-score-odds data/raw/world_cup_correct_score_odds.csv `
+  --correct-score-poisson-weight 0.85 `
+  --correct-score-aggregation-method auto
+```
+
+Totals odds are stored in long format with one row per `match_id`, bookmaker,
+and line. Margin removal happens within each bookmaker's two-way line before
+fair over probabilities are aggregated across bookmakers. Half-goal lines such
+as `1.5`, `2.5`, and `3.5` can constrain Poisson calibration. Integer and
+quarter Asian lines are retained in diagnostics but skipped until explicit
+push and half-stake settlement formulas are implemented.
+
+The original baseline used only `+2.5` because it is a common, simple binary
+market and is widely available. The full ladder adds information about the
+shape of the total-goals distribution. Supplying no long ladder file preserves
+the original `+2.5`-only behavior exactly.
+
+Recommendation diagnostics make the calibration inputs auditable:
+
+- `total_goals_lines_available` lists every parsed ladder line;
+- `total_goals_lines_used_for_calibration` lists every half-goal constraint;
+- `total_goals_lines_skipped` lists retained integer and quarter Asian lines;
+- `multi_line_totals_used` confirms whether more than one half-goal line entered
+  the fit;
+- `total_goals_line_diagnostics` shows the fair market over probability, fitted
+  model over probability, and signed error for each used line.
+
 ### OddsPortal Correct-Score Paste Workflow
 
 Correct-score data can be collected manually without scraping or automating
@@ -377,7 +479,7 @@ Core modules are deliberately separate:
 | Module | Responsibility |
 | --- | --- |
 | `odds.py`, `margin.py`, `market_data.py` | Input, validation, fair probabilities, aggregation |
-| `oddsportal.py` | Parsing and validation for manually pasted correct-score markets |
+| `oddsportal.py`, `oddsportal_core.py` | Parsing and validation for manually pasted OddsPortal markets |
 | `probabilities.py`, `score_models.py`, `calibration.py` | Score matrices and market calibration |
 | `scoring_rules.py`, `optimiser.py` | Pure pool scoring and expected-points optimisation |
 | `friends.py`, `results.py`, `reporting.py`, `workflow.py` | Analysis, standings, exports, orchestration |

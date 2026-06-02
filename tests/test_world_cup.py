@@ -146,6 +146,32 @@ def test_world_cup_workflow_optionally_uses_correct_score_blend(tmp_path: Path) 
     assert report["correct_score_bookmaker_diagnostics"].str.contains("overround=").all()
 
 
+def test_world_cup_workflow_optionally_loads_total_goals_ladder(tmp_path: Path) -> None:
+    total_goals_path = tmp_path / "total_goals.csv"
+    pd.DataFrame(
+        [
+            {"match_id": "WC001", "bookmaker": "MarketOne", "line": 1.5, "odds_over": 1.40, "odds_under": 3.00},
+            {"match_id": "WC001", "bookmaker": "MarketTwo", "line": 1.5, "odds_over": 1.45, "odds_under": 2.90},
+            {"match_id": "WC001", "bookmaker": "MarketOne", "line": 2.5, "odds_over": 2.00, "odds_under": 1.80},
+            {"match_id": "WC001", "bookmaker": "MarketTwo", "line": 2.5, "odds_over": 2.10, "odds_under": 1.75},
+        ]
+    ).to_csv(total_goals_path, index=False)
+    baseline = _settings(tmp_path)
+    settings = WorldCupPredictionSettings(
+        input_path=baseline.input_path,
+        total_goals_input_path=total_goals_path,
+        csv_output_path=baseline.csv_output_path,
+        xlsx_output_path=baseline.xlsx_output_path,
+        submission_xlsx_output_path=baseline.submission_xlsx_output_path,
+    )
+
+    report = run_world_cup_predictions(settings).match_report.set_index("match_id")
+
+    assert report.loc["WC001", "total_goals_lines_available"] == "1.5; 2.5"
+    assert bool(report.loc["WC001", "multi_line_totals_used"])
+    assert report.loc["WC002", "total_goals_lines_available"] == ""
+
+
 def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     run_world_cup_predictions(settings)
