@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -9,6 +10,18 @@ from scipy.optimize import minimize
 
 from wc_predictor.config import CalibrationWeights
 from wc_predictor.probabilities import ScoreProbabilityMatrix, poisson_market_probabilities, poisson_score_matrix
+
+LAMBDA_BOUNDS = ((0.02, 7.0), (0.02, 7.0))
+LAMBDA_BOUND_WARNING_TOLERANCE = 0.05
+CALIBRATION_STARTING_POINTS = (
+    (1.35, 1.05),
+    (0.40, 0.20),
+    (2.50, 0.50),
+    (0.50, 2.50),
+    (3.00, 0.30),
+    (0.30, 3.00),
+)
+SINGLE_START_CALIBRATION_POINTS = (CALIBRATION_STARTING_POINTS[0],)
 
 
 @dataclass(frozen=True)
@@ -53,10 +66,14 @@ def calibrate_poisson_model(
     weights: CalibrationWeights | None = None,
     renormalise: bool = True,
     poor_fit_threshold: float = 0.01,
+    starting_points: Sequence[tuple[float, float]] | None = None,
 ) -> CalibrationResult:
     """Fit positive independent-Poisson lambdas to market-implied probabilities."""
 
     weights = weights or CalibrationWeights()
+    starting_points = tuple(CALIBRATION_STARTING_POINTS if starting_points is None else starting_points)
+    if not starting_points:
+        raise ValueError("At least one Poisson calibration starting point is required")
 
     def objective(lambdas: np.ndarray) -> float:
         outcomes = poisson_market_probabilities(float(lambdas[0]), float(lambdas[1]))
@@ -71,12 +88,30 @@ def calibrate_poisson_model(
             loss += weights.btts * (outcomes["btts_yes"] - targets.btts_yes) ** 2
         return float(loss)
 
-    fitted = minimize(
-        objective,
-        x0=np.asarray([1.35, 1.05]),
-        method="L-BFGS-B",
-        bounds=((0.02, 7.0), (0.02, 7.0)),
-    )
+    successful_fits = []
+    failure_messages: list[str] = []
+    for starting_point in starting_points:
+        initial = np.asarray(starting_point, dtype=float)
+        if initial.shape != (2,) or not np.all(np.isfinite(initial)):
+            raise ValueError("Poisson calibration starting points must contain two finite lambdas")
+        try:
+            fitted = minimize(
+                objective,
+                x0=initial,
+                method="L-BFGS-B",
+                bounds=LAMBDA_BOUNDS,
+            )
+        except Exception as error:  # pragma: no cover - scipy failures are uncommon, but must be surfaced clearly
+            failure_messages.append(str(error))
+            continue
+        if fitted.success and np.isfinite(fitted.fun) and np.all(np.isfinite(fitted.x)):
+            successful_fits.append(fitted)
+        else:
+            failure_messages.append(str(fitted.message))
+    if not successful_fits:
+        detail = "; ".join(failure_messages) or "no optimiser result"
+        raise RuntimeError(f"Poisson calibration failed for all starting points: {detail}")
+    fitted = min(successful_fits, key=lambda result: float(result.fun))
     lambda_a, lambda_b = (float(value) for value in fitted.x)
     matrix = poisson_score_matrix(lambda_a, lambda_b, max_goals, renormalise)
     model_probabilities = poisson_market_probabilities(lambda_a, lambda_b)
@@ -92,12 +127,16 @@ def calibrate_poisson_model(
 
     warnings: list[str] = []
     loss = objective(fitted.x)
-    if not fitted.success:
-        warnings.append(f"Optimisation did not converge: {fitted.message}")
     if loss > poor_fit_threshold:
         warnings.append(f"Calibration loss {loss:.6f} exceeds threshold {poor_fit_threshold:.6f}")
     if matrix.tail_probability > 0.01:
         warnings.append(f"Score grid omits {matrix.tail_probability:.2%} raw tail probability before normalisation")
+    for label, value, bounds in (
+        ("lambda_a", lambda_a, LAMBDA_BOUNDS[0]),
+        ("lambda_b", lambda_b, LAMBDA_BOUNDS[1]),
+    ):
+        if value - bounds[0] <= LAMBDA_BOUND_WARNING_TOLERANCE or bounds[1] - value <= LAMBDA_BOUND_WARNING_TOLERANCE:
+            warnings.append(f"{label}_near_bound")
     return CalibrationResult(
         lambda_a,
         lambda_b,
@@ -105,6 +144,6 @@ def calibrate_poisson_model(
         target_probabilities,
         model_probabilities,
         loss,
-        bool(fitted.success),
+        True,
         tuple(warnings),
     )

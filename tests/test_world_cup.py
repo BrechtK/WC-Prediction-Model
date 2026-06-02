@@ -118,7 +118,10 @@ def test_world_cup_workflow_optionally_uses_correct_score_blend(tmp_path: Path) 
         submission_xlsx_output_path=tmp_path / "submission.xlsx",
     )
 
-    workflow = run_world_cup_predictions(settings, ProjectConfig(correct_score_poisson_weight=0.5))
+    workflow = run_world_cup_predictions(
+        settings,
+        ProjectConfig(correct_score_poisson_weight=0.5, min_scorelines_for_blend=6),
+    )
     report = workflow.match_report.set_index("match_id")
 
     assert report["has_correct_score_market"].all()
@@ -133,6 +136,7 @@ def test_world_cup_workflow_optionally_uses_correct_score_blend(tmp_path: Path) 
     assert report["top_10_blended_scorelines"].equals(report["correct_score_blended_top_10"])
     assert report["kl_divergence"].equals(report["correct_score_kl_divergence"])
     assert (report["selected_blend_weight"] == 0.5).all()
+    assert report["correct_score_blend_applied"].all()
     assert (report["correct_score_aggregation_method"] == "mean").all()
     assert (report["number_of_correct_score_bookmakers"] == 2).all()
     assert report["average_correct_score_overround"].gt(0).all()

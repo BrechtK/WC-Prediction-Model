@@ -55,7 +55,9 @@ Y ~ Poisson(lambda_B)
 
 The lambdas are calibrated with `scipy.optimize` to fair 1X2 odds. Available
 over/under 2.5 and both-teams-to-score odds become additional constraints.
-Calibration uses full-distribution Poisson probabilities. Score-grid tail
+Calibration uses full-distribution Poisson probabilities and several bounded
+starting points, keeping the best converged fit for robustness with extreme
+favourites. Near-bound lambdas are flagged for review. Score-grid tail
 probability is reported before renormalisation; EV optimisation uses the
 renormalised finite grid and is conditional on its represented scores.
 
@@ -75,6 +77,11 @@ Correct-score decimal odds are never averaged directly. The default
 five bookmakers, a median with three or four bookmakers, and a mean with one
 or two bookmakers. Scoreline-level outliers are flagged using log fair
 probabilities and robust median/MAD diagnostics.
+
+Correct-score blending is suppressed when fewer than
+`min_scorelines_for_blend=10` usable scorelines are available for a match. The
+partial market remains visible in diagnostics, but recommendations fall back
+to pure Poisson and include a warning.
 
 ## Install
 
@@ -141,9 +148,32 @@ optional over/under odds fall back to the 1X2 calibration. Skipped rows and
 their reasons are reported per strategy. A separate skip-diagnostic CSV groups
 unique skipped matches by source file and reason.
 
+Backtest strategy summaries include `fraction_used_over_under_2_5`, showing
+how often the O/U-enhanced strategy actually used that optional market instead
+of its 1X2-only fallback.
+
 The CLI prints a concise interpretation summary by default: scope, overall
 ranking, baseline gaps, key conclusions, per-file winners, skips, and export
-paths. Add `--verbose` to append the full raw per-file and aggregate tables.
+paths. It also prints file-level progress and elapsed time while a run is in
+progress. Add `--verbose` to append the full raw per-file and aggregate tables.
+
+Robust multi-start Poisson calibration makes full historical runs slower than
+quick exploratory checks. Use `--fast` to run single-start calibration while
+checking data coverage or iterating locally:
+
+```powershell
+python scripts/run_backtest.py --input data/raw/England --fast
+```
+
+Use the default full mode for final validation. Smoke tests can be bounded
+without editing input folders:
+
+```powershell
+python scripts/run_backtest.py --input data/raw --fast --max-files 2 --max-matches 100
+```
+
+Folder mode skips CSV files that are not Football-Data-like historical match
+files and reports them in the skipped-input diagnostics.
 
 ### Favourite-Strength Diagnostics
 
@@ -325,7 +355,8 @@ The Belgium and England runners process their corresponding folders below
 `data/raw/`. The all-data runner recursively processes every CSV below
 `data/raw/`, including league subfolders. Each runner prints the same concise
 summary as `scripts/run_backtest.py` and writes clearly named CSVs below
-`data/processed/`.
+`data/processed/`. These runners also accept `--fast`, `--max-files`, and
+`--max-matches` when launched from a terminal.
 
 ## Add Your Data
 

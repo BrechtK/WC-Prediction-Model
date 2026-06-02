@@ -61,9 +61,11 @@ def _write_dummy_inputs(tmp_path: Path) -> tuple[Path, Path]:
         (0, 2),
         (2, 1),
         (1, 2),
+        (3, 0),
+        (0, 3),
     ]
-    stable_odds = [15.0, 1.60, 30.0, 12.0, 10.0, 50.0, 20.0, 50.0]
-    changing_odds = [30.0, 30.0, 50.0, 30.0, 1.40, 100.0, 30.0, 100.0]
+    stable_odds = [15.0, 1.60, 30.0, 12.0, 10.0, 50.0, 20.0, 50.0, 40.0, 100.0]
+    changing_odds = [30.0, 30.0, 50.0, 30.0, 1.40, 100.0, 30.0, 100.0, 40.0, 100.0]
     rows = []
     for match_id, odds in [("STABLE", stable_odds), ("CHANGING", changing_odds)]:
         rows.extend(

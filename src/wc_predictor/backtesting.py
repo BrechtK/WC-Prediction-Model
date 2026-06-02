@@ -11,12 +11,17 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic
 from typing import Protocol
 
 import numpy as np
 import pandas as pd
 
-from wc_predictor.calibration import CalibrationTargets, calibrate_poisson_model
+from wc_predictor.calibration import (
+    SINGLE_START_CALIBRATION_POINTS,
+    CalibrationTargets,
+    calibrate_poisson_model,
+)
 from wc_predictor.config import ProjectConfig
 from wc_predictor.market_data import load_tabular_data
 from wc_predictor.odds import aggregate_bookmaker_probabilities, process_bookmaker_odds
@@ -33,6 +38,15 @@ from wc_predictor.utils import (
 )
 
 EV_STRATEGY_NAMES = ("ev_optimal_1x2", "ev_optimal_1x2_over_under")
+
+
+class NonFootballDataCSVError(ValueError):
+    """Raised when a CSV is not a Football-Data-like historical match file."""
+
+
+def _validate_optional_positive_integer(value: int | None, name: str) -> None:
+    if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+        raise ValueError(f"{name} must be a positive integer")
 
 
 @dataclass(frozen=True)
@@ -93,7 +107,7 @@ class FootballDataCSVLoader:
         required = {"HomeTeam", "AwayTeam", "FTHG", "FTAG"}
         missing = required - set(source.columns)
         if missing:
-            raise ValueError(f"Historical data is missing required columns: {sorted(missing)}")
+            raise NonFootballDataCSVError(f"Historical data is missing required columns: {sorted(missing)}")
 
         matches: list[dict[str, object]] = []
         results: list[dict[str, object]] = []
@@ -180,6 +194,7 @@ class BacktestReport:
     summary: pd.DataFrame
     predictions: pd.DataFrame
     skipped: pd.DataFrame
+    matches_considered: int = 0
 
     def export_csv(self, path: str | Path) -> None:
         """Export strategy-level summary metrics to CSV."""
@@ -209,6 +224,7 @@ class BatchBacktestReport:
     favourite_strength_summary: pd.DataFrame
     predictions: pd.DataFrame
     skipped: pd.DataFrame
+    skipped_files: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def export_csvs(self, settings: BatchBacktestSettings) -> None:
         """Export per-file, aggregate, and skip-diagnostic tables."""
@@ -279,16 +295,39 @@ class BacktestRunner:
         config: ProjectConfig | None = None,
         settings: BacktestSettings | None = None,
         source_file: str | None = None,
+        fast: bool = False,
+        max_matches: int | None = None,
+        progress: bool = False,
+        progress_interval: int = 100,
+        file_number: int = 1,
+        total_files: int = 1,
+        started_at: float | None = None,
     ) -> None:
+        _validate_optional_positive_integer(max_matches, "max_matches")
+        _validate_optional_positive_integer(progress_interval, "progress_interval")
         self.loader = loader
         self.config = config or ProjectConfig()
         self.settings = settings or BacktestSettings()
         self.source_file = source_file or self._loader_source_file(loader)
+        self.fast = fast
+        self.max_matches = max_matches
+        self.progress = progress
+        self.progress_interval = progress_interval
+        self.file_number = file_number
+        self.total_files = total_files
+        self.started_at = started_at if started_at is not None else monotonic()
 
     def run(self, export: bool = True) -> BacktestReport:
         """Run all group-stage strategies and optionally export summary metrics."""
 
-        data = self.loader.load()
+        loaded = self.loader.load()
+        data = self._limit_data(loaded, self.max_matches)
+        limit_note = (
+            f"; running first {len(data.matches)}"
+            if len(data.matches) < len(loaded.matches)
+            else ""
+        )
+        self._print_progress(f"starting; matches in file: {len(loaded.matches)}{limit_note}")
         accumulators = {
             name: _StrategyAccumulator(name, self.source_file) for name in self.STRATEGY_NAMES
         }
@@ -298,12 +337,13 @@ class BacktestRunner:
         } if not data.odds.empty else {}
         result_by_match = data.results.set_index("match_id")
 
-        for _, match in data.matches.iterrows():
+        for match_number, (_, match) in enumerate(data.matches.iterrows(), start=1):
             match_id = str(match["match_id"])
             actual = self._actual_score(result_by_match, match_id)
             if actual is None:
                 for accumulator in accumulators.values():
                     accumulator.skip(match_id, "missing or invalid full-time result")
+                self._print_match_progress(match_number, len(data.matches))
                 continue
 
             try:
@@ -312,19 +352,51 @@ class BacktestRunner:
                 self._record_fixed_predictions(accumulators, match, actual)
                 for name in self.STRATEGY_NAMES[2:]:
                     accumulators[name].skip(match_id, str(exc))
+                self._print_match_progress(match_number, len(data.matches))
                 continue
             self._record_fixed_predictions(accumulators, match, actual, market)
             self._record_market_predictions(accumulators, match, actual, market)
+            self._print_match_progress(match_number, len(data.matches))
 
         predictions = pd.DataFrame(
             [prediction for accumulator in accumulators.values() for prediction in accumulator.predictions]
         )
         skipped = pd.DataFrame([skip for accumulator in accumulators.values() for skip in accumulator.skipped])
         summary = pd.DataFrame([self._summarise(accumulator) for accumulator in accumulators.values()])
-        report = BacktestReport(summary, predictions, skipped)
+        report = BacktestReport(summary, predictions, skipped, len(data.matches))
         if export:
             report.export_csv(self.settings.output_path)
         return report
+
+    def _print_progress(self, message: str) -> None:
+        if self.progress:
+            elapsed = monotonic() - self.started_at
+            print(
+                f"[Backtest file {self.file_number}/{self.total_files}] "
+                f"{self.source_file}: {message}; elapsed: {elapsed:.1f}s"
+            )
+
+    def _print_match_progress(self, match_number: int, total_matches: int) -> None:
+        if match_number % self.progress_interval == 0 or match_number == total_matches:
+            self._print_progress(f"processed {match_number}/{total_matches} matches")
+
+    @staticmethod
+    def _limit_data(data: HistoricalBacktestData, max_matches: int | None) -> HistoricalBacktestData:
+        if max_matches is None or len(data.matches) <= max_matches:
+            return data
+        matches = data.matches.head(max_matches).copy()
+        selected = set(matches["match_id"].astype(str))
+        odds = (
+            data.odds[data.odds["match_id"].astype(str).isin(selected)].copy()
+            if "match_id" in data.odds
+            else data.odds.copy()
+        )
+        results = (
+            data.results[data.results["match_id"].astype(str).isin(selected)].copy()
+            if "match_id" in data.results
+            else data.results.copy()
+        )
+        return HistoricalBacktestData(matches, odds, results)
 
     def _build_market_context(self, match_odds: pd.DataFrame | None) -> _MarketContext:
         if match_odds is None or match_odds.empty:
@@ -371,6 +443,7 @@ class BacktestRunner:
             self.config.calibration_weights,
             self.config.renormalise_score_matrix,
             self.config.poor_calibration_loss_threshold,
+            starting_points=SINGLE_START_CALIBRATION_POINTS if self.fast else None,
         )
         if not result.success:
             raise ValueError("Poisson calibration failed")
@@ -410,20 +483,19 @@ class BacktestRunner:
         actual: tuple[int, int],
         market: _MarketContext,
     ) -> None:
-        fair_probabilities = (market.fair_a_win, market.fair_draw, market.fair_b_win)
         diagnostics = self._market_diagnostics(market)
         self._record(
             accumulators["favourite_1_0"],
             match,
             actual,
-            FavouriteScoreStrategy(1).predict(fair_probabilities),
+            FavouriteScoreStrategy(1).predict(market.matrix_1x2),
             **diagnostics,
         )
         self._record(
             accumulators["favourite_2_0"],
             match,
             actual,
-            FavouriteScoreStrategy(2).predict(fair_probabilities),
+            FavouriteScoreStrategy(2).predict(market.matrix_1x2),
             **diagnostics,
         )
         self._record(
@@ -507,6 +579,7 @@ class BacktestRunner:
                 "correct_goal_difference_hit_rate": np.nan,
                 "correct_result_hit_rate": np.nan,
                 "points_variance": np.nan,
+                "fraction_used_over_under_2_5": np.nan,
                 "matches_used": 0,
                 "skipped_matches": len(accumulator.skipped),
                 "skip_reasons": skip_reasons,
@@ -520,6 +593,11 @@ class BacktestRunner:
             "correct_goal_difference_hit_rate": float(predictions["is_correct_goal_difference"].mean()),
             "correct_result_hit_rate": float(predictions["is_correct_result"].mean()),
             "points_variance": float(predictions["realised_points"].var(ddof=0)),
+            "fraction_used_over_under_2_5": (
+                float(predictions["used_over_under_2_5"].mean())
+                if accumulator.name == "ev_optimal_1x2_over_under"
+                else np.nan
+            ),
             "matches_used": len(predictions),
             "skipped_matches": len(accumulator.skipped),
             "skip_reasons": skip_reasons,
@@ -539,27 +617,63 @@ class BatchBacktestRunner:
         input_path: str | Path,
         config: ProjectConfig | None = None,
         settings: BatchBacktestSettings | None = None,
+        fast: bool = False,
+        max_files: int | None = None,
+        max_matches: int | None = None,
+        progress: bool = False,
+        progress_interval: int = 100,
     ) -> None:
+        _validate_optional_positive_integer(max_files, "max_files")
+        _validate_optional_positive_integer(max_matches, "max_matches")
+        _validate_optional_positive_integer(progress_interval, "progress_interval")
         self.input_path = Path(input_path)
         self.config = config or ProjectConfig()
         self.settings = settings or BatchBacktestSettings()
+        self.fast = fast
+        self.max_files = max_files
+        self.max_matches = max_matches
+        self.progress = progress
+        self.progress_interval = progress_interval
 
     def run(self, export: bool = True) -> BatchBacktestReport:
         """Backtest every selected CSV and recompute aggregate metrics from match records."""
 
-        reports = [
-            BacktestRunner(
-                FootballDataCSVLoader(path),
-                config=self.config,
-                source_file=self._source_file(path),
-            ).run(export=False)
-            for path in self._csv_paths()
-        ]
-        detailed_summary = pd.concat([report.summary for report in reports], ignore_index=True)
+        paths = self._csv_paths()
+        started_at = monotonic()
+        reports: list[BacktestReport] = []
+        skipped_files: list[dict[str, object]] = []
+        remaining_matches = self.max_matches
+        for file_number, path in enumerate(paths, start=1):
+            if remaining_matches == 0:
+                break
+            source_file = self._source_file(path)
+            try:
+                report = BacktestRunner(
+                    FootballDataCSVLoader(path),
+                    config=self.config,
+                    source_file=source_file,
+                    fast=self.fast,
+                    max_matches=remaining_matches,
+                    progress=self.progress,
+                    progress_interval=self.progress_interval,
+                    file_number=file_number,
+                    total_files=len(paths),
+                    started_at=started_at,
+                ).run(export=False)
+            except NonFootballDataCSVError as error:
+                reason = f"skipped non-Football-Data CSV: {error}"
+                skipped_files.append({"source_file": source_file, "reason": reason})
+                self._print_progress(started_at, file_number, len(paths), source_file, reason)
+                continue
+            reports.append(report)
+            if remaining_matches is not None:
+                remaining_matches -= report.matches_considered
+        detailed_summary = self._concat_frames([report.summary for report in reports])
         predictions = self._concat_frames([report.predictions for report in reports])
         skipped = self._concat_frames([report.skipped for report in reports])
         aggregate_summary = self._aggregate_summary(predictions, skipped)
-        skipped_by_file_reason = self._skipped_by_file_reason(skipped)
+        skipped_files_frame = pd.DataFrame(skipped_files, columns=["source_file", "reason"])
+        skipped_by_file_reason = self._skipped_by_file_reason(skipped, skipped_files_frame)
         favourite_strength_summary = self._favourite_strength_summary(predictions)
         report = BatchBacktestReport(
             detailed_summary,
@@ -568,23 +682,37 @@ class BatchBacktestRunner:
             favourite_strength_summary,
             predictions,
             skipped,
+            skipped_files_frame,
         )
         if export:
             report.export_csvs(self.settings)
         return report
 
+    def _print_progress(
+        self,
+        started_at: float,
+        file_number: int,
+        total_files: int,
+        source_file: str,
+        message: str,
+    ) -> None:
+        if self.progress:
+            elapsed = monotonic() - started_at
+            print(f"[Backtest file {file_number}/{total_files}] {source_file}: {message}; elapsed: {elapsed:.1f}s")
+
     def _csv_paths(self) -> list[Path]:
         if self.input_path.is_file():
             if self.input_path.suffix.lower() != ".csv":
                 raise ValueError(f"Historical input file must be CSV: {self.input_path}")
-            return [self.input_path]
+            paths = [self.input_path]
+            return paths[: self.max_files]
         if self.input_path.is_dir():
             paths = sorted(
                 path for path in self.input_path.rglob("*") if path.is_file() and path.suffix.lower() == ".csv"
             )
             if not paths:
                 raise ValueError(f"Historical input folder contains no CSV files: {self.input_path}")
-            return paths
+            return paths[: self.max_files]
         raise FileNotFoundError(self.input_path)
 
     def _source_file(self, path: Path) -> str:
@@ -610,19 +738,25 @@ class BatchBacktestRunner:
         return pd.DataFrame(rows)
 
     @staticmethod
-    def _skipped_by_file_reason(skipped: pd.DataFrame) -> pd.DataFrame:
+    def _skipped_by_file_reason(skipped: pd.DataFrame, skipped_files: pd.DataFrame | None = None) -> pd.DataFrame:
         columns = ("source_file", "reason", "skipped_matches", "affected_strategies")
-        if skipped.empty:
-            return pd.DataFrame(columns=columns)
-        grouped = (
-            skipped.groupby(["source_file", "reason"], as_index=False)
-            .agg(
-                skipped_matches=("match_id", "nunique"),
-                affected_strategies=("strategy", lambda values: ", ".join(sorted(set(values)))),
+        rows: list[pd.DataFrame] = []
+        if not skipped.empty:
+            rows.append(
+                skipped.groupby(["source_file", "reason"], as_index=False)
+                .agg(
+                    skipped_matches=("match_id", "nunique"),
+                    affected_strategies=("strategy", lambda values: ", ".join(sorted(set(values)))),
+                )
             )
-            .sort_values(["source_file", "reason"])
-            .reset_index(drop=True)
-        )
+        if skipped_files is not None and not skipped_files.empty:
+            file_rows = skipped_files.copy()
+            file_rows["skipped_matches"] = 0
+            file_rows["affected_strategies"] = ""
+            rows.append(file_rows[list(columns)])
+        if not rows:
+            return pd.DataFrame(columns=columns)
+        grouped = pd.concat(rows, ignore_index=True).sort_values(["source_file", "reason"]).reset_index(drop=True)
         return grouped[list(columns)]
 
     @staticmethod

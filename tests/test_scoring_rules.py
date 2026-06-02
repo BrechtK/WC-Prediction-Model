@@ -27,3 +27,7 @@ def test_knockout_components_are_additive_and_qualifier_is_separate() -> None:
     assert score_knockout_prediction(2, 1, "A", 3, 2, "A", config) == 15
     assert score_knockout_prediction(0, 1, "B", 2, 0, "A", config) == 1
 
+
+def test_non_additive_knockout_scoring_fails_at_config_construction() -> None:
+    with pytest.raises(ValueError, match="Non-additive knockout scoring is not implemented. Use additive=True."):
+        KnockoutScoringConfig(additive=False)

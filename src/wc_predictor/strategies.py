@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-import numpy as np
-
 from wc_predictor.optimiser import optimise_group_prediction
 from wc_predictor.probabilities import ScoreProbabilityMatrix
 
@@ -65,13 +63,11 @@ class FavouriteScoreStrategy:
         if self.winning_goals <= 0:
             raise ValueError("winning_goals must be positive")
 
-    def predict(self, fair_1x2_probabilities: tuple[float, float, float]) -> tuple[int, int]:
+    def predict(self, matrix: ScoreProbabilityMatrix) -> tuple[int, int]:
         """Return winning_goals-0, 0-winning_goals, or a draw when no win is clearly favoured."""
 
-        probabilities = np.asarray(fair_1x2_probabilities, dtype=float)
-        if probabilities.shape != (3,) or not np.all(np.isfinite(probabilities)):
-            raise ValueError("Fair 1X2 probabilities must contain three finite values")
-        home, draw, away = probabilities
+        outcomes = matrix.outcome_probabilities()
+        home, draw, away = outcomes["a_win"], outcomes["draw"], outcomes["b_win"]
         if home > max(draw, away):
             return self.winning_goals, 0
         if away > max(home, draw):

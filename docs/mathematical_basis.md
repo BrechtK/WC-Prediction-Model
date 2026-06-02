@@ -51,7 +51,11 @@ P(over 2.5)  = P(X + Y >= 3), where X + Y ~ Poisson(lambda_A + lambda_B)
 P(BTTS yes)  = (1 - exp(-lambda_A)) (1 - exp(-lambda_B))
 ```
 
-Lambdas minimise squared calibration error. With optional market constraints:
+Lambdas minimise squared calibration error. Calibration runs the bounded
+optimiser from several starting points and keeps the best converged fit. This
+improves robustness for extreme favourites without changing the loss function.
+Near-bound lambdas are reported because they can indicate model degradation.
+With optional market constraints:
 
 ```text
 loss = w_1x2 * sum(outcome errors squared)
@@ -133,7 +137,10 @@ P_final(score)
 ```
 
 where `0 <= w <= 1`. The default `w=1` exactly preserves the Poisson-only
-workflow. Diagnostics report the top market-implied and blended scorelines plus:
+workflow. Blending is suppressed for matches with fewer than the configured
+`min_scorelines_for_blend` usable scorelines; those matches fall back to pure
+Poisson while retaining direct-market diagnostics and a warning. Diagnostics
+report the top market-implied and blended scorelines plus:
 
 ```text
 D_KL(P_market || P_poisson)

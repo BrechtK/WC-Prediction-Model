@@ -1,6 +1,7 @@
 import pytest
+from scipy.optimize import OptimizeResult
 
-from wc_predictor.calibration import CalibrationTargets, calibrate_poisson_model
+from wc_predictor.calibration import CALIBRATION_STARTING_POINTS, CalibrationTargets, calibrate_poisson_model
 from wc_predictor.probabilities import poisson_market_probabilities, poisson_score_matrix
 
 
@@ -52,6 +53,34 @@ def test_calibrated_lambdas_respect_positive_bounds() -> None:
     result = calibrate_poisson_model(CalibrationTargets(0.98, 0.01, 0.01))
     assert 0.02 <= result.lambda_a <= 7.0
     assert 0.02 <= result.lambda_b <= 7.0
+    assert "lambda_a_near_bound" in result.warnings
+
+
+def test_calibration_handles_extreme_favourite_market() -> None:
+    result = calibrate_poisson_model(CalibrationTargets(0.995, 0.004, 0.001))
+
+    assert result.success
+    assert result.model_probabilities["a_win"] > 0.98
+    assert "lambda_a_near_bound" in result.warnings or "lambda_b_near_bound" in result.warnings
+
+
+def test_calibration_raises_clear_error_if_all_starts_fail(monkeypatch) -> None:
+    calls = []
+
+    def failed_minimize(*args, **kwargs):
+        calls.append(kwargs["x0"])
+        return OptimizeResult(success=False, message="forced failure", fun=float("inf"), x=kwargs["x0"])
+
+    monkeypatch.setattr("wc_predictor.calibration.minimize", failed_minimize)
+
+    with pytest.raises(RuntimeError, match="Poisson calibration failed for all starting points"):
+        calibrate_poisson_model(CalibrationTargets(0.45, 0.30, 0.25))
+    assert len(calls) == len(CALIBRATION_STARTING_POINTS)
+
+
+def test_calibration_requires_at_least_one_starting_point() -> None:
+    with pytest.raises(ValueError, match="At least one Poisson calibration starting point"):
+        calibrate_poisson_model(CalibrationTargets(0.45, 0.30, 0.25), starting_points=())
 
 
 def test_invalid_calibration_targets_raise() -> None:

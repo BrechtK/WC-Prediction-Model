@@ -29,6 +29,8 @@ def _strategy_average(summary: pd.DataFrame, strategy: str) -> float:
 
 
 def _format_overall_strategy_ranking(aggregate_summary: pd.DataFrame) -> str:
+    if aggregate_summary.empty or not aggregate_summary["matches_used"].sum():
+        return "Overall Strategy Ranking\nNo historical matches were processed."
     ranking = aggregate_summary.copy()
     favourite_average = _strategy_average(ranking, "favourite_1_0")
     modal_average = _strategy_average(ranking, "most_likely_poisson")
@@ -58,6 +60,8 @@ def _format_overall_strategy_ranking(aggregate_summary: pd.DataFrame) -> str:
 
 
 def _format_key_conclusions(aggregate_summary: pd.DataFrame) -> str:
+    if aggregate_summary.empty or not aggregate_summary["matches_used"].sum():
+        return "Key Conclusions\n- No historical matches were processed."
     ranking = aggregate_summary.sort_values(
         ["average_realised_points", "total_points", "strategy"],
         ascending=[False, False, True],
@@ -118,6 +122,8 @@ def _per_file_winners(detailed_summary: pd.DataFrame) -> tuple[pd.DataFrame, pd.
 
 
 def _format_per_file_winners(detailed_summary: pd.DataFrame) -> str:
+    if detailed_summary.empty:
+        return "Per-File Winners\nNo Football-Data CSV files were processed."
     winners, win_counts = _per_file_winners(detailed_summary)
     lines = [
         "Per-File Winners",
@@ -183,7 +189,8 @@ def format_backtest_console_summary(
 ) -> str:
     """Render the default human-readable historical-backtest console report."""
 
-    source_files = report.detailed_summary["source_file"].nunique()
+    source_files = report.detailed_summary["source_file"].nunique() if "source_file" in report.detailed_summary else 0
+    skipped_input_files = len(report.skipped_files)
     total_matches = (
         report.predictions[["source_file", "match_id"]].drop_duplicates().shape[0]
         if not report.predictions.empty
@@ -200,6 +207,7 @@ def format_backtest_console_summary(
                 "Backtest Scope",
                 f"- Source: {Path(input_path)}",
                 f"- Files processed: {source_files}",
+                f"- Non-Football-Data CSV files skipped: {skipped_input_files}",
                 f"- Total matches used: {total_matches}",
                 f"- Total skipped matches: {total_skipped}",
             ]
@@ -247,6 +255,8 @@ def format_model_inspection_report(match_report: pd.DataFrame) -> str:
         correct_score_diagnostics = (
             [
                 f"  Correct-score Poisson weight: {row['correct_score_poisson_weight']:.2f}",
+                f"  Correct-score blend applied: {'yes' if row['correct_score_blend_applied'] else 'no'}",
+                f"  Correct-score blend note: {row['correct_score_blend_note'] or 'none'}",
                 f"  Correct-score coverage: {row['correct_score_scorelines_count']} scorelines / {row['correct_score_bookmakers_count']} bookmakers",
                 f"  Correct-score sparse warning: {row['correct_score_sparse_warning'] or 'none'}",
                 f"  Correct-score aggregation: {row['correct_score_aggregation_method']} ({row['outlier_count']} outliers)",
@@ -309,6 +319,8 @@ def format_world_cup_console_summary(
         correct_score_diagnostics = (
             [
                 f"  Correct-score blend: poisson_weight={row['correct_score_poisson_weight']:.2f} KL={row['correct_score_kl_divergence']:.6f}",
+                f"  Correct-score blend applied: {'yes' if row['correct_score_blend_applied'] else 'no'}",
+                f"  Correct-score blend note: {row['correct_score_blend_note'] or 'none'}",
                 f"  Correct-score coverage: {row['correct_score_scorelines_count']} scorelines / {row['correct_score_bookmakers_count']} bookmakers",
                 f"  Correct-score sparse warning: {row['correct_score_sparse_warning'] or 'none'}",
                 f"  Correct-score aggregation: {row['correct_score_aggregation_method']} ({row['outlier_count']} outliers)",
@@ -402,6 +414,9 @@ def format_world_cup_model_risk_summary(match_report: pd.DataFrame) -> str:
             f"- Extreme favourites: {count_flag('extreme_favourite')}",
             f"- EV-optimal score differs from modal scoreline: {int(match_report['ev_optimal_differs_from_most_likely'].sum())}",
             f"- Matches with high calibration error: {count_flag('high_calibration_error')}",
+            f"- Matches with lambda_a near a calibration bound: {count_flag('lambda_a_near_bound')}",
+            f"- Matches with lambda_b near a calibration bound: {count_flag('lambda_b_near_bound')}",
+            f"- Sparse correct-score markets with blending suppressed: {count_flag('correct_score_blend_suppressed_sparse_market')}",
             f"- Knockout matches missing qualification odds: {count_flag('knockout_missing_qualification_odds')}",
         ]
     )
@@ -456,6 +471,9 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "has_btts",
         "has_qualification_odds",
         "has_correct_score_market",
+        "correct_score_blend_applied",
+        "correct_score_blend_suppressed",
+        "correct_score_blend_note",
         "correct_score_scorelines_count",
         "correct_score_bookmakers_count",
         "correct_score_sparse_warning",
@@ -469,6 +487,7 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "out_of_grid_scorelines_count",
         "correct_score_bookmaker_diagnostics",
         "selected_blend_weight",
+        "effective_correct_score_poisson_weight",
         "kl_divergence",
         "top_10_market_scorelines",
         "top_10_blended_scorelines",
@@ -479,6 +498,8 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "ev_gap_best_vs_second",
         "ev_gap_best_vs_modal",
         "warning_flags",
+        "lambda_a_near_bound",
+        "lambda_b_near_bound",
     ]
     ordered_columns = [column for column in key_columns if column in frame]
     ordered_columns.extend(column for column in frame.columns if column not in ordered_columns)
@@ -505,6 +526,7 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "correct_score_kl_divergence",
         "kl_divergence",
         "selected_blend_weight",
+        "effective_correct_score_poisson_weight",
         "average_correct_score_overround",
         "max_correct_score_overround",
     }
@@ -516,6 +538,7 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "top_10_market_scorelines",
         "top_10_blended_scorelines",
         "correct_score_sparse_warning",
+        "correct_score_blend_note",
         "top_outlier_examples",
         "scoreline_coverage_warning",
         "correct_score_bookmaker_diagnostics",

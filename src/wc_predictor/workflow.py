@@ -163,6 +163,9 @@ def _warning_flags(
     tail_mass: float,
     latest_odds_timestamp: pd.Timestamp | None,
     poor_calibration_loss_threshold: float,
+    lambda_a_near_bound: bool,
+    lambda_b_near_bound: bool,
+    correct_score_blend_suppressed: bool,
 ) -> str:
     """Build concise model-risk flags without changing any model decisions."""
 
@@ -175,6 +178,10 @@ def _warning_flags(
         flags.append("no_btts")
     if calibration_loss > poor_calibration_loss_threshold:
         flags.append("high_calibration_error")
+    if lambda_a_near_bound:
+        flags.append("lambda_a_near_bound")
+    if lambda_b_near_bound:
+        flags.append("lambda_b_near_bound")
     if tail_mass > HIGH_TAIL_MASS_THRESHOLD:
         flags.append("high_tail_mass")
     if latest_odds_timestamp is not None and latest_odds_timestamp < pd.Timestamp.now(tz="UTC") - STALE_ODDS_THRESHOLD:
@@ -183,6 +190,8 @@ def _warning_flags(
         flags.append("extreme_favourite")
     if knockout and not has_qualification_odds:
         flags.append("knockout_missing_qualification_odds")
+    if correct_score_blend_suppressed:
+        flags.append("correct_score_blend_suppressed_sparse_market")
     return "; ".join(flags)
 
 
@@ -242,6 +251,9 @@ def run_prediction_workflow(
             config.poor_calibration_loss_threshold,
         )
         poisson_matrix = calibration.score_matrix
+        correct_score_blend_suppressed = False
+        correct_score_blend_note = ""
+        effective_correct_score_poisson_weight = 1.0
         correct_score_rows = (
             processed_correct_scores[processed_correct_scores["match_id"].astype(str) == match_id]
             if not processed_correct_scores.empty
@@ -262,11 +274,22 @@ def run_prediction_workflow(
                 correct_score_aggregation.bookmaker_diagnostics
             )
             correct_score_matrices[match_id] = correct_score_matrix
-            score_matrix = blend_score_matrices(
-                poisson_matrix,
-                correct_score_matrix,
-                config.correct_score_poisson_weight,
-            )
+            scoreline_count = int(correct_score_coverage["correct_score_scorelines_count"])
+            correct_score_blend_suppressed = scoreline_count < config.min_scorelines_for_blend
+            if correct_score_blend_suppressed:
+                score_matrix = poisson_matrix
+                correct_score_blend_note = (
+                    "Correct-score blend suppressed: "
+                    f"{scoreline_count} usable scorelines is below configured minimum "
+                    f"{config.min_scorelines_for_blend}; used pure Poisson"
+                )
+            else:
+                score_matrix = blend_score_matrices(
+                    poisson_matrix,
+                    correct_score_matrix,
+                    config.correct_score_poisson_weight,
+                )
+                effective_correct_score_poisson_weight = config.correct_score_poisson_weight
             correct_score_market_top_10 = format_top_scorelines(correct_score_matrix)
             correct_score_blended_top_10 = format_top_scorelines(score_matrix)
             correct_score_kl_divergence = market_to_poisson_kl_divergence(poisson_matrix, correct_score_matrix)
@@ -291,6 +314,8 @@ def run_prediction_workflow(
             has_correct_score_market = False
         matrices[match_id] = score_matrix
         notes = list(calibration.warnings)
+        if correct_score_blend_note:
+            notes.append(correct_score_blend_note)
         knockout = is_knockout_stage(str(row["stage"]))
         has_over_under = pd.notna(row.get("fair_over_2_5"))
         has_btts = pd.notna(row.get("fair_btts_yes"))
@@ -347,6 +372,9 @@ def run_prediction_workflow(
             tail_mass=poisson_matrix.tail_probability,
             latest_odds_timestamp=metadata["latest_odds_timestamp"],
             poor_calibration_loss_threshold=config.poor_calibration_loss_threshold,
+            lambda_a_near_bound="lambda_a_near_bound" in calibration.warnings,
+            lambda_b_near_bound="lambda_b_near_bound" in calibration.warnings,
+            correct_score_blend_suppressed=correct_score_blend_suppressed,
         )
         report_rows.append(
             {
@@ -376,6 +404,10 @@ def run_prediction_workflow(
                 "has_correct_score_market": has_correct_score_market,
                 "correct_score_poisson_weight": config.correct_score_poisson_weight,
                 "selected_blend_weight": config.correct_score_poisson_weight,
+                "effective_correct_score_poisson_weight": effective_correct_score_poisson_weight,
+                "correct_score_blend_applied": has_correct_score_market and not correct_score_blend_suppressed,
+                "correct_score_blend_suppressed": correct_score_blend_suppressed,
+                "correct_score_blend_note": correct_score_blend_note,
                 **correct_score_coverage,
                 **correct_score_aggregation_diagnostics,
                 "correct_score_bookmaker_diagnostics": correct_score_bookmaker_diagnostics,
@@ -387,6 +419,8 @@ def run_prediction_workflow(
                 "kl_divergence": correct_score_kl_divergence,
                 "lambda_a": calibration.lambda_a,
                 "lambda_b": calibration.lambda_b,
+                "lambda_a_near_bound": "lambda_a_near_bound" in calibration.warnings,
+                "lambda_b_near_bound": "lambda_b_near_bound" in calibration.warnings,
                 "model_a_win": model_outcomes["a_win"],
                 "model_draw": model_outcomes["draw"],
                 "model_b_win": model_outcomes["b_win"],

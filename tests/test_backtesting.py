@@ -3,6 +3,7 @@ from shutil import copyfile
 
 import pandas as pd
 import pytest
+from pandas.testing import assert_frame_equal
 
 from wc_predictor.backtest_cli import run_and_print_backtest
 from wc_predictor.backtesting import (
@@ -12,6 +13,7 @@ from wc_predictor.backtesting import (
     BacktestSettings,
     FootballDataCSVLoader,
 )
+from wc_predictor.calibration import SINGLE_START_CALIBRATION_POINTS
 from wc_predictor.strategies import PredictionStrategy
 from wc_predictor.utils import favourite_strength_bucket
 
@@ -84,9 +86,11 @@ def test_over_under_strategy_falls_back_to_1x2_when_optional_market_is_missing(t
         settings=BacktestSettings(tmp_path / "summary.csv"),
     ).run(export=False)
     predictions = report.predictions[report.predictions["strategy"] == "ev_optimal_1x2_over_under"]
+    summary = report.summary.set_index("strategy")
     assert len(predictions) == 4
     assert predictions["used_over_under_2_5"].sum() == 3
     assert not predictions.loc[predictions["match_id"] == "H000002", "used_over_under_2_5"].item()
+    assert summary.loc["ev_optimal_1x2_over_under", "fraction_used_over_under_2_5"] == pytest.approx(0.75)
 
 
 def test_batch_backtest_runs_folder_and_exports_detailed_aggregate_and_skips(tmp_path: Path) -> None:
@@ -150,6 +154,75 @@ def test_batch_backtest_recurses_into_nested_folders_and_uses_relative_source_pa
     }
 
 
+def test_fast_mode_uses_single_start_and_calibrates_each_required_matrix_once(monkeypatch) -> None:
+    from wc_predictor import backtesting
+
+    original = backtesting.calibrate_poisson_model
+    starting_points = []
+
+    def wrapped(*args, **kwargs):
+        starting_points.append(kwargs["starting_points"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(backtesting, "calibrate_poisson_model", wrapped)
+
+    BacktestRunner(
+        FootballDataCSVLoader(EXAMPLES / "example_historical_matches.csv"),
+        fast=True,
+        max_matches=1,
+    ).run(export=False)
+
+    assert starting_points == [SINGLE_START_CALIBRATION_POINTS, SINGLE_START_CALIBRATION_POINTS]
+
+
+def test_normal_mode_keeps_robust_calibration_and_existing_results() -> None:
+    loader = FootballDataCSVLoader(EXAMPLES / "example_historical_matches.csv")
+    baseline = BacktestRunner(loader).run(export=False)
+    explicit_normal = BacktestRunner(loader, fast=False).run(export=False)
+
+    assert_frame_equal(explicit_normal.summary, baseline.summary)
+    assert_frame_equal(explicit_normal.predictions, baseline.predictions)
+    assert_frame_equal(explicit_normal.skipped, baseline.skipped)
+
+
+def test_batch_backtest_max_files_limits_smoke_test_scope() -> None:
+    report = BatchBacktestRunner(BATCH_EXAMPLES, max_files=1).run(export=False)
+
+    assert set(report.detailed_summary["source_file"]) == {"season_a.csv"}
+
+
+def test_batch_backtest_max_matches_limits_total_smoke_test_scope() -> None:
+    report = BatchBacktestRunner(BATCH_EXAMPLES, max_matches=2).run(export=False)
+
+    assert report.predictions[["source_file", "match_id"]].drop_duplicates().shape[0] == 2
+    assert set(report.detailed_summary["source_file"]) == {"season_a.csv"}
+
+
+def test_batch_backtest_skips_non_football_data_csv_files(tmp_path: Path) -> None:
+    history = tmp_path / "history"
+    history.mkdir()
+    copyfile(BATCH_EXAMPLES / "season_b.csv", history / "season.csv")
+    pd.DataFrame([{"match_id": "M1", "player": "Example"}]).to_csv(history / "unrelated.csv", index=False)
+
+    report = BatchBacktestRunner(history).run(export=False)
+
+    assert set(report.detailed_summary["source_file"]) == {"season.csv"}
+    assert report.skipped_files.loc[0, "source_file"] == "unrelated.csv"
+    assert "skipped non-Football-Data CSV" in report.skipped_files.loc[0, "reason"]
+
+
+def test_batch_backtest_handles_folder_with_only_non_football_data_csv_files(tmp_path: Path) -> None:
+    history = tmp_path / "history"
+    history.mkdir()
+    pd.DataFrame([{"match_id": "M1", "player": "Example"}]).to_csv(history / "unrelated.csv", index=False)
+
+    report = BatchBacktestRunner(history).run(export=False)
+
+    assert report.detailed_summary.empty
+    assert report.predictions.empty
+    assert report.skipped_files["source_file"].tolist() == ["unrelated.csv"]
+
+
 def test_shared_backtest_cli_helper_runs_and_prints_summary(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     report = run_and_print_backtest(
         input_path=BATCH_EXAMPLES,
@@ -159,6 +232,9 @@ def test_shared_backtest_cli_helper_runs_and_prints_summary(tmp_path: Path, caps
         favourite_strength_output_path=tmp_path / "favourite_strength.csv",
     )
     output = capsys.readouterr().out
+    assert "[Backtest file 1/2]" in output
+    assert "matches in file:" in output
+    assert "elapsed:" in output
     assert "Backtest Scope" in output
     assert "- Files processed: 2" in output
     assert len(report.detailed_summary) == 14

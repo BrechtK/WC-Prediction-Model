@@ -176,28 +176,69 @@ def test_correct_score_blend_respects_endpoint_weights_and_reports_kl() -> None:
     assert format_top_scorelines(market, top_n=2).startswith("1-0 (60.0000%); 0-1 (20.0000%)")
 
 
-def test_prediction_workflow_optionally_uses_correct_score_market() -> None:
+def test_sparse_correct_score_market_is_reported_but_blending_is_suppressed() -> None:
     odds = load_odds(EXAMPLES / "example_odds.csv")
     correct_score_odds = load_correct_score_odds(EXAMPLES / "example_correct_score_odds.csv")
     baseline = run_prediction_workflow(odds)
-    blended = run_prediction_workflow(
+    suppressed = run_prediction_workflow(
         odds,
         config=ProjectConfig(correct_score_poisson_weight=0.0),
         correct_score_odds=correct_score_odds,
     )
 
     assert not baseline.match_report["has_correct_score_market"].any()
-    report = blended.match_report.set_index("match_id")
+    report = suppressed.match_report.set_index("match_id")
     assert report.loc["M001", "has_correct_score_market"]
     assert report.loc["M001", "correct_score_poisson_weight"] == pytest.approx(0.0)
+    assert report.loc["M001", "effective_correct_score_poisson_weight"] == pytest.approx(1.0)
+    assert report.loc["M001", "correct_score_blend_suppressed"]
+    assert not report.loc["M001", "correct_score_blend_applied"]
+    assert "correct_score_blend_suppressed_sparse_market" in report.loc["M001", "warning_flags"]
+    assert "below configured minimum 10" in report.loc["M001", "warnings"]
     assert report.loc["M001", "correct_score_market_top_10"]
     assert report.loc["M001", "correct_score_blended_top_10"]
     assert report.loc["M001", "correct_score_kl_divergence"] > 0
     assert np.allclose(
+        suppressed.score_matrices["M001"].probabilities,
+        baseline.score_matrices["M001"].probabilities,
+    )
+    assert not report.loc["M003", "has_correct_score_market"]
+
+
+def test_non_sparse_correct_score_market_still_blends() -> None:
+    odds = load_odds(EXAMPLES / "example_odds.csv")
+    correct_score_odds = load_correct_score_odds(EXAMPLES / "example_correct_score_odds.csv")
+    blended = run_prediction_workflow(
+        odds,
+        config=ProjectConfig(correct_score_poisson_weight=0.0, min_scorelines_for_blend=6),
+        correct_score_odds=correct_score_odds,
+    )
+
+    report = blended.match_report.set_index("match_id")
+    assert report.loc["M001", "correct_score_blend_applied"]
+    assert not report.loc["M001", "correct_score_blend_suppressed"]
+    assert report.loc["M001", "effective_correct_score_poisson_weight"] == pytest.approx(0.0)
+    assert np.allclose(
         blended.score_matrices["M001"].probabilities,
         blended.correct_score_market_matrices["M001"].probabilities,
     )
-    assert not report.loc["M003", "has_correct_score_market"]
+
+
+def test_correct_score_weight_one_keeps_poisson_matrix_unchanged() -> None:
+    odds = load_odds(EXAMPLES / "example_odds.csv")
+    correct_score_odds = load_correct_score_odds(EXAMPLES / "example_correct_score_odds.csv")
+    baseline = run_prediction_workflow(odds)
+    endpoint = run_prediction_workflow(
+        odds,
+        config=ProjectConfig(correct_score_poisson_weight=1.0, min_scorelines_for_blend=6),
+        correct_score_odds=correct_score_odds,
+    )
+
+    for match_id in baseline.score_matrices:
+        assert np.allclose(
+            endpoint.score_matrices[match_id].probabilities,
+            baseline.score_matrices[match_id].probabilities,
+        )
 
 
 def test_poisson_workflow_is_unchanged_when_correct_score_market_is_absent() -> None:
@@ -224,6 +265,12 @@ def test_correct_score_poisson_weight_must_be_between_zero_and_one(weight: float
 def test_correct_score_aggregation_method_must_be_supported() -> None:
     with pytest.raises(ValueError, match="correct_score_aggregation_method"):
         ProjectConfig(correct_score_aggregation_method="average_decimal_odds")
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, True])
+def test_min_scorelines_for_blend_must_be_a_positive_integer(value) -> None:
+    with pytest.raises(ValueError, match="min_scorelines_for_blend"):
+        ProjectConfig(min_scorelines_for_blend=value)
 
 
 def test_correct_score_blend_weight_backtest_produces_ranked_comparison() -> None:
