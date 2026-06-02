@@ -312,6 +312,7 @@ def format_world_cup_console_summary(
         )
     )
     sections.append(format_world_cup_prediction_diagnostics(match_report))
+    sections.append(format_world_cup_model_risk_summary(match_report))
     return "\n\n".join(sections)
 
 
@@ -347,6 +348,26 @@ def format_world_cup_prediction_diagnostics(match_report: pd.DataFrame) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+def format_world_cup_model_risk_summary(match_report: pd.DataFrame) -> str:
+    """Render compact data-quality and model-risk counts for live review."""
+
+    flags = match_report["warning_flags"].fillna("").map(lambda value: set(str(value).split("; ")))
+    count_flag = lambda flag: int(flags.map(lambda values: flag in values).sum())
+    return "\n".join(
+        [
+            "Model-Risk Summary",
+            f"- Matches: {len(match_report)}",
+            f"- Matches with only one bookmaker: {count_flag('only_one_bookmaker')}",
+            f"- Matches without over/under odds: {count_flag('no_over_under')}",
+            f"- Matches without BTTS odds: {count_flag('no_btts')}",
+            f"- Extreme favourites: {count_flag('extreme_favourite')}",
+            f"- EV-optimal score differs from modal scoreline: {int(match_report['ev_optimal_differs_from_most_likely'].sum())}",
+            f"- Matches with high calibration error: {count_flag('high_calibration_error')}",
+            f"- Knockout matches missing qualification odds: {count_flag('knockout_missing_qualification_odds')}",
+        ]
+    )
 
 
 def export_dataframe(frame: pd.DataFrame, path: str | Path) -> None:
@@ -393,6 +414,13 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "ev_optimal_differs_from_most_likely",
         "top_5_ev_predictions",
         "warnings",
+        "number_of_bookmakers",
+        "has_over_under",
+        "has_btts",
+        "has_qualification_odds",
+        "ev_gap_best_vs_second",
+        "ev_gap_best_vs_modal",
+        "warning_flags",
     ]
     ordered_columns = [column for column in key_columns if column in frame]
     ordered_columns.extend(column for column in frame.columns if column not in ordered_columns)
@@ -413,8 +441,8 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "tail_probability_before_renormalisation",
     }
     decimal_columns = {"lambda_a", "lambda_b", "calibration_loss"}
-    ev_columns = {"best_expected_points"}
-    wrapped_columns = {"top_5_ev_predictions", "warnings"}
+    ev_columns = {"best_expected_points", "ev_gap_best_vs_second", "ev_gap_best_vs_modal"}
+    wrapped_columns = {"top_5_ev_predictions", "warning_flags", "warnings"}
     from openpyxl import load_workbook
 
     workbook = load_workbook(path)
@@ -457,7 +485,10 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
     submission["top_3_alternatives"] = submission["top_alternatives"].fillna("").map(
         lambda value: "; ".join(str(value).split("; ")[:3])
     )
-    submission["notes"] = submission["warnings"]
+    submission["notes"] = submission[["warning_flags", "warnings", "source_notes"]].fillna("").apply(
+        lambda values: "; ".join(value for value in values if value),
+        axis=1,
+    )
     submission = submission[
         [
             "match_id",

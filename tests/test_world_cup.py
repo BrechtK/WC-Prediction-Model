@@ -5,7 +5,12 @@ import sys
 import pandas as pd
 from openpyxl import load_workbook
 
-from wc_predictor.reporting import format_world_cup_console_summary, format_world_cup_prediction_diagnostics
+from wc_predictor.config import ProjectConfig
+from wc_predictor.reporting import (
+    format_world_cup_console_summary,
+    format_world_cup_model_risk_summary,
+    format_world_cup_prediction_diagnostics,
+)
 from wc_predictor.world_cup import (
     WORLD_CUP_ODDS_MISSING_MESSAGE,
     WorldCupPredictionSettings,
@@ -36,6 +41,9 @@ ODDS_COLUMNS = [
     "odds_btts_no",
     "odds_a_qualifies",
     "odds_b_qualifies",
+    "odds_timestamp",
+    "odds_source_url",
+    "source_quality",
     "notes",
 ]
 
@@ -85,6 +93,17 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "most_likely_scoreline",
         "recommended_score",
         "top_5_ev_predictions",
+        "odds_timestamp_min",
+        "odds_timestamp_max",
+        "bookmakers_used",
+        "number_of_bookmakers",
+        "has_over_under",
+        "has_btts",
+        "has_qualification_odds",
+        "favourite_probability",
+        "ev_gap_best_vs_second",
+        "ev_gap_best_vs_modal",
+        "warning_flags",
     }.issubset(workflow.match_report.columns)
     assert len(pd.read_csv(settings.csv_output_path)) == 2
     assert len(pd.read_excel(settings.xlsx_output_path)) == 2
@@ -200,6 +219,101 @@ def test_world_cup_workflow_loads_xlsx_odds_input(tmp_path: Path) -> None:
     assert workflow.match_report.loc[0, "match_id"] == "WC001"
 
 
+def test_optional_odds_source_metadata_is_summarised_when_present(tmp_path: Path) -> None:
+    input_path = tmp_path / "world_cup_odds.xlsx"
+    odds = pd.read_csv(EXAMPLES / "example_world_cup_odds.csv")
+    odds["odds_timestamp"] = [
+        "2026-06-01T09:00:00Z",
+        "2026-06-01T11:00:00Z",
+        "2026-06-02T09:00:00Z",
+        "2026-06-02T11:00:00Z",
+    ]
+    odds["odds_source_url"] = ["https://one.example", "https://two.example"] * 2
+    odds["source_quality"] = ["major_bookmaker", "sharp"] * 2
+    odds.to_excel(input_path, index=False)
+    settings = WorldCupPredictionSettings(
+        input_path=input_path,
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+    report = run_world_cup_predictions(settings).match_report.set_index("match_id")
+
+    assert report.loc["WC001", "odds_timestamp_min"] == "2026-06-01T09:00:00+00:00"
+    assert report.loc["WC001", "odds_timestamp_max"] == "2026-06-01T11:00:00+00:00"
+    assert report.loc["WC001", "odds_source_urls"] == "https://one.example; https://two.example"
+    assert report.loc["WC001", "source_qualities"] == "major_bookmaker; sharp"
+    assert report.loc["WC001", "bookmakers_used"] == "MarketOne; MarketTwo"
+    assert report.loc["WC001", "number_of_bookmakers"] == 2
+
+
+def test_world_cup_warning_flags_cover_model_risk_conditions(tmp_path: Path) -> None:
+    input_path = tmp_path / "risky_odds.csv"
+    pd.DataFrame(
+        [
+            {
+                "match_id": "RISKY",
+                "date": "2026-07-01",
+                "stage": "round of 32",
+                "group": "",
+                "team_a": "Favourite",
+                "team_b": "Longshot",
+                "bookmaker": "OnlyBook",
+                "odds_a_win": 1.03,
+                "odds_draw": 20.0,
+                "odds_b_win": 50.0,
+                "odds_timestamp": "2000-01-01T00:00:00Z",
+            }
+        ]
+    ).to_csv(input_path, index=False)
+    settings = WorldCupPredictionSettings(
+        input_path=input_path,
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+    report = run_world_cup_predictions(
+        settings,
+        ProjectConfig(max_goals_score_matrix=0, poor_calibration_loss_threshold=-1.0),
+    ).match_report.iloc[0]
+    flags = set(report["warning_flags"].split("; "))
+
+    assert {
+        "only_one_bookmaker",
+        "no_over_under",
+        "no_btts",
+        "high_calibration_error",
+        "high_tail_mass",
+        "stale_odds_timestamp",
+        "extreme_favourite",
+        "knockout_missing_qualification_odds",
+    }.issubset(flags)
+
+
+def test_world_cup_model_risk_summary_reports_compact_counts(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(_settings(tmp_path)).match_report.copy()
+    report.loc[0, "warning_flags"] = "only_one_bookmaker; no_over_under; no_btts; extreme_favourite"
+    report.loc[1, "warning_flags"] = "high_calibration_error; knockout_missing_qualification_odds"
+
+    summary = format_world_cup_model_risk_summary(report)
+
+    assert "Model-Risk Summary" in summary
+    assert "- Matches: 2" in summary
+    assert "- Matches with only one bookmaker: 1" in summary
+    assert "- Matches without over/under odds: 1" in summary
+    assert "- Matches without BTTS odds: 1" in summary
+    assert "- Extreme favourites: 1" in summary
+    assert "- Matches with high calibration error: 1" in summary
+    assert "- Knockout matches missing qualification odds: 1" in summary
+
+
+def test_model_risk_documentation_exists() -> None:
+    assert Path("docs/stylised_facts.md").exists()
+    assert Path("docs/model_roadmap.md").exists()
+
+
 def test_default_world_cup_input_prefers_xlsx_when_both_exist(tmp_path: Path, monkeypatch) -> None:
     raw = tmp_path / "data" / "raw"
     raw.mkdir(parents=True)
@@ -240,6 +354,7 @@ def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: P
     assert "- Average lambda_b:" in summary
     assert "- EV-optimal score differs from modal scoreline:" in summary
     assert "Top 10 Matches By Favourite Probability" in summary
+    assert "Model-Risk Summary" in summary
     assert "market_a=" in summary
     assert "market_draw=" in summary
     assert "market_b=" in summary

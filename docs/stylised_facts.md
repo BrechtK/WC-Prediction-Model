@@ -1,104 +1,109 @@
 # Stylised Facts For World Cup Predictions
 
 Domestic-league backtests are useful for validating scoring logic, calibration,
-and strategy behaviour. They are not a complete simulation of a World Cup. The
-following caveats matter when interpreting historical results and live
-recommendations.
+and strategy behaviour. They are not a complete simulation of a World Cup.
+Version 1 therefore uses bookmaker odds as a transparent baseline and treats
+tournament-specific risks as explicit diagnostics.
 
 ## Modelling Caveats
 
-### Domestic Leagues Underrepresent Extreme Mismatches
+### Domestic Leagues Underrepresent Extreme International Mismatches
 
-Domestic leagues contain many competitive matches and relatively few games
-between teams at opposite ends of the international-strength distribution.
-World Cup group stages can include much larger gaps. A heuristic such as
-`favourite_1_0` may look strong in league backtests while becoming less
-appropriate for extreme favourites.
+Premier League and Belgian league seasons contain relatively few matches with
+85%-95% favourites. World Cup groups can contain much larger strength gaps
+between elite and weak international teams. As a result, `favourite_1_0` can
+look unusually strong in domestic backtests while becoming less appropriate for
+extreme international mismatches. The favourite-strength bucket reports and
+`scripts/inspect_synthetic_mismatches.py` stress test are designed to expose
+this issue.
 
-### International Data Is Sparse And Heterogeneous
+### International Football Data Is Sparse And Heterogeneous
 
-National teams play fewer matches than clubs. Opponent strength, tournament
-context, qualification campaigns, friendlies, squad availability, travel, and
-managerial changes vary substantially. A historical international sample is
-therefore smaller and less uniform than a domestic-league sample.
+National teams play fewer matches than clubs. Friendlies, qualifiers, Nations
+League matches, continental tournaments, and World Cup matches are not fully
+comparable. Squads, managers, travel, and motivation also change over time.
+This supports using bookmaker odds as the Version 1 baseline instead of
+immediately fitting a small homemade team-strength model.
 
 ### Group-Stage Incentives Vary
 
-A team's incentives can change by matchday and current standings. Goal
-difference, qualification scenarios, rotation, and whether a draw is sufficient
-can affect the style and risk profile of a match. A market-implied baseline
-absorbs some of this information only when the odds are collected late enough.
+Matchdays 1, 2, and 3 are strategically different. Already-qualified teams may
+rotate. Some teams only need a draw, while others may need to win by multiple
+goals. Late odds should partly incorporate these incentives, but early odds may
+not. For now this belongs in `notes` and manual review rather than as a
+hard-coded model input.
 
-### Qualification And Score Predictions Are Different Objects
+### Knockout Score And Qualification Are Different Objects
 
-In knockout rounds, predicting the team that advances is not the same as
-predicting the score before penalties. A match can be drawn while one team still
-qualifies. The project therefore treats qualification probabilities and
-scoreline probabilities separately.
+In knockout rounds, the 90-minute or 120-minute score and the team that advances
+are different probability objects. A team can qualify after penalties even when
+the match is drawn. The project intentionally keeps score and qualifier
+predictions separate.
 
-### World Cup Matches Are Usually Neutral-Site
+### Neutral-Site And Host Effects
 
-Domestic historical data is organised around home and away teams. World Cup
-matches are generally played at neutral venues, even though the input schema
-uses `team_a` and `team_b`. Domestic home advantage must not be interpreted as a
-direct analogue for tournament matches.
+Domestic data contains ordinary home advantage. World Cup matches are usually
+neutral-site, except for host-country, crowd, travel, and climate effects.
+Market odds should price much of this information, but domestic home-away
+backtests are not a perfect analogue for tournament matches.
 
 ### Odds Timing Matters
 
-Closing odds generally incorporate more information than early prices:
-confirmed line-ups, injuries, weather, tactical expectations, and market
-liquidity. Early odds remain useful for planning, but recommendations should be
-refreshed nearer kick-off when possible.
+Closing odds usually incorporate more information than early prices. Late
+injuries, line-ups, rotation, and motivation can materially shift the market.
+When the pool deadline is early, record `odds_timestamp` so the age of the odds
+is visible. Final recommendations should use the latest available prices before
+the deadline where possible.
 
-### Margin Removal Is A Modelling Choice
+### Margin-Removal Method Matters
 
-Bookmaker prices include overround. Proportional margin removal is transparent
-and is the Version 1 default, but it is not the only possible method. Different
-removal methods can shift the fair probabilities used for calibration,
-especially when prices are asymmetric.
+Proportional normalisation is a clear baseline, but it is not the only approach.
+Alternatives include additive removal, the power method, the Shin method, and
+methods adjusted for favourite-longshot bias. Since every downstream estimate
+depends on fair market probabilities, sensitivity analysis for margin removal
+is a high-priority future improvement.
 
-### Favourite-Longshot Bias May Affect Extreme Probabilities
+### Favourite-Longshot Bias And Public-Team Effects
 
-Longshots and heavy favourites may not be priced symmetrically after margin.
-Extreme probabilities deserve particular scrutiny because domestic data offers
-less empirical support and simple proportional margin removal may not fully
-capture market bias.
+Market-implied probabilities are not literal true probabilities. Famous teams,
+longshots, and extreme favourites may be priced differently by bookmaker and
+market. Aggregating multiple bookmakers and preferring sharper or closing odds
+can reduce this risk, especially for very high `p_fav` matches.
 
-### Correct-Score Markets Contain Information But Carry High Margins
+### Correct-Score Markets May Contain Direct Scoreline Information
 
-Correct-score odds can reveal how the market distributes probability across
-specific outcomes such as `1-0`, `2-0`, and `3-0`. They are also fragmented and
-often have higher margins than 1X2 markets. They should be treated as a useful
-diagnostic or carefully validated extension, not as automatically superior
-inputs.
+The current model infers scoreline probabilities from 1X2, over/under, and BTTS
+odds where available. Correct-score odds are directly relevant to this pool,
+but often carry larger margins and lower liquidity. They should be introduced
+carefully through explicit calibration targets or validated blending.
 
-### Independent Poisson Is A Transparent Approximation
+### Independent Poisson And Low-Score Draw Issues
 
-Independent Poisson calibration translates market probabilities into a complete
-score matrix. Real football scores are not perfectly independent Poisson draws.
-The baseline may overstate or understate draws and low-scoring outcomes because
-of tactical dependence, game state, and score correlation.
+Independent Poisson calibration is transparent and useful, but real football
+scores are not perfectly independent Poisson draws. The baseline may misstate
+draws and low-scoring outcomes such as `0-0`, `1-0`, `0-1`, and `1-1`.
+Dixon-Coles or related low-score corrections are natural future extensions.
 
-### O/U And BTTS Markets Add Important Context
+### Total-Goals Environment Matters
 
-The same 1X2 favourite probability can arise in different scoring
-environments. Over/under 2.5 and both-teams-to-score odds help distinguish a
-low-scoring favourite from a high-scoring mismatch, which can change the
-EV-optimal pool prediction.
+1X2 odds alone cannot distinguish a low-total 70% favourite from a high-total
+70% favourite. Over/under 2.5 and both-teams-to-score odds help separate
+favourite strength from the total-goals environment. This is why the
+`ev_optimal_1x2_over_under` strategy is an important backtest comparison.
 
 ## Model Implications
 
-| Caveat | Project implication |
-| --- | --- |
-| Extreme mismatches are underrepresented domestically | Use favourite-strength buckets and `scripts/inspect_synthetic_mismatches.py` before trusting league-wide averages for strong favourites. |
-| International data is sparse and heterogeneous | Treat domestic backtests as baseline validation, not proof of tournament performance. Add international evaluation only with careful sample labelling. |
-| Group-stage incentives vary | Refresh odds near kick-off and inspect match context, especially on the final group matchday. |
-| Qualification differs from score prediction | Enter qualification odds for knockout rounds whenever available. The draw-split fallback is intentionally weaker. |
-| World Cup matches are neutral-site | Interpret `team_a` and `team_b` as ordered participants, not literal domestic home and away sides. |
-| Odds timing matters | Prefer closing or late prices for final submissions. Record collection timing in `notes` when manually entering odds. |
-| Margin removal matters | Keep proportional removal as the transparent baseline and use alternative methods only as explicit sensitivity checks. |
-| Favourite-longshot bias affects extremes | Manually inspect very high `p_fav` matches and compare modal, EV-optimal, and top-five scorelines. |
-| Correct-score odds are informative but high-margin | Keep correct-score markets as a future validated extension or inspection source rather than blending them automatically. |
-| Independent Poisson may miss score dependence | Monitor calibration error, tail mass, and low-score recommendations. Evaluate richer challenger models out of sample before adopting them. |
-| O/U and BTTS add context | Collect these optional odds where possible because they improve scoreline calibration without changing the core baseline architecture. |
+| Caveat | Why it matters | Current mitigation in the project | Future improvement |
+| --- | --- | --- | --- |
+| Extreme international mismatches | Domestic averages may overstate the usefulness of `favourite_1_0`. | Favourite-strength buckets and synthetic mismatch inspection. | Add carefully labelled international backtests and inspect extreme buckets separately. |
+| Sparse, heterogeneous international data | Small samples can encourage fragile team-strength estimates. | Use market odds as the Version 1 baseline. | Add challenger models only after robust out-of-sample evaluation. |
+| Variable group-stage incentives | Rotation and standings scenarios can shift score distributions. | Manual `notes` and late-odds collection. | Add contextual diagnostics before considering hard-coded features. |
+| Score and qualification differ | A drawn knockout score can still produce a qualifier. | Separate qualifier odds and score optimisation. | Improve knockout backtesting and validate score-timing rules. |
+| Neutral-site and host effects | Domestic home-away data is an imperfect tournament analogue. | Let the market price venue effects; interpret `team_a` and `team_b` as ordered sides. | Add explicit venue metadata to future challenger models. |
+| Odds timing | Early prices may omit material late information. | Optional `odds_timestamp` plus stale-odds flags. | Compare early and closing prices in historical evaluation. |
+| Margin-removal choice | Fair probabilities feed every later step. | Transparent proportional baseline. | Backtest additive, power, Shin, and bias-adjusted alternatives. |
+| Favourite-longshot and public-team effects | Extreme prices may be systematically distorted. | Multiple-bookmaker aggregation, source-quality metadata, and extreme-favourite flags. | Prefer sharp closing sources and evaluate bias-adjusted methods. |
+| Correct-score market information | Direct score prices may improve prediction-pool decisions but have high margins. | Loader support exists without automatic blending. | Build validated correct-score matrices and backtest blend weights. |
+| Independent Poisson low-score limitations | Draw and low-score probabilities may be inaccurate. | Calibration warnings, tail diagnostics, and a transparent baseline. | Test Dixon-Coles against independent Poisson. |
+| Total-goals environment | Identical 1X2 prices can imply different optimal scores. | Optional O/U and BTTS calibration targets with presence flags. | Review weights and compare market combinations by favourite bucket. |
 

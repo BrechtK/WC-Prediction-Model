@@ -14,11 +14,16 @@ from wc_predictor.odds import aggregate_bookmaker_probabilities, process_bookmak
 from wc_predictor.optimiser import (
     GroupPredictionRecommendation,
     KnockoutPredictionRecommendation,
+    evaluate_group_prediction,
+    evaluate_knockout_prediction,
     optimise_group_prediction,
     optimise_knockout_prediction,
 )
 from wc_predictor.probabilities import ScoreProbabilityMatrix
 from wc_predictor.utils import favourite_strength_bucket, is_knockout_stage
+
+HIGH_TAIL_MASS_THRESHOLD = 0.01
+STALE_ODDS_THRESHOLD = pd.Timedelta(hours=24)
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,104 @@ def _format_top_ev_predictions(recommendation: GroupPredictionRecommendation | K
     return _format_evaluations((recommendation.best, *recommendation.alternatives[:4]))
 
 
+def _summarise_text_values(rows: pd.DataFrame, column: str) -> object:
+    """Join distinct non-empty optional source metadata values."""
+
+    if column not in rows:
+        return pd.NA
+    values = sorted({str(value).strip() for value in rows[column].dropna() if str(value).strip()})
+    return "; ".join(values) if values else pd.NA
+
+
+def _summarise_odds_metadata(odds: pd.DataFrame, bookmaker_probabilities: pd.DataFrame) -> dict[str, dict[str, object]]:
+    """Summarise optional source metadata and valid 1X2 bookmaker coverage by match."""
+
+    valid_columns = {"fair_a_win", "fair_draw", "fair_b_win"}
+    valid_rows = (
+        bookmaker_probabilities.dropna(subset=list(valid_columns))
+        if valid_columns.issubset(bookmaker_probabilities.columns)
+        else pd.DataFrame(columns=bookmaker_probabilities.columns)
+    )
+    summaries: dict[str, dict[str, object]] = {}
+    for match_id, rows in odds.groupby("match_id", sort=False):
+        timestamps = (
+            pd.to_datetime(rows["odds_timestamp"], errors="coerce", utc=True).dropna()
+            if "odds_timestamp" in rows
+            else pd.Series(dtype="datetime64[ns, UTC]")
+        )
+        valid_match_rows = valid_rows[valid_rows["match_id"] == match_id]
+        bookmakers = sorted({str(value) for value in valid_match_rows["bookmaker"].dropna()})
+        summaries[str(match_id)] = {
+            "odds_timestamp_min": timestamps.min().isoformat() if not timestamps.empty else pd.NA,
+            "odds_timestamp_max": timestamps.max().isoformat() if not timestamps.empty else pd.NA,
+            "latest_odds_timestamp": timestamps.max() if not timestamps.empty else None,
+            "bookmakers_used": "; ".join(bookmakers),
+            "number_of_bookmakers": len(bookmakers),
+            "odds_source_urls": _summarise_text_values(rows, "odds_source_url"),
+            "source_qualities": _summarise_text_values(rows, "source_quality"),
+            "source_notes": _summarise_text_values(rows, "notes"),
+        }
+    return summaries
+
+
+def _ev_gap_vs_modal(
+    recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    matrix: ScoreProbabilityMatrix,
+    qualifier_probabilities: dict[str, float] | None,
+    config: ProjectConfig,
+) -> float:
+    """Compare the chosen prediction EV with the modal-score prediction EV."""
+
+    modal_a, modal_b = recommendation.most_likely_scoreline
+    if isinstance(recommendation, KnockoutPredictionRecommendation):
+        modal = evaluate_knockout_prediction(
+            matrix,
+            modal_a,
+            modal_b,
+            recommendation.best.predicted_qualifier,
+            qualifier_probabilities or {},
+            config.knockout_scoring,
+        )
+    else:
+        modal = evaluate_group_prediction(matrix, modal_a, modal_b)
+    return recommendation.best.expected_points - modal.expected_points
+
+
+def _warning_flags(
+    *,
+    number_of_bookmakers: int,
+    has_over_under: bool,
+    has_btts: bool,
+    has_qualification_odds: bool,
+    knockout: bool,
+    favourite_bucket: str,
+    calibration_loss: float,
+    tail_mass: float,
+    latest_odds_timestamp: pd.Timestamp | None,
+    poor_calibration_loss_threshold: float,
+) -> str:
+    """Build concise model-risk flags without changing any model decisions."""
+
+    flags: list[str] = []
+    if number_of_bookmakers == 1:
+        flags.append("only_one_bookmaker")
+    if not has_over_under:
+        flags.append("no_over_under")
+    if not has_btts:
+        flags.append("no_btts")
+    if calibration_loss > poor_calibration_loss_threshold:
+        flags.append("high_calibration_error")
+    if tail_mass > HIGH_TAIL_MASS_THRESHOLD:
+        flags.append("high_tail_mass")
+    if latest_odds_timestamp is not None and latest_odds_timestamp < pd.Timestamp.now(tz="UTC") - STALE_ODDS_THRESHOLD:
+        flags.append("stale_odds_timestamp")
+    if favourite_bucket == "extreme_favourite":
+        flags.append("extreme_favourite")
+    if knockout and not has_qualification_odds:
+        flags.append("knockout_missing_qualification_odds")
+    return "; ".join(flags)
+
+
 def run_prediction_workflow(
     odds: pd.DataFrame,
     predictions: pd.DataFrame | None = None,
@@ -87,6 +190,7 @@ def run_prediction_workflow(
         config.suspicious_overround_low,
         config.suspicious_overround_high,
     )
+    odds_metadata = _summarise_odds_metadata(odds, bookmaker_probabilities)
     aggregated = aggregate_bookmaker_probabilities(bookmaker_probabilities, config.bookmaker_aggregation_method)
     required_1x2 = {"fair_a_win", "fair_draw", "fair_b_win"}
     if not required_1x2.issubset(aggregated.columns):
@@ -105,6 +209,7 @@ def run_prediction_workflow(
     qualification: dict[str, dict[str, float]] = {}
     for _, row in market.iterrows():
         match_id = str(row["match_id"])
+        metadata = odds_metadata[match_id]
         targets = CalibrationTargets(
             float(row["fair_a_win"]),
             float(row["fair_draw"]),
@@ -121,7 +226,11 @@ def run_prediction_workflow(
         )
         matrices[match_id] = calibration.score_matrix
         notes = list(calibration.warnings)
-        if is_knockout_stage(str(row["stage"])):
+        knockout = is_knockout_stage(str(row["stage"]))
+        has_over_under = pd.notna(row.get("fair_over_2_5"))
+        has_btts = pd.notna(row.get("fair_btts_yes"))
+        has_qualification_odds = pd.notna(row.get("fair_a_qualifies")) and pd.notna(row.get("fair_b_qualifies"))
+        if knockout:
             if pd.notna(row.get("fair_a_qualifies")) and pd.notna(row.get("fair_b_qualifies")):
                 qualifier_probabilities = {
                     str(row["team_a"]): float(row["fair_a_qualifies"]),
@@ -150,6 +259,30 @@ def run_prediction_workflow(
         recommendations[match_id] = recommendation
         model_outcomes = calibration.model_probabilities
         favourite_probability = max(targets.a_win, targets.b_win)
+        bucket = favourite_strength_bucket(favourite_probability)
+        ev_gap_best_vs_second = (
+            recommendation.best.expected_points - recommendation.alternatives[0].expected_points
+            if recommendation.alternatives
+            else pd.NA
+        )
+        ev_gap_best_vs_modal = _ev_gap_vs_modal(
+            recommendation,
+            calibration.score_matrix,
+            qualification.get(match_id),
+            config,
+        )
+        warning_flags = _warning_flags(
+            number_of_bookmakers=int(metadata["number_of_bookmakers"]),
+            has_over_under=has_over_under,
+            has_btts=has_btts,
+            has_qualification_odds=has_qualification_odds,
+            knockout=knockout,
+            favourite_bucket=bucket,
+            calibration_loss=calibration.loss,
+            tail_mass=calibration.score_matrix.tail_probability,
+            latest_odds_timestamp=metadata["latest_odds_timestamp"],
+            poor_calibration_loss_threshold=config.poor_calibration_loss_threshold,
+        )
         report_rows.append(
             {
                 "match_id": match_id,
@@ -164,7 +297,17 @@ def run_prediction_workflow(
                 "market_draw": targets.draw,
                 "market_b_win": targets.b_win,
                 "favourite_probability": favourite_probability,
-                "favourite_bucket": favourite_strength_bucket(favourite_probability),
+                "favourite_bucket": bucket,
+                "odds_timestamp_min": metadata["odds_timestamp_min"],
+                "odds_timestamp_max": metadata["odds_timestamp_max"],
+                "bookmakers_used": metadata["bookmakers_used"],
+                "number_of_bookmakers": metadata["number_of_bookmakers"],
+                "odds_source_urls": metadata["odds_source_urls"],
+                "source_qualities": metadata["source_qualities"],
+                "source_notes": metadata["source_notes"],
+                "has_over_under": has_over_under,
+                "has_btts": has_btts,
+                "has_qualification_odds": has_qualification_odds,
                 "lambda_a": calibration.lambda_a,
                 "lambda_b": calibration.lambda_b,
                 "model_a_win": model_outcomes["a_win"],
@@ -174,6 +317,8 @@ def run_prediction_workflow(
                 "recommended_score": f"{recommendation.best.predicted_score[0]}-{recommendation.best.predicted_score[1]}",
                 "recommended_qualifier": recommended_qualifier,
                 "best_expected_points": recommendation.best.expected_points,
+                "ev_gap_best_vs_second": ev_gap_best_vs_second,
+                "ev_gap_best_vs_modal": ev_gap_best_vs_modal,
                 "exact_score_probability": recommendation.best.exact_score_probability,
                 "correct_goal_difference_probability": recommendation.best.correct_goal_difference_probability,
                 "correct_result_probability": getattr(recommendation.best, "correct_result_probability", pd.NA),
@@ -183,6 +328,7 @@ def run_prediction_workflow(
                 "top_alternatives": _format_alternatives(recommendation),
                 "tail_probability_before_renormalisation": calibration.score_matrix.tail_probability,
                 "warnings": "; ".join(filter(None, [str(row.get("warnings", "")), *notes])),
+                "warning_flags": warning_flags,
             }
         )
     match_report = pd.DataFrame(report_rows)

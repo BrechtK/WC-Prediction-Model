@@ -173,6 +173,8 @@ The creation script preserves an existing manually edited workbook. Pass
 
 Group-stage rows should include `group`; knockout rows may leave it blank.
 Qualification odds are optional but recommended for knockout matches.
+The optional fields `odds_timestamp`, `odds_source_url`, and `source_quality`
+help track where manually collected prices came from and how fresh they are.
 
 The prediction command is:
 
@@ -258,3 +260,28 @@ baseline using realised pool points, not just model fit.
 See `docs/` for formulas, assumptions, research notes, and the staged roadmap.
 For tournament-specific caveats when interpreting domestic backtests, see
 [`docs/stylised_facts.md`](docs/stylised_facts.md).
+
+## Model Caveats And Stylised Facts
+
+Version 1 is intentionally simple and market-implied. Domestic backtests are
+useful for validating the workflow, but they are not perfect analogues for
+neutral-site World Cup matches or extreme international mismatches. Review
+[`docs/stylised_facts.md`](docs/stylised_facts.md) before live use and pay
+particular attention to favourite-strength diagnostics.
+
+## Odds Quality And Timestamps
+
+Odds move over time, and not every source is equally informative. When entering
+live prices, fill in `odds_timestamp`, `odds_source_url`, and `source_quality`
+where possible. Suggested free-text quality labels include `sharp`,
+`major_bookmaker`, `odds_comparison`, `recreational`, and `unknown`. Use the
+latest available odds before the prediction deadline for final submissions.
+The live report flags timestamps older than 24 hours as stale for manual review.
+
+## Future Modelling Roadmap
+
+The next major modelling improvements are robust comparison of margin-removal
+methods and careful use of correct-score odds. Richer O/U and BTTS diagnostics,
+low-score corrections, strategic pool simulation, and xG/Elo challengers follow
+after the market-implied baseline is measured. See
+[`docs/model_roadmap.md`](docs/model_roadmap.md).
