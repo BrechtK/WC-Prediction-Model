@@ -85,6 +85,33 @@ loss = w_1x2 * sum(outcome errors squared)
      + w_btts * (P(X>0 and Y>0) - P_market(BTTS yes))^2
 ```
 
+Independent Poisson remains the baseline scoreline model and the default input
+to live recommendations unless the existing optional correct-score blending
+policy applies.
+
+## Dixon-Coles Low-Score Challenger
+
+Dixon-Coles is an optional challenger to the independent-Poisson baseline. It
+keeps the calibrated Poisson lambdas and applies a dependence correction only
+to the four lowest scorelines:
+
+```text
+tau(0,0) = 1 - lambda_A lambda_B rho
+tau(1,0) = 1 + lambda_B rho
+tau(0,1) = 1 + lambda_A rho
+tau(1,1) = 1 - rho
+tau(x,y) = 1 otherwise
+
+P_DC(x,y) = tau(x,y) P_poisson(x,y)
+```
+
+The finite matrix is normalised before EV optimisation. The configurable
+parameter defaults to `rho=0.0`, which exactly reproduces independent Poisson.
+The live workflow reports Dixon-Coles rho, its recommended scoreline, its EV
+gap, its top five EV predictions, and whether it changes the final live
+recommendation. Dixon-Coles remains diagnostic-only: it must be validated out
+of sample before it can become a default recommendation model.
+
 ## Expected Pool Points
 
 For a group-stage score prediction `(a,b)`:

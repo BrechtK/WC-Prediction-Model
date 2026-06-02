@@ -54,9 +54,10 @@ matter most when translating strong favourites into scoreline predictions.
 
 ## Priority 4: Low-Score Correction / Dixon-Coles
 
-Add an optional low-score adjustment for `0-0`, `1-0`, `0-1`, and `1-1`.
-Evaluate Dixon-Coles or a related correction against the independent-Poisson
-baseline using realised pool points.
+The optional Dixon-Coles low-score adjustment for `0-0`, `1-0`, `0-1`, and
+`1-1` is implemented as a diagnostic challenger. Evaluate it against the
+independent-Poisson baseline using realised pool points before considering any
+promotion to the default recommendation.
 
 ## Priority 5: Strategic Prediction Layer
 

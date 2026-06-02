@@ -103,8 +103,25 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "favourite_probability",
         "ev_gap_best_vs_second",
         "ev_gap_best_vs_modal",
+        "baseline_poisson_recommended_score",
+        "baseline_poisson_ev_gap_best_vs_second",
+        "correct_score_blended_recommended_score",
+        "correct_score_blended_ev_gap_best_vs_second",
+        "final_live_recommended_score",
+        "final_live_ev_gap_best_vs_second",
+        "model_recommendations_agree",
+        "model_disagreement_warning",
+        "dixon_coles_rho",
+        "dixon_coles_recommended_score",
+        "dixon_coles_ev_gap_best_vs_second",
+        "dixon_coles_top_5_ev_predictions",
+        "dixon_coles_changes_recommendation",
         "warning_flags",
     }.issubset(workflow.match_report.columns)
+    assert workflow.match_report["recommended_score"].equals(workflow.match_report["final_live_recommended_score"])
+    assert workflow.match_report["baseline_poisson_recommended_score"].equals(
+        workflow.match_report["dixon_coles_recommended_score"]
+    )
     assert len(pd.read_csv(settings.csv_output_path)) == 2
     assert len(pd.read_excel(settings.xlsx_output_path)) == 2
 

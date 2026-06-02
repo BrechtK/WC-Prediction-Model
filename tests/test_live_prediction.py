@@ -132,6 +132,13 @@ def test_live_runner_processes_all_pastes_writes_outputs_and_prints_submission(t
     assert settings.core_parse_report_path.exists()
     assert settings.correct_score_parse_report_path.exists()
     assert "# Live Prediction Summary" in summary
+    assert "Model comparison:" in summary
+    assert "Baseline Poisson score:" in summary
+    assert "Correct-score blended score:" in summary
+    assert "Final live score:" in summary
+    assert "Dixon-Coles challenger:" in summary
+    assert "Rho: 0.0000" in summary
+    assert "Top 5 EV scorelines:" in summary
     assert "Final recommended submission:" in summary
     assert "M001 M001 Alpha vs M001 Beta:" in summary
 

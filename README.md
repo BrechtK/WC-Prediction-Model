@@ -83,6 +83,12 @@ Correct-score blending is suppressed when fewer than
 partial market remains visible in diagnostics, but recommendations fall back
 to pure Poisson and include a warning.
 
+Dixon-Coles is available as an optional challenger model. It applies a
+configurable low-score dependence correction to `0-0`, `1-0`, `0-1`, and
+`1-1`. The default `dixon_coles_rho=0.0` exactly reproduces independent
+Poisson. Dixon-Coles is reported alongside the baseline and correct-score
+blend, but it does not change the final live recommendation.
+
 ## Install
 
 Create a fresh environment if the existing local environment is stale:
@@ -122,6 +128,13 @@ correct-score blend sensitivity when correct-score odds are available.
 warnings in the default non-strict mode. Use `--strict` to require all four
 paste types, `--match-id M001` to process one match, or
 `--skip-weight-sensitivity` for a faster run without the comparison workbook.
+Use `--dixon-coles-rho -0.08` to inspect a nonzero low-score correction without
+promoting it to the final recommendation.
+
+The live report includes a model-comparison block for each match: baseline
+Poisson score, correct-score blended score, final live score, EV gaps,
+agreement status, disagreement warning, Dixon-Coles rho, Dixon-Coles top-five
+EV predictions, and whether Dixon-Coles changes the recommendation.
 
 ## Run The Example
 
@@ -514,10 +527,11 @@ checked against the competition app before live use.
 
 The initial historical backtester covers group-stage-style scoring and common
 Football-Data-like inputs. Knockout backtesting and richer provider adapters are
-future work. Challenger models such as xG/Elo, Skellam-style, Dixon-Coles,
-bivariate Poisson, and ML models are intentionally absent. Every later
-challenger should be evaluated out of sample against the market-implied
-baseline using realised pool points, not just model fit.
+future work. Dixon-Coles is implemented as a diagnostic low-score challenger.
+Other challenger models such as xG/Elo, Skellam-style, bivariate Poisson, and ML
+models remain future work. Every challenger must be evaluated out of sample
+against the market-implied baseline using realised pool points, not just model
+fit, before it can become the live default.
 
 See `docs/` for formulas, assumptions, research notes, and the staged roadmap.
 For tournament-specific caveats when interpreting domestic backtests, see

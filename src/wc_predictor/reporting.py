@@ -294,6 +294,14 @@ def format_model_inspection_report(match_report: pd.DataFrame) -> str:
                     f"  Most likely scoreline: {row['most_likely_scoreline']}",
                     f"  EV-optimal prediction: {row['recommended_score']}{qualifier} ({row['best_expected_points']:.3f} EV)",
                     f"  Top 5 EV predictions: {row['top_5_ev_predictions']}",
+                    f"  Model comparison: baseline={row['baseline_poisson_recommended_score']} "
+                    f"correct_score_blended={row['correct_score_blended_recommended_score']} "
+                    f"final_live={row['final_live_recommended_score']} "
+                    f"agree={'yes' if row['model_recommendations_agree'] else 'no'}",
+                    f"  Dixon-Coles challenger: rho={row['dixon_coles_rho']:.4f} "
+                    f"recommended={row['dixon_coles_recommended_score']} "
+                    f"changes_final={'yes' if row['dixon_coles_changes_recommendation'] else 'no'}",
+                    f"  Dixon-Coles top 5 EV predictions: {row['dixon_coles_top_5_ev_predictions']}",
                     *correct_score_diagnostics,
                 ]
             )
@@ -356,6 +364,14 @@ def format_world_cup_console_summary(
                     f"  Modal scoreline: {row['most_likely_scoreline']}",
                     f"  EV-optimal scoreline: {row['recommended_score']}{qualifier}",
                     f"  Top 5 EV scorelines: {row['top_5_ev_predictions']}",
+                    f"  Model comparison: baseline={row['baseline_poisson_recommended_score']} "
+                    f"correct_score_blended={row['correct_score_blended_recommended_score']} "
+                    f"final_live={row['final_live_recommended_score']} "
+                    f"agree={'yes' if row['model_recommendations_agree'] else 'no'}",
+                    f"  Dixon-Coles challenger: rho={row['dixon_coles_rho']:.4f} "
+                    f"recommended={row['dixon_coles_recommended_score']} "
+                    f"changes_final={'yes' if row['dixon_coles_changes_recommendation'] else 'no'}",
+                    f"  Dixon-Coles top 5 EV scorelines: {row['dixon_coles_top_5_ev_predictions']}",
                     *correct_score_diagnostics,
                 ]
             )
@@ -427,6 +443,7 @@ def format_world_cup_model_risk_summary(match_report: pd.DataFrame) -> str:
             f"- Matches with lambda_a near a calibration bound: {count_flag('lambda_a_near_bound')}",
             f"- Matches with lambda_b near a calibration bound: {count_flag('lambda_b_near_bound')}",
             f"- Sparse correct-score markets with blending suppressed: {count_flag('correct_score_blend_suppressed_sparse_market')}",
+            f"- Matches with challenger-model recommendation disagreement: {count_flag('challenger_model_recommendations_disagree')}",
             f"- Knockout matches missing qualification odds: {count_flag('knockout_missing_qualification_odds')}",
         ]
     )
@@ -475,6 +492,19 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "most_likely_scoreline",
         "ev_optimal_differs_from_most_likely",
         "top_5_ev_predictions",
+        "baseline_poisson_recommended_score",
+        "baseline_poisson_ev_gap_best_vs_second",
+        "correct_score_blended_recommended_score",
+        "correct_score_blended_ev_gap_best_vs_second",
+        "final_live_recommended_score",
+        "final_live_ev_gap_best_vs_second",
+        "model_recommendations_agree",
+        "model_disagreement_warning",
+        "dixon_coles_rho",
+        "dixon_coles_recommended_score",
+        "dixon_coles_ev_gap_best_vs_second",
+        "dixon_coles_top_5_ev_predictions",
+        "dixon_coles_changes_recommendation",
         "warnings",
         "number_of_bookmakers",
         "has_over_under",
@@ -548,8 +578,17 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "effective_correct_score_poisson_weight",
         "average_correct_score_overround",
         "max_correct_score_overround",
+        "dixon_coles_rho",
     }
-    ev_columns = {"best_expected_points", "ev_gap_best_vs_second", "ev_gap_best_vs_modal"}
+    ev_columns = {
+        "best_expected_points",
+        "ev_gap_best_vs_second",
+        "ev_gap_best_vs_modal",
+        "baseline_poisson_ev_gap_best_vs_second",
+        "correct_score_blended_ev_gap_best_vs_second",
+        "final_live_ev_gap_best_vs_second",
+        "dixon_coles_ev_gap_best_vs_second",
+    }
     wrapped_columns = {
         "top_5_ev_predictions",
         "correct_score_market_top_10",
@@ -568,6 +607,8 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "total_goals_lines_skipped_for_calibration",
         "total_goals_lines_skipped",
         "total_goals_line_diagnostics",
+        "model_disagreement_warning",
+        "dixon_coles_top_5_ev_predictions",
     }
     from openpyxl import load_workbook
 

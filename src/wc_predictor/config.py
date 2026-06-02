@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 
 @dataclass(frozen=True)
 class CalibrationWeights:
@@ -66,6 +68,7 @@ class ProjectConfig:
     correct_score_aggregation_method: str = "auto"
     correct_score_outlier_z_threshold: float = 3.0
     min_scorelines_for_blend: int = 10
+    dixon_coles_rho: float = 0.0
     output_dir: Path = Path("data/processed")
     calibration_weights: CalibrationWeights = field(default_factory=CalibrationWeights)
     knockout_scoring: KnockoutScoringConfig = field(default_factory=KnockoutScoringConfig)
@@ -94,3 +97,5 @@ class ProjectConfig:
             raise ValueError("min_scorelines_for_blend must be a positive integer")
         if self.min_scorelines_for_blend <= 0:
             raise ValueError("min_scorelines_for_blend must be a positive integer")
+        if not np.isfinite(self.dixon_coles_rho):
+            raise ValueError("dixon_coles_rho must be finite")

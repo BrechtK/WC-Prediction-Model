@@ -20,6 +20,7 @@ def main() -> None:
     parser.add_argument("--match-id")
     parser.add_argument("--correct-score-poisson-weight", type=float, default=0.85)
     parser.add_argument("--correct-score-aggregation-method", default="auto")
+    parser.add_argument("--dixon-coles-rho", type=float, default=0.0)
     parser.add_argument("--skip-weight-sensitivity", action="store_true")
     parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
@@ -34,6 +35,7 @@ def main() -> None:
             ProjectConfig(
                 correct_score_poisson_weight=args.correct_score_poisson_weight,
                 correct_score_aggregation_method=args.correct_score_aggregation_method,
+                dixon_coles_rho=args.dixon_coles_rho,
             ),
         )
     except (LivePredictionError, ValueError) as error:

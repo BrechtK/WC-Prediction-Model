@@ -82,7 +82,9 @@ carefully through explicit calibration targets or validated blending.
 Independent Poisson calibration is transparent and useful, but real football
 scores are not perfectly independent Poisson draws. The baseline may misstate
 draws and low-scoring outcomes such as `0-0`, `1-0`, `0-1`, and `1-1`.
-Dixon-Coles or related low-score corrections are natural future extensions.
+Dixon-Coles is available as a diagnostic challenger for this issue. It remains
+outside the default recommendation until out-of-sample validation supports a
+promotion.
 
 ### Total-Goals Environment Matters
 
@@ -104,5 +106,5 @@ favourite strength from the total-goals environment. This is why the
 | Margin-removal choice | Fair probabilities feed every later step. | Transparent proportional baseline. | Backtest additive, power, Shin, and bias-adjusted alternatives. |
 | Favourite-longshot and public-team effects | Extreme prices may be systematically distorted. | Multiple-bookmaker aggregation, source-quality metadata, and extreme-favourite flags. | Prefer sharp closing sources and evaluate bias-adjusted methods. |
 | Correct-score market information | Direct score prices may improve prediction-pool decisions but have high margins. | Optional explicit Poisson-market blending with top-score and KL diagnostics. | Validate blend weights on larger samples and study market coverage quality. |
-| Independent Poisson low-score limitations | Draw and low-score probabilities may be inaccurate. | Calibration warnings, tail diagnostics, and a transparent baseline. | Test Dixon-Coles against independent Poisson. |
+| Independent Poisson low-score limitations | Draw and low-score probabilities may be inaccurate. | Calibration warnings, tail diagnostics, a transparent baseline, and a diagnostic Dixon-Coles challenger. | Validate Dixon-Coles against independent Poisson out of sample. |
 | Total-goals environment | Identical 1X2 prices can imply different optimal scores. | Optional O/U and BTTS calibration targets with presence flags. | Review weights and compare market combinations by favourite bucket. |
