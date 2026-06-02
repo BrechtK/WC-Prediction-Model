@@ -7,6 +7,66 @@ import pandas as pd
 
 from wc_predictor.probabilities import ScoreProbabilityMatrix
 
+COMMON_SCORELINES = {
+    (0, 0),
+    (1, 0),
+    (0, 1),
+    (1, 1),
+    (2, 0),
+    (0, 2),
+    (2, 1),
+    (1, 2),
+}
+
+
+def _scoreline_label(scoreline: tuple[int, int]) -> str:
+    return f"{scoreline[0]}-{scoreline[1]}"
+
+
+def summarise_correct_score_coverage(correct_score_rows: pd.DataFrame) -> dict[str, object]:
+    """Summarise direct-market coverage without changing blend decisions."""
+
+    if correct_score_rows.empty:
+        return {
+            "correct_score_scorelines_count": 0,
+            "correct_score_bookmakers_count": 0,
+            "correct_score_sparse_warning": "",
+        }
+    required = {"bookmaker", "score_a", "score_b"}
+    missing = required - set(correct_score_rows.columns)
+    if missing:
+        raise ValueError(f"Correct-score odds are missing coverage columns: {sorted(missing)}")
+    rows = correct_score_rows.copy()
+    rows["score_a"] = pd.to_numeric(rows["score_a"], errors="coerce")
+    rows["score_b"] = pd.to_numeric(rows["score_b"], errors="coerce")
+    valid = rows.dropna(subset=["bookmaker", "score_a", "score_b"])
+    scorelines = {
+        (int(row["score_a"]), int(row["score_b"]))
+        for _, row in valid.iterrows()
+    }
+    bookmakers = {str(value) for value in valid["bookmaker"].dropna()}
+    warnings: list[str] = []
+    if len(scorelines) < 10:
+        warnings.append(f"fewer_than_10_scorelines:{len(scorelines)}")
+    missing_common = sorted(COMMON_SCORELINES - scorelines)
+    if missing_common:
+        warnings.append("missing_common_scorelines:" + ",".join(_scoreline_label(scoreline) for scoreline in missing_common))
+    scoreline_bookmakers = valid.groupby(["score_a", "score_b"])["bookmaker"].nunique()
+    sparse_scorelines = [
+        _scoreline_label((int(score_a), int(score_b)))
+        for (score_a, score_b), count in scoreline_bookmakers.items()
+        if count < 2
+    ]
+    if sparse_scorelines:
+        warnings.append("scorelines_with_fewer_than_2_bookmakers:" + ",".join(sparse_scorelines))
+    if len(bookmakers) == 1:
+        warnings.append("only_one_correct_score_bookmaker")
+    return {
+        "correct_score_scorelines_count": len(scorelines),
+        "correct_score_bookmakers_count": len(bookmakers),
+        "correct_score_sparse_warning": "; ".join(warnings),
+    }
+
 
 def correct_score_market_matrix(
     processed_correct_score_odds: pd.DataFrame,

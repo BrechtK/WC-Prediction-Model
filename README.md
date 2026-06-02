@@ -230,6 +230,46 @@ Backtest the standard blend-weight grid `{0, 0.25, 0.5, 0.75, 1}` with:
 python scripts/run_correct_score_backtest.py
 ```
 
+### OddsPortal Correct-Score Paste Workflow
+
+Correct-score data can be collected manually without scraping or automating
+website access:
+
+1. Open the match's correct-score market on OddsPortal.
+2. Expand the scorelines so the bookmaker-specific odds are visible.
+3. Copy the visible text.
+4. Paste it into a file such as
+   `data/raw/oddsportal_pastes/M001_correct_score.txt`. The prefix before
+   `_correct_score.txt` must match the World Cup odds workbook's `match_id`.
+5. Parse every pasted file:
+
+```powershell
+python scripts/parse_oddsportal_correct_scores.py
+```
+
+6. Generate recommendations with the parsed correct-score file:
+
+```powershell
+python scripts/run_world_cup_predictions.py `
+  --correct-score-odds data/raw/world_cup_correct_score_odds.csv `
+  --correct-score-poisson-weight 0.85
+```
+
+7. Inspect the parser warnings, correct-score coverage diagnostics, and blend
+   sensitivity before trusting a recommendation change.
+
+The parser ignores page noise and displayed best-odds summaries, preferring
+bookmaker-specific rows. It writes:
+
+- `data/raw/world_cup_correct_score_odds.csv`
+- `data/processed/oddsportal_correct_score_parse_report.csv`
+
+The console summary highlights sparse match coverage, scorelines with missing
+odds, and scorelines with fewer than three bookmaker prices. The recommendation
+report adds correct-score scoreline and bookmaker counts, a sparse-market
+warning, top-ten market and blended scorelines, KL divergence, and the selected
+blend weight.
+
 ### Run From VS Code
 
 For the common historical folders, open one of these files in VS Code and press
@@ -264,6 +304,7 @@ Core modules are deliberately separate:
 | Module | Responsibility |
 | --- | --- |
 | `odds.py`, `margin.py`, `market_data.py` | Input, validation, fair probabilities, aggregation |
+| `oddsportal.py` | Parsing and validation for manually pasted correct-score markets |
 | `probabilities.py`, `score_models.py`, `calibration.py` | Score matrices and market calibration |
 | `scoring_rules.py`, `optimiser.py` | Pure pool scoring and expected-points optimisation |
 | `friends.py`, `results.py`, `reporting.py`, `workflow.py` | Analysis, standings, exports, orchestration |

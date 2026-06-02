@@ -247,6 +247,8 @@ def format_model_inspection_report(match_report: pd.DataFrame) -> str:
         correct_score_diagnostics = (
             [
                 f"  Correct-score Poisson weight: {row['correct_score_poisson_weight']:.2f}",
+                f"  Correct-score coverage: {row['correct_score_scorelines_count']} scorelines / {row['correct_score_bookmakers_count']} bookmakers",
+                f"  Correct-score sparse warning: {row['correct_score_sparse_warning'] or 'none'}",
                 f"  Correct-score market top 10: {row['correct_score_market_top_10']}",
                 f"  Blended score top 10: {row['correct_score_blended_top_10']}",
                 f"  Correct-score market-to-Poisson KL divergence: {row['correct_score_kl_divergence']:.6f}",
@@ -301,6 +303,8 @@ def format_world_cup_console_summary(
         correct_score_diagnostics = (
             [
                 f"  Correct-score blend: poisson_weight={row['correct_score_poisson_weight']:.2f} KL={row['correct_score_kl_divergence']:.6f}",
+                f"  Correct-score coverage: {row['correct_score_scorelines_count']} scorelines / {row['correct_score_bookmakers_count']} bookmakers",
+                f"  Correct-score sparse warning: {row['correct_score_sparse_warning'] or 'none'}",
                 f"  Correct-score market top 10: {row['correct_score_market_top_10']}",
                 f"  Blended score top 10: {row['correct_score_blended_top_10']}",
             ]
@@ -440,6 +444,13 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "has_btts",
         "has_qualification_odds",
         "has_correct_score_market",
+        "correct_score_scorelines_count",
+        "correct_score_bookmakers_count",
+        "correct_score_sparse_warning",
+        "selected_blend_weight",
+        "kl_divergence",
+        "top_10_market_scorelines",
+        "top_10_blended_scorelines",
         "correct_score_poisson_weight",
         "correct_score_kl_divergence",
         "correct_score_market_top_10",
@@ -471,12 +482,17 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "lambda_b",
         "calibration_loss",
         "correct_score_kl_divergence",
+        "kl_divergence",
+        "selected_blend_weight",
     }
     ev_columns = {"best_expected_points", "ev_gap_best_vs_second", "ev_gap_best_vs_modal"}
     wrapped_columns = {
         "top_5_ev_predictions",
         "correct_score_market_top_10",
         "correct_score_blended_top_10",
+        "top_10_market_scorelines",
+        "top_10_blended_scorelines",
+        "correct_score_sparse_warning",
         "warning_flags",
         "warnings",
     }

@@ -14,6 +14,7 @@ from wc_predictor.correct_scores import (
     correct_score_market_matrix,
     format_top_scorelines,
     market_to_poisson_kl_divergence,
+    summarise_correct_score_coverage,
 )
 from wc_predictor.friends import analyse_friend_predictions
 from wc_predictor.odds import aggregate_bookmaker_probabilities, process_bookmaker_odds, process_correct_score_odds
@@ -246,6 +247,7 @@ def run_prediction_workflow(
             else pd.DataFrame()
         )
         if not correct_score_rows.empty:
+            correct_score_coverage = summarise_correct_score_coverage(correct_score_rows)
             correct_score_matrix = correct_score_market_matrix(
                 correct_score_rows,
                 match_id,
@@ -262,6 +264,7 @@ def run_prediction_workflow(
             correct_score_kl_divergence = market_to_poisson_kl_divergence(poisson_matrix, correct_score_matrix)
             has_correct_score_market = True
         else:
+            correct_score_coverage = summarise_correct_score_coverage(correct_score_rows)
             score_matrix = poisson_matrix
             correct_score_market_top_10 = ""
             correct_score_blended_top_10 = ""
@@ -353,9 +356,14 @@ def run_prediction_workflow(
                 "has_qualification_odds": has_qualification_odds,
                 "has_correct_score_market": has_correct_score_market,
                 "correct_score_poisson_weight": config.correct_score_poisson_weight,
+                "selected_blend_weight": config.correct_score_poisson_weight,
+                **correct_score_coverage,
                 "correct_score_market_top_10": correct_score_market_top_10,
                 "correct_score_blended_top_10": correct_score_blended_top_10,
                 "correct_score_kl_divergence": correct_score_kl_divergence,
+                "top_10_market_scorelines": correct_score_market_top_10,
+                "top_10_blended_scorelines": correct_score_blended_top_10,
+                "kl_divergence": correct_score_kl_divergence,
                 "lambda_a": calibration.lambda_a,
                 "lambda_b": calibration.lambda_b,
                 "model_a_win": model_outcomes["a_win"],
