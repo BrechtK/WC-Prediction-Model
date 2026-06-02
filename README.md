@@ -250,6 +250,27 @@ Poisson weight of `0.85`, and writes
 contains detailed method runs and a pivot-style sensitivity sheet showing
 whether each match's recommended score changes across aggregation methods.
 
+### Correct-Score Blend-Weight Sensitivity
+
+Compare live recommendations across Poisson blend weights from `1.00` down to
+`0.00` in steps of `0.05` with:
+
+```powershell
+python scripts/compare_correct_score_weights.py
+```
+
+The script reads `data/raw/world_cup_odds.xlsx` and
+`data/raw/world_cup_correct_score_odds.csv`, then writes
+`data/processed/correct_score_weight_comparison.xlsx`. Its detail sheet shows
+every match and weight. Its sensitivity sheet highlights recommendation
+changes, the first departure from pure Poisson, and the stable weight interval
+around `w=0.85`. A custom grid can be passed with
+`--weights "1,0.85,0.75,0.5,0"`.
+
+This is a live sensitivity diagnostic, not empirical proof of the best blend
+weight. Historical validation is still needed before selecting a weight for
+final submissions.
+
 ### OddsPortal Correct-Score Paste Workflow
 
 Correct-score data can be collected manually without scraping or automating
