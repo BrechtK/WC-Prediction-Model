@@ -133,6 +133,13 @@ def test_world_cup_workflow_optionally_uses_correct_score_blend(tmp_path: Path) 
     assert report["top_10_blended_scorelines"].equals(report["correct_score_blended_top_10"])
     assert report["kl_divergence"].equals(report["correct_score_kl_divergence"])
     assert (report["selected_blend_weight"] == 0.5).all()
+    assert (report["correct_score_aggregation_method"] == "mean").all()
+    assert (report["number_of_correct_score_bookmakers"] == 2).all()
+    assert report["average_correct_score_overround"].gt(0).all()
+    assert report["max_correct_score_overround"].gt(0).all()
+    assert report["outlier_count"].eq(0).all()
+    assert report["scoreline_coverage_warning"].str.contains("missing_common_scorelines").all()
+    assert report["correct_score_bookmaker_diagnostics"].str.contains("overround=").all()
 
 
 def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -> None:

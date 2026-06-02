@@ -60,6 +60,8 @@ class ProjectConfig:
     suspicious_overround_high: float = 1.20
     poor_calibration_loss_threshold: float = 0.01
     correct_score_poisson_weight: float = 1.0
+    correct_score_aggregation_method: str = "auto"
+    correct_score_outlier_z_threshold: float = 3.0
     output_dir: Path = Path("data/processed")
     calibration_weights: CalibrationWeights = field(default_factory=CalibrationWeights)
     knockout_scoring: KnockoutScoringConfig = field(default_factory=KnockoutScoringConfig)
@@ -69,3 +71,18 @@ class ProjectConfig:
     def __post_init__(self) -> None:
         if not 0 <= self.correct_score_poisson_weight <= 1:
             raise ValueError("correct_score_poisson_weight must lie between zero and one")
+        valid_correct_score_aggregation_methods = {
+            "auto",
+            "mean",
+            "median",
+            "trimmed_mean",
+            "winsorized_mean",
+            "reliability_weighted_mean",
+        }
+        if self.correct_score_aggregation_method not in valid_correct_score_aggregation_methods:
+            raise ValueError(
+                "correct_score_aggregation_method must be one of "
+                f"{sorted(valid_correct_score_aggregation_methods)}"
+            )
+        if self.correct_score_outlier_z_threshold <= 0:
+            raise ValueError("correct_score_outlier_z_threshold must be positive")

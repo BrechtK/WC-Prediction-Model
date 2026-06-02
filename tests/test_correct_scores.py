@@ -10,6 +10,7 @@ from wc_predictor.correct_score_backtesting import (
     backtest_correct_score_blend_weights,
 )
 from wc_predictor.correct_scores import (
+    aggregate_correct_score_market,
     blend_score_matrices,
     correct_score_market_matrix,
     format_top_scorelines,
@@ -44,6 +45,125 @@ def test_correct_score_market_matrix_aggregates_margin_adjusted_bookmakers() -> 
     assert matrix.probabilities[0, 0] == pytest.approx(0.5)
     assert matrix.probabilities[1, 0] == pytest.approx(0.5)
     assert matrix.probabilities[0, 1] == pytest.approx(0.0)
+
+
+def test_one_bookmaker_full_grid_is_normalised_before_aggregation() -> None:
+    processed = process_correct_score_odds(
+        pd.DataFrame(
+            [
+                {"match_id": "M1", "bookmaker": "A", "score_a": 0, "score_b": 0, "decimal_odds": 2.0},
+                {"match_id": "M1", "bookmaker": "A", "score_a": 1, "score_b": 0, "decimal_odds": 4.0},
+            ]
+        )
+    )
+
+    aggregation = aggregate_correct_score_market(processed, "M1", max_goals=1)
+
+    assert aggregation.aggregation_method == "mean"
+    assert aggregation.matrix.grid_probability == pytest.approx(1.0)
+    assert aggregation.matrix.probabilities[0, 0] == pytest.approx(2 / 3)
+    assert aggregation.matrix.probabilities[1, 0] == pytest.approx(1 / 3)
+
+
+def test_two_bookmakers_aggregate_fair_probabilities_not_decimal_odds() -> None:
+    processed = process_correct_score_odds(
+        pd.DataFrame(
+            [
+                {"match_id": "M1", "bookmaker": "A", "score_a": 0, "score_b": 0, "decimal_odds": 2.0},
+                {"match_id": "M1", "bookmaker": "A", "score_a": 1, "score_b": 0, "decimal_odds": 4.0},
+                {"match_id": "M1", "bookmaker": "B", "score_a": 0, "score_b": 0, "decimal_odds": 4.0},
+                {"match_id": "M1", "bookmaker": "B", "score_a": 1, "score_b": 0, "decimal_odds": 4.0},
+            ]
+        )
+    )
+
+    aggregation = aggregate_correct_score_market(processed, "M1", max_goals=1, method="mean")
+    incorrectly_averaged_decimal_odds_probability = (1 / 3.0) / ((1 / 3.0) + (1 / 4.0))
+
+    assert aggregation.matrix.probabilities[0, 0] == pytest.approx(((2 / 3) + 0.5) / 2)
+    assert aggregation.matrix.probabilities[1, 0] == pytest.approx(((1 / 3) + 0.5) / 2)
+    assert aggregation.matrix.probabilities[0, 0] != pytest.approx(incorrectly_averaged_decimal_odds_probability)
+
+
+def test_out_of_grid_scorelines_contribute_to_margin_removal_and_are_reported() -> None:
+    processed = process_correct_score_odds(
+        pd.DataFrame(
+            [
+                {"match_id": "M1", "bookmaker": "A", "score_a": 0, "score_b": 0, "decimal_odds": 2.0},
+                {"match_id": "M1", "bookmaker": "A", "score_a": 10, "score_b": 0, "decimal_odds": 4.0},
+            ]
+        )
+    )
+
+    aggregation = aggregate_correct_score_market(processed, "M1", max_goals=1)
+
+    assert aggregation.bookmaker_diagnostics.loc[0, "correct_score_overround"] == pytest.approx(0.75)
+    assert aggregation.matrix.probabilities[0, 0] == pytest.approx(1.0)
+    assert aggregation.diagnostics["out_of_grid_scorelines_count"] == 1
+    assert "out_of_grid_scorelines:10-0" in aggregation.diagnostics["scoreline_coverage_warning"]
+
+
+def _processed_market_with_one_bad_bookmaker() -> pd.DataFrame:
+    rows = []
+    for bookmaker in ("A", "B", "C", "D"):
+        rows.extend(
+            [
+                {"match_id": "M1", "bookmaker": bookmaker, "score_a": 0, "score_b": 0, "decimal_odds": 2.0},
+                {"match_id": "M1", "bookmaker": bookmaker, "score_a": 1, "score_b": 0, "decimal_odds": 2.0},
+            ]
+        )
+    rows.extend(
+        [
+            {"match_id": "M1", "bookmaker": "Outlier", "score_a": 0, "score_b": 0, "decimal_odds": 100.0},
+            {"match_id": "M1", "bookmaker": "Outlier", "score_a": 1, "score_b": 0, "decimal_odds": 2.0},
+        ]
+    )
+    return process_correct_score_odds(pd.DataFrame(rows))
+
+
+def test_scoreline_log_probability_outliers_are_detected() -> None:
+    aggregation = aggregate_correct_score_market(_processed_market_with_one_bad_bookmaker(), "M1", max_goals=1)
+
+    assert aggregation.aggregation_method == "winsorized_mean"
+    assert aggregation.diagnostics["outlier_count"] == 2
+    assert "Outlier:0-0" in aggregation.diagnostics["top_outlier_examples"]
+
+
+def test_winsorized_aggregation_reduces_outlier_impact() -> None:
+    processed = _processed_market_with_one_bad_bookmaker()
+
+    mean = aggregate_correct_score_market(processed, "M1", max_goals=1, method="mean").matrix
+    winsorized = aggregate_correct_score_market(processed, "M1", max_goals=1, method="winsorized_mean").matrix
+
+    assert abs(winsorized.probabilities[0, 0] - 0.5) < abs(mean.probabilities[0, 0] - 0.5)
+
+
+def test_median_aggregation_is_robust_to_one_bad_bookmaker() -> None:
+    median = aggregate_correct_score_market(
+        _processed_market_with_one_bad_bookmaker(),
+        "M1",
+        max_goals=1,
+        method="median",
+    ).matrix
+
+    assert median.probabilities[0, 0] == pytest.approx(0.5)
+    assert median.probabilities[1, 0] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["mean", "median", "trimmed_mean", "winsorized_mean", "reliability_weighted_mean"],
+)
+def test_supported_correct_score_aggregation_methods_return_probability_matrix(method: str) -> None:
+    aggregation = aggregate_correct_score_market(
+        _processed_market_with_one_bad_bookmaker(),
+        "M1",
+        max_goals=1,
+        method=method,
+    )
+
+    assert aggregation.aggregation_method == method
+    assert aggregation.matrix.grid_probability == pytest.approx(1.0)
 
 
 def test_correct_score_blend_respects_endpoint_weights_and_reports_kl() -> None:
@@ -99,6 +219,11 @@ def test_poisson_workflow_is_unchanged_when_correct_score_market_is_absent() -> 
 def test_correct_score_poisson_weight_must_be_between_zero_and_one(weight: float) -> None:
     with pytest.raises(ValueError, match="between zero and one"):
         ProjectConfig(correct_score_poisson_weight=weight)
+
+
+def test_correct_score_aggregation_method_must_be_supported() -> None:
+    with pytest.raises(ValueError, match="correct_score_aggregation_method"):
+        ProjectConfig(correct_score_aggregation_method="average_decimal_odds")
 
 
 def test_correct_score_blend_weight_backtest_produces_ranked_comparison() -> None:

@@ -197,6 +197,16 @@ Poisson baseline, not an automatic upgrade.
 
 The current proportional method is a transparent Version 1 baseline. It should
 be applied within a coherent bookmaker market before bookmaker aggregation.
+For correct-score markets, the workflow converts each bookmaker's odds to raw
+implied probabilities, removes that bookmaker's overround across its full
+available score grid, and only then aggregates fair score probabilities across
+bookmakers. It never averages decimal odds directly.
+
+The default robust aggregation policy uses a winsorized mean for five or more
+bookmakers, a median for three or four bookmakers, and a mean for one or two
+bookmakers. Scoreline-level outliers are detected on log fair probabilities
+using the median and median absolute deviation. They remain visible in
+diagnostics rather than being silently discarded.
 
 Correct-score markets are a good candidate for future sensitivity checks
 because proportional normalisation may not fully address favourite-longshot
@@ -313,13 +323,14 @@ The project already reports:
 - warning flags;
 - timestamps and bookmaker counts.
 
-Before correct-score blending becomes a routine live input, add or inspect:
+Before correct-score blending becomes a routine live input, inspect:
 
 | Diagnostic | Why it matters |
 | --- | --- |
 | Number of collected scorelines per bookmaker | Exposes sparse inputs. |
 | Score-grid range and standard-score coverage | Detects missing common outcomes such as `0-0`, `1-0`, `0-1`, and `1-1`. |
 | Correct-score overround per bookmaker | Reveals suspiciously incomplete or unusually expensive markets. |
+| Aggregation method and outlier examples | Makes robust aggregation decisions auditable. |
 | Presence of an unrepresented `other` bucket | Prevents silent omission of tail mass. |
 | Coherent bookmaker versus composite-source label | Stops best-price baskets from being treated as ordinary markets. |
 | Correct-score timestamp and age | Highlights stale direct-market data. |

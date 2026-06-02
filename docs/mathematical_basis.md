@@ -88,12 +88,41 @@ Correct-score odds may be supplied in long format:
 match_id,bookmaker,score_a,score_b,decimal_odds
 ```
 
-Margin is removed within each bookmaker's correct-score market. The fair
-bookmaker matrices are averaged to produce:
+Margin is removed within each bookmaker's full available correct-score market
+before bookmaker aggregation. For bookmaker `b` and scoreline `s`:
+
+```text
+q_b(s) = 1 / O_b(s)
+R_b    = sum_s q_b(s)
+p_b(s) = q_b(s) / R_b
+```
+
+Decimal odds are never averaged directly. Doing so would mix prices with
+different margins and exploit neither their probability scale nor their
+coherent bookmaker-level market structure.
+
+The fair bookmaker probabilities are then aggregated scoreline by scoreline to
+produce:
 
 ```text
 P_market(score)
 ```
+
+Available aggregation methods are `mean`, `median`, `trimmed_mean`,
+`winsorized_mean`, and `reliability_weighted_mean`. The default `auto` policy
+uses:
+
+```text
+5+ bookmakers  -> winsorized_mean
+3-4 bookmakers -> median
+1-2 bookmakers -> mean
+```
+
+Outlier detection operates on `log(p_b(s))` within each scoreline using the
+median and median absolute deviation. Observations with robust z-scores above
+the configured threshold are reported. They are not deleted by default:
+`winsorized_mean` caps their influence, while `reliability_weighted_mean`
+downweights them.
 
 When this optional market is supplied, optimisation uses:
 
@@ -113,6 +142,15 @@ D_KL(P_market || P_poisson)
 The direct market matrix is conditional on the explicitly supplied scorelines.
 Correct-score markets should therefore be collected consistently across
 bookmakers and interpreted with care because their margins can be substantial.
+Best odds for individual scorelines are not enough to recover fair
+probabilities: the best prices may come from different bookmakers and do not
+form one coherent market with a meaningful overround.
+
+All supplied correct-score odds contribute to each bookmaker's overround and
+fair probabilities, including long-shot scores beyond the configured finite
+matrix. When the direct market is converted into the finite EV matrix,
+out-of-grid scorelines are omitted, the represented grid is renormalised, and
+the omitted scoreline labels are reported as a coverage warning.
 
 ## Finite Score Grid And Tail Mass
 

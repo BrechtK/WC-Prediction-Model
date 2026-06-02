@@ -60,14 +60,21 @@ probability is reported before renormalisation; EV optimisation uses the
 renormalised finite grid and is conditional on its represented scores.
 
 Correct-score odds can optionally be loaded and margin-adjusted in long format.
-When supplied, they are aggregated into a direct scoreline market distribution
-and blended with the Poisson matrix:
+When supplied, margin removal happens separately within each bookmaker's full
+available score grid. The resulting fair probabilities are aggregated into a
+direct scoreline market distribution and blended with the Poisson matrix:
 
 ```text
 P_final = w * P_poisson + (1 - w) * P_market
 ```
 
 The default `w=1.0` preserves the Poisson-only baseline.
+
+Correct-score decimal odds are never averaged directly. The default
+`correct_score_aggregation_method=auto` uses a winsorized mean with at least
+five bookmakers, a median with three or four bookmakers, and a mean with one
+or two bookmakers. Scoreline-level outliers are flagged using log fair
+probabilities and robust median/MAD diagnostics.
 
 ## Install
 
@@ -230,6 +237,19 @@ Backtest the standard blend-weight grid `{0, 0.25, 0.5, 0.75, 1}` with:
 python scripts/run_correct_score_backtest.py
 ```
 
+Compare live recommendations across all supported correct-score aggregation
+methods with:
+
+```powershell
+python scripts/compare_correct_score_aggregation_methods.py
+```
+
+This uses `data/raw/world_cup_correct_score_odds.csv`, applies a default
+Poisson weight of `0.85`, and writes
+`data/processed/correct_score_aggregation_comparison.xlsx`. The workbook
+contains detailed method runs and a pivot-style sensitivity sheet showing
+whether each match's recommended score changes across aggregation methods.
+
 ### OddsPortal Correct-Score Paste Workflow
 
 Correct-score data can be collected manually without scraping or automating
@@ -268,7 +288,8 @@ The console summary highlights sparse match coverage, scorelines with missing
 odds, and scorelines with fewer than three bookmaker prices. The recommendation
 report adds correct-score scoreline and bookmaker counts, a sparse-market
 warning, top-ten market and blended scorelines, KL divergence, and the selected
-blend weight.
+blend weight. It also reports the robust aggregation method, bookmaker
+overround diagnostics, scoreline coverage warnings, and detected outliers.
 
 ### Run From VS Code
 

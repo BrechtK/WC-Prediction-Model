@@ -17,12 +17,16 @@ def main() -> None:
     parser.add_argument("--odds", default="data/examples/example_odds.csv")
     parser.add_argument("--correct-score-odds")
     parser.add_argument("--correct-score-poisson-weight", type=float, default=1.0)
+    parser.add_argument("--correct-score-aggregation-method", default="auto")
     args = parser.parse_args()
 
     correct_score_odds = load_correct_score_odds(args.correct_score_odds) if args.correct_score_odds else None
     workflow = run_prediction_workflow(
         load_odds(args.odds),
-        config=ProjectConfig(correct_score_poisson_weight=args.correct_score_poisson_weight),
+        config=ProjectConfig(
+            correct_score_poisson_weight=args.correct_score_poisson_weight,
+            correct_score_aggregation_method=args.correct_score_aggregation_method,
+        ),
         correct_score_odds=correct_score_odds,
     )
     print(format_model_inspection_report(workflow.match_report))

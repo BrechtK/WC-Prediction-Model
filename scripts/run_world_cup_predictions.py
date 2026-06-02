@@ -20,6 +20,7 @@ def main() -> None:
     parser.add_argument("--odds")
     parser.add_argument("--correct-score-odds")
     parser.add_argument("--correct-score-poisson-weight", type=float, default=1.0)
+    parser.add_argument("--correct-score-aggregation-method", default="auto")
     parser.add_argument("--csv-output", default="data/processed/world_cup_recommendations.csv")
     parser.add_argument("--xlsx-output", default="data/processed/world_cup_recommendations.xlsx")
     parser.add_argument("--submission-xlsx-output", default="data/processed/world_cup_submission_sheet.xlsx")
@@ -34,7 +35,10 @@ def main() -> None:
                 xlsx_output_path=Path(args.xlsx_output),
                 submission_xlsx_output_path=Path(args.submission_xlsx_output),
             ),
-            ProjectConfig(correct_score_poisson_weight=args.correct_score_poisson_weight),
+            ProjectConfig(
+                correct_score_poisson_weight=args.correct_score_poisson_weight,
+                correct_score_aggregation_method=args.correct_score_aggregation_method,
+            ),
         )
     except FileNotFoundError:
         if args.correct_score_odds and not Path(args.correct_score_odds).exists():

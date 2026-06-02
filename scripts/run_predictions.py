@@ -18,12 +18,14 @@ def main() -> None:
     parser.add_argument("--predictions", default="data/examples/example_predictions.csv")
     parser.add_argument("--correct-score-odds")
     parser.add_argument("--correct-score-poisson-weight", type=float, default=1.0)
+    parser.add_argument("--correct-score-aggregation-method", default="auto")
     parser.add_argument("--output-dir", default="data/processed")
     args = parser.parse_args()
 
     config = ProjectConfig(
         output_dir=args.output_dir,
         correct_score_poisson_weight=args.correct_score_poisson_weight,
+        correct_score_aggregation_method=args.correct_score_aggregation_method,
     )
     correct_score_odds = load_correct_score_odds(args.correct_score_odds) if args.correct_score_odds else None
     workflow = run_prediction_workflow(

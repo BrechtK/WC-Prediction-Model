@@ -101,3 +101,8 @@ def test_correct_score_odds_are_margin_adjusted() -> None:
     )
     processed = process_correct_score_odds(odds)
     assert processed["fair_score_probability"].sum() == pytest.approx(1.0)
+    assert processed["correct_score_overround"].unique().tolist() == pytest.approx([0.75])
+    assert (processed["number_of_scorelines"] == 2).all()
+    assert processed["common_scoreline_coverage"].unique().tolist() == pytest.approx([0.25])
+    assert not processed["has_other_bucket"].any()
+    assert processed["suspicious_overround_warning"].str.contains("below").all()

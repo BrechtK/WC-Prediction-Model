@@ -10,8 +10,9 @@ import pandas as pd
 from wc_predictor.calibration import CalibrationTargets, calibrate_poisson_model
 from wc_predictor.config import ProjectConfig
 from wc_predictor.correct_scores import (
+    aggregate_correct_score_market,
     blend_score_matrices,
-    correct_score_market_matrix,
+    format_correct_score_bookmaker_diagnostics,
     format_top_scorelines,
     market_to_poisson_kl_divergence,
     summarise_correct_score_coverage,
@@ -248,10 +249,17 @@ def run_prediction_workflow(
         )
         if not correct_score_rows.empty:
             correct_score_coverage = summarise_correct_score_coverage(correct_score_rows)
-            correct_score_matrix = correct_score_market_matrix(
+            correct_score_aggregation = aggregate_correct_score_market(
                 correct_score_rows,
                 match_id,
                 config.max_goals_score_matrix,
+                config.correct_score_aggregation_method,
+                config.correct_score_outlier_z_threshold,
+            )
+            correct_score_matrix = correct_score_aggregation.matrix
+            correct_score_aggregation_diagnostics = correct_score_aggregation.diagnostics
+            correct_score_bookmaker_diagnostics = format_correct_score_bookmaker_diagnostics(
+                correct_score_aggregation.bookmaker_diagnostics
             )
             correct_score_matrices[match_id] = correct_score_matrix
             score_matrix = blend_score_matrices(
@@ -265,6 +273,17 @@ def run_prediction_workflow(
             has_correct_score_market = True
         else:
             correct_score_coverage = summarise_correct_score_coverage(correct_score_rows)
+            correct_score_aggregation_diagnostics = {
+                "correct_score_aggregation_method": "",
+                "number_of_correct_score_bookmakers": 0,
+                "average_correct_score_overround": pd.NA,
+                "max_correct_score_overround": pd.NA,
+                "outlier_count": 0,
+                "top_outlier_examples": "",
+                "scoreline_coverage_warning": "",
+                "out_of_grid_scorelines_count": 0,
+            }
+            correct_score_bookmaker_diagnostics = ""
             score_matrix = poisson_matrix
             correct_score_market_top_10 = ""
             correct_score_blended_top_10 = ""
@@ -358,6 +377,8 @@ def run_prediction_workflow(
                 "correct_score_poisson_weight": config.correct_score_poisson_weight,
                 "selected_blend_weight": config.correct_score_poisson_weight,
                 **correct_score_coverage,
+                **correct_score_aggregation_diagnostics,
+                "correct_score_bookmaker_diagnostics": correct_score_bookmaker_diagnostics,
                 "correct_score_market_top_10": correct_score_market_top_10,
                 "correct_score_blended_top_10": correct_score_blended_top_10,
                 "correct_score_kl_divergence": correct_score_kl_divergence,

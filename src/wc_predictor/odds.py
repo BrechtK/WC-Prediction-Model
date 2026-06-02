@@ -30,6 +30,17 @@ RAW_COLUMNS: dict[str, tuple[str, ...]] = {
     "qualification": ("raw_a_qualifies", "raw_b_qualifies"),
 }
 
+COMMON_CORRECT_SCORELINES = {
+    (0, 0),
+    (1, 0),
+    (0, 1),
+    (1, 1),
+    (2, 0),
+    (0, 2),
+    (2, 1),
+    (1, 2),
+}
+
 
 def decimal_odds_to_implied_probabilities(decimal_odds: Sequence[float]) -> np.ndarray:
     """Convert valid decimal odds O_i into raw implied probabilities 1 / O_i."""
@@ -160,11 +171,35 @@ def process_correct_score_odds(
     for (match_id, bookmaker), group in correct_score_odds.groupby(["match_id", "bookmaker"], sort=False):
         fair = fair_probabilities_from_decimal_odds(group["decimal_odds"].tolist(), margin_method)
         processed = group.copy()
+        scorelines = set(zip(group["score_a"].astype(int), group["score_b"].astype(int)))
+        has_other_bucket = (
+            group["has_other_bucket"].fillna(False).astype(str).str.strip().str.lower().isin({"true", "1", "yes"}).any()
+            if "has_other_bucket" in group
+            else False
+        )
         processed["raw_implied_probability"] = fair.raw_probabilities
         processed["fair_score_probability"] = fair.fair_probabilities
         processed["market_overround"] = fair.overround
+        processed["correct_score_overround"] = fair.overround
+        processed["number_of_scorelines"] = len(scorelines)
+        processed["common_scoreline_coverage"] = len(scorelines & COMMON_CORRECT_SCORELINES) / len(COMMON_CORRECT_SCORELINES)
+        processed["has_other_bucket"] = bool(has_other_bucket)
+        processed["suspicious_overround_warning"] = "; ".join(fair.warnings)
         processed["warnings"] = "; ".join(fair.warnings)
         frames.append(processed)
     if not frames:
-        return pd.DataFrame(columns=[*correct_score_odds.columns, "raw_implied_probability", "fair_score_probability", "market_overround", "warnings"])
+        return pd.DataFrame(
+            columns=[
+                *correct_score_odds.columns,
+                "raw_implied_probability",
+                "fair_score_probability",
+                "market_overround",
+                "correct_score_overround",
+                "number_of_scorelines",
+                "common_scoreline_coverage",
+                "has_other_bucket",
+                "suspicious_overround_warning",
+                "warnings",
+            ]
+        )
     return pd.concat(frames, ignore_index=True)
