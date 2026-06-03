@@ -33,6 +33,18 @@ from wc_predictor.oddsportal_core import (
     OddsPortalCoreParseResult,
     parse_oddsportal_core_odds_folder,
 )
+from wc_predictor.oddsportal_schedule import (
+    DEFAULT_SCHEDULE_INPUT_PATH,
+    DEFAULT_SCHEDULE_OUTPUT_PATH,
+    DEFAULT_SCHEDULE_REPORT_PATH,
+    OddsPortalScheduleParseResult,
+    prepare_schedule_metadata,
+)
+from wc_predictor.paths import (
+    OUTPUT_PREDICTIONS_CSV_PATH,
+    OUTPUT_PREDICTIONS_XLSX_PATH,
+    OUTPUT_SUBMISSION_XLSX_PATH,
+)
 from wc_predictor.world_cup import WorldCupPredictionSettings, run_world_cup_predictions
 from wc_predictor.workflow import PredictionWorkflowResult
 
@@ -56,14 +68,18 @@ class LivePredictionSettings:
     strict: bool = False
     skip_weight_sensitivity: bool = False
     metadata_odds_path: Path | None = DEFAULT_METADATA_ODDS_PATH
+    schedule_input_path: Path | None = DEFAULT_SCHEDULE_INPUT_PATH
+    schedule_output_path: Path = DEFAULT_SCHEDULE_OUTPUT_PATH
+    schedule_parse_report_path: Path = DEFAULT_SCHEDULE_REPORT_PATH
+    skip_schedule_parse: bool = False
     core_odds_output_path: Path = DEFAULT_CORE_OUTPUT_PATH
     total_goals_output_path: Path = DEFAULT_TOTAL_GOALS_OUTPUT_PATH
     core_parse_report_path: Path = DEFAULT_CORE_REPORT_PATH
     correct_score_output_path: Path = DEFAULT_CORRECT_SCORE_OUTPUT_PATH
     correct_score_parse_report_path: Path = DEFAULT_CORRECT_SCORE_REPORT_PATH
-    recommendations_csv_output_path: Path = Path("data/processed/world_cup_recommendations.csv")
-    recommendations_xlsx_output_path: Path = Path("data/processed/world_cup_recommendations.xlsx")
-    submission_xlsx_output_path: Path = Path("data/processed/world_cup_submission_sheet.xlsx")
+    recommendations_csv_output_path: Path = OUTPUT_PREDICTIONS_CSV_PATH
+    recommendations_xlsx_output_path: Path = OUTPUT_PREDICTIONS_XLSX_PATH
+    submission_xlsx_output_path: Path = OUTPUT_SUBMISSION_XLSX_PATH
     weight_comparison_output_path: Path = DEFAULT_WEIGHT_COMPARISON_OUTPUT_PATH
     weight_sensitivity_weights: Sequence[float] = DEFAULT_CORRECT_SCORE_WEIGHTS
 
@@ -78,6 +94,28 @@ class LivePredictionResult:
     workflow: PredictionWorkflowResult
     weight_comparison: CorrectScoreWeightComparison | None
     paste_warnings: dict[str, tuple[str, ...]]
+    schedule_metadata: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class ParsedLivePredictionInputs:
+    """Parsed OddsPortal inputs shared by live recommendations and diagnostics."""
+
+    settings: LivePredictionSettings
+    selected_match_ids: tuple[str, ...]
+    core_parse: OddsPortalCoreParseResult
+    correct_score_parse: OddsPortalParseResult
+    paste_warnings: dict[str, tuple[str, ...]]
+    schedule_metadata: pd.DataFrame
+    schedule_parse: OddsPortalScheduleParseResult | None
+
+    @property
+    def has_total_goals(self) -> bool:
+        return not self.core_parse.total_goals_odds.empty
+
+    @property
+    def has_correct_scores(self) -> bool:
+        return not self.correct_score_parse.odds.empty
 
 
 def discover_live_paste_markets(input_folder: str | Path) -> dict[str, set[str]]:
@@ -190,25 +228,10 @@ def run_live_prediction(
 
     settings = settings or LivePredictionSettings()
     config = config or ProjectConfig(correct_score_poisson_weight=0.85)
-    selected, mutable_warnings = _select_and_validate_pastes(settings.input_folder, settings.match_id, settings.strict)
-    core_parse = parse_oddsportal_core_odds_folder(
-        settings.input_folder,
-        settings.core_odds_output_path,
-        settings.core_parse_report_path,
-        total_goals_output_path=settings.total_goals_output_path,
-        metadata_odds_path=settings.metadata_odds_path,
-        match_ids=selected,
-    )
-    correct_score_parse = parse_oddsportal_correct_score_folder(
-        settings.input_folder,
-        settings.correct_score_output_path,
-        settings.correct_score_parse_report_path,
-        match_ids=selected,
-    )
-    _validate_parsed_markets(selected, core_parse, correct_score_parse, settings.strict, mutable_warnings)
-
-    has_total_goals = not core_parse.total_goals_odds.empty
-    has_correct_scores = not correct_score_parse.odds.empty
+    parsed = parse_live_prediction_inputs(settings)
+    has_total_goals = parsed.has_total_goals
+    has_correct_scores = parsed.has_correct_scores
+    mutable_warnings = {match_id: list(values) for match_id, values in parsed.paste_warnings.items()}
     workflow = run_world_cup_predictions(
         WorldCupPredictionSettings(
             input_path=settings.core_odds_output_path,
@@ -232,16 +255,57 @@ def run_live_prediction(
         )
         export_correct_score_weight_comparison(weight_comparison, settings.weight_comparison_output_path)
     elif not has_correct_scores and not settings.skip_weight_sensitivity:
-        for selected_match_id in selected:
+        for selected_match_id in parsed.selected_match_ids:
             _append_warning(mutable_warnings, selected_match_id, "weight_sensitivity_skipped:no_correct_score_odds")
 
     return LivePredictionResult(
         settings,
-        core_parse,
-        correct_score_parse,
+        parsed.core_parse,
+        parsed.correct_score_parse,
         workflow,
         weight_comparison,
         {match_id: tuple(values) for match_id, values in mutable_warnings.items()},
+        parsed.schedule_metadata,
+    )
+
+
+def parse_live_prediction_inputs(
+    settings: LivePredictionSettings | None = None,
+) -> ParsedLivePredictionInputs:
+    """Parse and validate the live OddsPortal pastes without running recommendations."""
+
+    settings = settings or LivePredictionSettings()
+    prepared_schedule = prepare_schedule_metadata(
+        settings.schedule_input_path,
+        settings.schedule_output_path,
+        settings.schedule_parse_report_path,
+        existing_metadata_path=settings.metadata_odds_path,
+        skip_parse=settings.skip_schedule_parse,
+    )
+    selected, mutable_warnings = _select_and_validate_pastes(settings.input_folder, settings.match_id, settings.strict)
+    core_parse = parse_oddsportal_core_odds_folder(
+        settings.input_folder,
+        settings.core_odds_output_path,
+        settings.core_parse_report_path,
+        total_goals_output_path=settings.total_goals_output_path,
+        metadata_odds_path=prepared_schedule.metadata_path,
+        match_ids=selected,
+    )
+    correct_score_parse = parse_oddsportal_correct_score_folder(
+        settings.input_folder,
+        settings.correct_score_output_path,
+        settings.correct_score_parse_report_path,
+        match_ids=selected,
+    )
+    _validate_parsed_markets(selected, core_parse, correct_score_parse, settings.strict, mutable_warnings)
+    return ParsedLivePredictionInputs(
+        settings,
+        selected,
+        core_parse,
+        correct_score_parse,
+        {match_id: tuple(values) for match_id, values in mutable_warnings.items()},
+        prepared_schedule.schedule,
+        prepared_schedule.parse_result,
     )
 
 
@@ -287,6 +351,15 @@ def format_live_prediction_summary(result: LivePredictionResult) -> str:
     """Render a concise submission-focused live terminal report."""
 
     sections = ["# Live Prediction Summary"]
+    if not result.schedule_metadata.empty:
+        selected = set(result.workflow.match_report["match_id"].astype(str))
+        schedule = result.schedule_metadata[result.schedule_metadata["match_id"].astype(str).isin(selected)]
+        sections.extend(
+            [
+                "Schedule mapping:",
+                *(f"  {row['match_id']} | {row['team_a']} vs {row['team_b']}" for _, row in schedule.iterrows()),
+            ]
+        )
     final_submissions: list[str] = []
     for _, row in result.workflow.match_report.iterrows():
         match_id = str(row["match_id"])
@@ -335,6 +408,32 @@ def format_live_prediction_summary(result: LivePredictionResult) -> str:
                     f"  EV-optimal differs from modal: {'yes' if row['ev_optimal_differs_from_most_likely'] else 'no'}",
                     f"  Top 5 EV scorelines: {row['top_5_ev_predictions']}",
                     f"  EV gap best vs second-best: {_format_value(row['ev_gap_best_vs_second'], 3)}",
+                    "Model comparison:",
+                    f"  Baseline Poisson score: {row['baseline_poisson_recommended_score']}",
+                    f"  Baseline Poisson EV gap: {_format_value(row['baseline_poisson_ev_gap_best_vs_second'], 3)}",
+                    f"  Correct-score blended score: {row['correct_score_blended_recommended_score']}",
+                    f"  Correct-score blended EV gap: {_format_value(row['correct_score_blended_ev_gap_best_vs_second'], 3)}",
+                    f"  Final live score: {row['final_live_recommended_score']}",
+                    f"  Final live EV gap: {_format_value(row['final_live_ev_gap_best_vs_second'], 3)}",
+                    f"  Recommendations agree: {'yes' if row['model_recommendations_agree'] else 'no'}",
+                    f"  Disagreement warning: {row['model_disagreement_warning'] or 'none'}",
+                    "Dixon-Coles challenger:",
+                    f"  Rho: {row['dixon_coles_rho']:.4f}",
+                    f"  Recommended score: {row['dixon_coles_recommended_score']}",
+                    f"  EV gap best vs second-best: {_format_value(row['dixon_coles_ev_gap_best_vs_second'], 3)}",
+                    f"  Top 5 EV scorelines: {row['dixon_coles_top_5_ev_predictions']}",
+                    f"  Changes final live recommendation: {'yes' if row['dixon_coles_changes_recommendation'] else 'no'}",
+                    "Public-ranking strategy:",
+                    f"  Estimated most crowded public score: {row['estimated_most_crowded_public_score']} "
+                    f"({_format_value(row['estimated_most_crowded_public_pick_share'], 3)})",
+                    f"  Pure EV score: {row['recommended_score']}",
+                    f"  Public strategy score: {row['public_strategy_score']}",
+                    f"  EV cost: {_format_value(row['public_strategy_ev_cost'], 3)}",
+                    f"  Estimated public pick share: {_format_value(row['public_strategy_public_pick_share'], 3)}",
+                    f"  Leverage score: {_format_value(row['public_strategy_leverage_score'], 3)}",
+                    f"  Mode: {row['public_strategy_mode']}",
+                    f"  Reason: {row['public_strategy_reason']}",
+                    f"  Friend strategy score: {row['friend_strategy_score'] or 'n/a'}",
                     "Correct-score market diagnostics:",
                     f"  Top 5 market-implied scores: {_top_scorelines(row['correct_score_market_top_10'])}",
                     f"  Top 5 blended scores: {_top_scorelines(row['correct_score_blended_top_10'])}",

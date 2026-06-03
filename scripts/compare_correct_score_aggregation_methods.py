@@ -11,6 +11,7 @@ from wc_predictor.correct_score_comparison import (
     export_correct_score_aggregation_comparison,
     format_correct_score_aggregation_comparison_summary,
 )
+from wc_predictor.paths import CACHE_CORE_ODDS_PATH
 from wc_predictor.world_cup import WORLD_CUP_ODDS_MISSING_MESSAGE
 
 
@@ -18,7 +19,7 @@ def main() -> None:
     """Run method comparison, export the workbook, and print sensitivity."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--odds")
+    parser.add_argument("--odds", default=str(CACHE_CORE_ODDS_PATH))
     parser.add_argument("--correct-score-odds", default=str(DEFAULT_CORRECT_SCORE_ODDS_PATH))
     parser.add_argument("--correct-score-poisson-weight", type=float, default=0.85)
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH))

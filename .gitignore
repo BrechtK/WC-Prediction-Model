@@ -13,11 +13,15 @@
 ~$*.xlsx
 
 # Local inputs and generated reports. Keep only directory placeholders tracked.
-data/raw/*
-!data/raw/.gitkeep
-data/raw/oddsportal_pastes/
-data/processed/*
-!data/processed/.gitkeep
+input/schedule.txt
+input/odds/*.txt
+!input/odds/.gitkeep
+input/prepared/
+input/historical/
+output/
+cache/
+data/raw/
+data/processed/
 
 # Intentionally tracked sample inputs, templates, and parser fixtures
 !data/examples/

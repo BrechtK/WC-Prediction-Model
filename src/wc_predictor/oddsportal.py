@@ -9,11 +9,16 @@ from collections.abc import Iterable
 
 import pandas as pd
 
+from wc_predictor.paths import (
+    CACHE_CORRECT_SCORE_ODDS_PATH,
+    CACHE_SPLIT_PASTES_DIR,
+    OUTPUT_CORRECT_SCORE_PARSE_REPORT_PATH,
+)
 from wc_predictor.utils import ensure_parent_directory
 
-DEFAULT_INPUT_FOLDER = Path("data/raw/oddsportal_pastes")
-DEFAULT_OUTPUT_PATH = Path("data/raw/world_cup_correct_score_odds.csv")
-DEFAULT_REPORT_PATH = Path("data/processed/oddsportal_correct_score_parse_report.csv")
+DEFAULT_INPUT_FOLDER = CACHE_SPLIT_PASTES_DIR
+DEFAULT_OUTPUT_PATH = CACHE_CORRECT_SCORE_ODDS_PATH
+DEFAULT_REPORT_PATH = OUTPUT_CORRECT_SCORE_PARSE_REPORT_PATH
 
 OUTPUT_COLUMNS = [
     "match_id",

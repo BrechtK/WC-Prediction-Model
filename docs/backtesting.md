@@ -4,9 +4,9 @@ The group-stage historical backtester accepts Football-Data.co.uk-like CSV
 files. It maps home teams to internal team A, away teams to internal team B,
 and full-time goals to the realised group-style score.
 
-Folder inputs are scanned recursively. This allows `data/raw` to contain league
-subfolders such as `Belgium/` and `England/`; exported `source_file` values keep
-the relative nested path.
+Folder inputs are scanned recursively. For local research data, use
+`input/historical/` with league subfolders such as `Belgium/` and `England/`;
+exported `source_file` values keep the relative nested path.
 
 Football-Data column availability varies by league and season. Older files may
 use `BbAv*` aggregate columns, while newer files may use `Avg*` columns. The

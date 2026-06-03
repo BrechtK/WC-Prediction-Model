@@ -54,16 +54,28 @@ matter most when translating strong favourites into scoreline predictions.
 
 ## Priority 4: Low-Score Correction / Dixon-Coles
 
-Add an optional low-score adjustment for `0-0`, `1-0`, `0-1`, and `1-1`.
-Evaluate Dixon-Coles or a related correction against the independent-Poisson
-baseline using realised pool points.
+The optional Dixon-Coles low-score adjustment for `0-0`, `1-0`, `0-1`, and
+`1-1` is implemented as a diagnostic challenger. Evaluate it against the
+independent-Poisson baseline using realised pool points before considering any
+promotion to the default recommendation.
 
 ## Priority 5: Strategic Prediction Layer
 
-Compare model recommendations with friends' submissions, surface high-EV
-contrarian alternatives, and later simulate leaderboard outcomes. The eventual
-objective may be probability of winning the pool rather than expected points
-alone.
+The project now includes a diagnostic public-field strategy layer. It estimates
+crowded public scorelines, reports small-EV-cost contrarian alternatives,
+surfaces friend-crowding diagnostics when friend predictions are available, and
+can simulate pure-EV versus public-ranking entries against a heuristic public
+field.
+
+This layer is not a replacement for pure EV. Before promotion, validate:
+
+- whether estimated public pick shares resemble actual contest entries;
+- whether public-ranking suggestions improve realised leaderboard position;
+- whether gains survive different field sizes and popularity assumptions;
+- whether EV-loss caps remain conservative enough for small private pools.
+
+The eventual objective may be probability of winning the pool rather than
+expected points alone, but that requires out-of-sample leaderboard evidence.
 
 ## Priority 6: Own Challenger Models
 

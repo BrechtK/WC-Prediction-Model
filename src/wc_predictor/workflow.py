@@ -35,6 +35,8 @@ from wc_predictor.optimiser import (
     optimise_knockout_prediction,
 )
 from wc_predictor.probabilities import ScoreProbabilityMatrix
+from wc_predictor.public_strategy import build_public_strategy
+from wc_predictor.score_models import DixonColesScoreModel, Match, build_challenger_score_matrices
 from wc_predictor.utils import favourite_strength_bucket, is_knockout_stage
 
 HIGH_TAIL_MASS_THRESHOLD = 0.01
@@ -56,6 +58,8 @@ class PredictionWorkflowResult:
     correct_score_market_matrices: dict[str, ScoreProbabilityMatrix]
     processed_total_goals_probabilities: pd.DataFrame
     aggregated_total_goals_probabilities: pd.DataFrame
+    baseline_score_matrices: dict[str, ScoreProbabilityMatrix]
+    challenger_score_matrices: dict[str, dict[str, ScoreProbabilityMatrix]]
 
 
 def _optional_probability(row: pd.Series, column: str) -> float | None:
@@ -95,6 +99,37 @@ def _format_bookmaker_raw_probabilities(bookmaker_probabilities: pd.DataFrame, m
 
 def _format_top_ev_predictions(recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation) -> str:
     return _format_evaluations((recommendation.best, *recommendation.alternatives[:4]))
+
+
+def _optimise_score_matrix(
+    matrix: ScoreProbabilityMatrix,
+    knockout: bool,
+    qualifier_probabilities: dict[str, float] | None,
+    config: ProjectConfig,
+) -> GroupPredictionRecommendation | KnockoutPredictionRecommendation:
+    """Run the existing EV optimiser against any baseline, live, or challenger matrix."""
+
+    if knockout:
+        return optimise_knockout_prediction(
+            matrix,
+            qualifier_probabilities or {},
+            config.max_candidate_goals,
+            config.strategies.top_alternatives,
+            config.knockout_scoring,
+        )
+    return optimise_group_prediction(matrix, config.max_candidate_goals, config.strategies.top_alternatives)
+
+
+def _ev_gap_best_vs_second(
+    recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+) -> float | object:
+    """Return the EV separation between a model's first and second choices."""
+
+    return (
+        recommendation.best.expected_points - recommendation.alternatives[0].expected_points
+        if recommendation.alternatives
+        else pd.NA
+    )
 
 
 def _summarise_text_values(rows: pd.DataFrame, column: str) -> object:
@@ -200,6 +235,7 @@ def _warning_flags(
     lambda_a_near_bound: bool,
     lambda_b_near_bound: bool,
     correct_score_blend_suppressed: bool,
+    challenger_models_disagree: bool,
 ) -> str:
     """Build concise model-risk flags without changing any model decisions."""
 
@@ -226,6 +262,8 @@ def _warning_flags(
         flags.append("knockout_missing_qualification_odds")
     if correct_score_blend_suppressed:
         flags.append("correct_score_blend_suppressed_sparse_market")
+    if challenger_models_disagree:
+        flags.append("challenger_model_recommendations_disagree")
     return "; ".join(flags)
 
 
@@ -279,6 +317,8 @@ def run_prediction_workflow(
     recommendations: dict[str, GroupPredictionRecommendation | KnockoutPredictionRecommendation] = {}
     qualification: dict[str, dict[str, float]] = {}
     correct_score_matrices: dict[str, ScoreProbabilityMatrix] = {}
+    baseline_matrices: dict[str, ScoreProbabilityMatrix] = {}
+    challenger_matrices: dict[str, dict[str, ScoreProbabilityMatrix]] = {}
     for _, row in market.iterrows():
         match_id = str(row["match_id"])
         metadata = odds_metadata[match_id]
@@ -318,6 +358,7 @@ def run_prediction_workflow(
             config.poor_calibration_loss_threshold,
         )
         poisson_matrix = calibration.score_matrix
+        baseline_matrices[match_id] = poisson_matrix
         correct_score_blend_suppressed = False
         correct_score_blend_note = ""
         effective_correct_score_poisson_weight = 1.0
@@ -380,6 +421,20 @@ def run_prediction_workflow(
             correct_score_kl_divergence = pd.NA
             has_correct_score_market = False
         matrices[match_id] = score_matrix
+        match_challenger_matrices = build_challenger_score_matrices(
+            Match(match_id, str(row["stage"]), str(row["team_a"]), str(row["team_b"])),
+            config.max_goals_score_matrix,
+            (
+                DixonColesScoreModel(
+                    calibration.lambda_a,
+                    calibration.lambda_b,
+                    config.dixon_coles_rho,
+                    config.renormalise_score_matrix,
+                ),
+            ),
+        )
+        challenger_matrices[match_id] = match_challenger_matrices
+        dixon_coles_matrix = match_challenger_matrices["dixon_coles"]
         notes = list(calibration.warnings)
         if not skipped_total_goals.empty:
             notes.append(
@@ -405,19 +460,22 @@ def run_prediction_workflow(
                 }
                 notes.append("Qualification odds unavailable; used weak 90-minute draw-split approximation")
             qualification[match_id] = qualifier_probabilities
-            recommendation = optimise_knockout_prediction(
-                score_matrix,
-                qualifier_probabilities,
-                config.max_candidate_goals,
-                config.strategies.top_alternatives,
-                config.knockout_scoring,
-            )
-            recommended_qualifier = recommendation.best.predicted_qualifier
         else:
-            recommendation = optimise_group_prediction(
-                score_matrix, config.max_candidate_goals, config.strategies.top_alternatives
-            )
-            recommended_qualifier = ""
+            qualifier_probabilities = None
+        recommendation = _optimise_score_matrix(score_matrix, knockout, qualifier_probabilities, config)
+        baseline_recommendation = _optimise_score_matrix(poisson_matrix, knockout, qualifier_probabilities, config)
+        correct_score_blended_recommendation = recommendation
+        dixon_coles_recommendation = _optimise_score_matrix(
+            dixon_coles_matrix,
+            knockout,
+            qualifier_probabilities,
+            config,
+        )
+        recommended_qualifier = (
+            recommendation.best.predicted_qualifier
+            if isinstance(recommendation, KnockoutPredictionRecommendation)
+            else ""
+        )
         recommendations[match_id] = recommendation
         model_outcomes = calibration.model_probabilities
         total_goals_line_fit_error = (
@@ -443,17 +501,26 @@ def run_prediction_workflow(
         )
         favourite_probability = max(targets.a_win, targets.b_win)
         bucket = favourite_strength_bucket(favourite_probability)
-        ev_gap_best_vs_second = (
-            recommendation.best.expected_points - recommendation.alternatives[0].expected_points
-            if recommendation.alternatives
-            else pd.NA
-        )
+        ev_gap_best_vs_second = _ev_gap_best_vs_second(recommendation)
         ev_gap_best_vs_modal = _ev_gap_vs_modal(
             recommendation,
             score_matrix,
             qualification.get(match_id),
             config,
         )
+        baseline_poisson_recommended_score = baseline_recommendation.best.predicted_score
+        correct_score_blended_recommended_score = correct_score_blended_recommendation.best.predicted_score
+        final_live_recommended_score = recommendation.best.predicted_score
+        dixon_coles_recommended_score = dixon_coles_recommendation.best.predicted_score
+        model_recommendations_agree = len(
+            {
+                baseline_poisson_recommended_score,
+                correct_score_blended_recommended_score,
+                final_live_recommended_score,
+                dixon_coles_recommended_score,
+            }
+        ) == 1
+        model_disagreement_warning = "" if model_recommendations_agree else "challenger_model_recommendations_disagree"
         warning_flags = _warning_flags(
             number_of_bookmakers=int(metadata["number_of_bookmakers"]),
             has_over_under=has_over_under,
@@ -468,6 +535,28 @@ def run_prediction_workflow(
             lambda_a_near_bound="lambda_a_near_bound" in calibration.warnings,
             lambda_b_near_bound="lambda_b_near_bound" in calibration.warnings,
             correct_score_blend_suppressed=correct_score_blend_suppressed,
+            challenger_models_disagree=not model_recommendations_agree,
+        )
+        public_strategy = build_public_strategy(
+            match_row=pd.Series(
+                {
+                    "team_a": row["team_a"],
+                    "team_b": row["team_b"],
+                    "favourite_probability": favourite_probability,
+                    "warning_flags": warning_flags,
+                    "correct_score_market_top_10": correct_score_market_top_10,
+                }
+            ),
+            matrix=score_matrix,
+            recommendation=recommendation,
+            config=config,
+            qualifier_probabilities=qualification.get(match_id),
+            correct_score_market_matrix=correct_score_matrices.get(match_id),
+            friend_predictions=(
+                predictions[predictions["match_id"].astype(str) == match_id]
+                if predictions is not None and not predictions.empty
+                else None
+            ),
         )
         report_rows.append(
             {
@@ -532,6 +621,22 @@ def run_prediction_workflow(
                 "best_expected_points": recommendation.best.expected_points,
                 "ev_gap_best_vs_second": ev_gap_best_vs_second,
                 "ev_gap_best_vs_modal": ev_gap_best_vs_modal,
+                "baseline_poisson_recommended_score": f"{baseline_poisson_recommended_score[0]}-{baseline_poisson_recommended_score[1]}",
+                "baseline_poisson_ev_gap_best_vs_second": _ev_gap_best_vs_second(baseline_recommendation),
+                "correct_score_blended_recommended_score": f"{correct_score_blended_recommended_score[0]}-{correct_score_blended_recommended_score[1]}",
+                "correct_score_blended_ev_gap_best_vs_second": _ev_gap_best_vs_second(
+                    correct_score_blended_recommendation
+                ),
+                "final_live_recommended_score": f"{final_live_recommended_score[0]}-{final_live_recommended_score[1]}",
+                "final_live_ev_gap_best_vs_second": ev_gap_best_vs_second,
+                "model_recommendations_agree": model_recommendations_agree,
+                "model_disagreement_warning": model_disagreement_warning,
+                "dixon_coles_rho": config.dixon_coles_rho,
+                "dixon_coles_recommended_score": f"{dixon_coles_recommended_score[0]}-{dixon_coles_recommended_score[1]}",
+                "dixon_coles_best_expected_points": dixon_coles_recommendation.best.expected_points,
+                "dixon_coles_ev_gap_best_vs_second": _ev_gap_best_vs_second(dixon_coles_recommendation),
+                "dixon_coles_top_5_ev_predictions": _format_top_ev_predictions(dixon_coles_recommendation),
+                "dixon_coles_changes_recommendation": dixon_coles_recommended_score != final_live_recommended_score,
                 "exact_score_probability": recommendation.best.exact_score_probability,
                 "correct_goal_difference_probability": recommendation.best.correct_goal_difference_probability,
                 "correct_result_probability": getattr(recommendation.best, "correct_result_probability", pd.NA),
@@ -542,6 +647,20 @@ def run_prediction_workflow(
                 "tail_probability_before_renormalisation": poisson_matrix.tail_probability,
                 "warnings": "; ".join(filter(None, [str(row.get("warnings", "")), *notes])),
                 "warning_flags": warning_flags,
+                "estimated_most_crowded_public_score": public_strategy.estimated_most_crowded_public_score,
+                "estimated_most_crowded_public_pick_share": public_strategy.estimated_most_crowded_public_pick_share,
+                "public_strategy_score": public_strategy.public_strategy_score,
+                "public_strategy_reason": public_strategy.public_strategy_reason,
+                "public_strategy_ev_cost": public_strategy.public_strategy_ev_cost,
+                "public_strategy_public_pick_share": public_strategy.public_strategy_public_pick_share,
+                "public_strategy_leverage_score": public_strategy.public_strategy_leverage_score,
+                "public_strategy_mode": public_strategy.public_strategy_mode,
+                "public_strategy_public_ranking_score": public_strategy.public_strategy_public_ranking_score,
+                "public_strategy_exact_score_probability": public_strategy.public_strategy_exact_score_probability,
+                "public_strategy_result_probability": public_strategy.public_strategy_result_probability,
+                "public_strategy_candidate_count": public_strategy.public_strategy_candidate_count,
+                "friend_strategy_score": public_strategy.friend_strategy_score,
+                "friend_strategy_reason": public_strategy.friend_strategy_reason,
             }
         )
     match_report = pd.DataFrame(report_rows)
@@ -562,4 +681,6 @@ def run_prediction_workflow(
         correct_score_matrices,
         processed_total_goals,
         aggregated_total_goals,
+        baseline_matrices,
+        challenger_matrices,
     )

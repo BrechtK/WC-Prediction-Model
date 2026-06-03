@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument("--correct-score-odds")
     parser.add_argument("--correct-score-poisson-weight", type=float, default=1.0)
     parser.add_argument("--correct-score-aggregation-method", default="auto")
-    parser.add_argument("--output-dir", default="data/processed")
+    parser.add_argument("--output-dir", default="output/research")
     args = parser.parse_args()
 
     config = ProjectConfig(

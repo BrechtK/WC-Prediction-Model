@@ -85,6 +85,73 @@ loss = w_1x2 * sum(outcome errors squared)
      + w_btts * (P(X>0 and Y>0) - P_market(BTTS yes))^2
 ```
 
+Independent Poisson remains the baseline scoreline model and the default input
+to live recommendations unless the existing optional correct-score blending
+policy applies.
+
+## Dixon-Coles Low-Score Challenger
+
+Dixon-Coles is an optional challenger to the independent-Poisson baseline. It
+keeps the calibrated Poisson lambdas and applies a dependence correction only
+to the four lowest scorelines:
+
+```text
+tau(0,0) = 1 - lambda_A lambda_B rho
+tau(1,0) = 1 + lambda_B rho
+tau(0,1) = 1 + lambda_A rho
+tau(1,1) = 1 - rho
+tau(x,y) = 1 otherwise
+
+P_DC(x,y) = tau(x,y) P_poisson(x,y)
+```
+
+The finite matrix is normalised before EV optimisation. The configurable
+parameter defaults to `rho=0.0`, which exactly reproduces independent Poisson.
+The live workflow reports Dixon-Coles rho, its recommended scoreline, its EV
+gap, its top five EV predictions, and whether it changes the final live
+recommendation. Dixon-Coles remains diagnostic-only: it must be validated out
+of sample before it can become a default recommendation model.
+
+## Public-Field Strategy Challenger
+
+The default recommendation maximises expected pool points:
+
+```text
+score_EV = argmax_s EV(s)
+```
+
+Large public contests can also depend on how many other players choose the
+same scoreline. The public-field strategy layer estimates a transparent public
+pick distribution over scorelines using:
+
+- model scoreline probabilities;
+- common public scorelines such as `1-0`, `2-0`, `2-1`, `1-1`, and `0-0`;
+- team popularity weights;
+- favourite direction and strength;
+- correct-score market top scorelines when available;
+- friend-prediction crowding when supplied.
+
+For a candidate scoreline `s`, the diagnostic ranking combines expected points,
+estimated crowding, scoreline upside, and an explicit EV-cost penalty:
+
+```text
+public_ranking_score(s)
+= EV(s)
+  + alpha * (1 - public_pick_share(s))
+  + beta  * upside(s)
+  - gamma * max(EV(score_EV) - EV(s), 0)
+```
+
+Candidates must also pass configurable safety checks for maximum EV loss,
+minimum exact-score probability, and minimum result probability. Severe model
+warnings, such as high calibration error or high tail mass, force the public
+strategy back to the pure-EV recommendation.
+
+The default `strategy_mode=ev` disables all public-field switching and reports
+the pure-EV score. Other modes are diagnostics for contest strategy review.
+They must be validated against realised leaderboard outcomes before replacing
+the default live submission.
+
 ## Expected Pool Points
 
 For a group-stage score prediction `(a,b)`:

@@ -24,8 +24,9 @@ level.
 
 ## Version 3
 
-Test Dixon-Coles and bivariate-Poisson extensions. Consider negative-binomial
-count models where overdispersion is material.
+Validate the diagnostic Dixon-Coles challenger and test bivariate-Poisson
+extensions. Consider negative-binomial count models where overdispersion is
+material.
 
 ## Later Research
 

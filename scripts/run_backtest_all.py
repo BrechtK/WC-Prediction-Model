@@ -1,4 +1,4 @@
-"""Run the historical backtest for every CSV below data/raw."""
+"""Run the historical backtest for every CSV below input/historical."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ def main() -> None:
     args = parser.parse_args()
 
     run_and_print_backtest(
-        input_path="data/raw",
-        detailed_output_path="data/processed/backtest_all_by_file.csv",
-        aggregate_output_path="data/processed/backtest_all_aggregate.csv",
-        skipped_output_path="data/processed/backtest_all_skipped.csv",
-        favourite_strength_output_path="data/processed/backtest_all_favourite_strength.csv",
+        input_path="input/historical",
+        detailed_output_path="output/research/backtest_all_by_file.csv",
+        aggregate_output_path="output/research/backtest_all_aggregate.csv",
+        skipped_output_path="output/research/backtest_all_skipped.csv",
+        favourite_strength_output_path="output/research/backtest_all_favourite_strength.csv",
         fast=args.fast,
         max_files=args.max_files,
         max_matches=args.max_matches,

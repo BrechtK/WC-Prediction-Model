@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument("--odds", default="data/examples/example_odds.csv")
     parser.add_argument("--correct-score-odds", default="data/examples/example_correct_score_odds.csv")
     parser.add_argument("--results", default="data/examples/example_results.csv")
-    parser.add_argument("--output", default="data/processed/correct_score_blend_backtest.csv")
+    parser.add_argument("--output", default="output/research/correct_score_blend_backtest.csv")
     parser.add_argument("--correct-score-aggregation-method", default="auto")
     args = parser.parse_args()
 

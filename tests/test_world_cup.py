@@ -103,8 +103,34 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "favourite_probability",
         "ev_gap_best_vs_second",
         "ev_gap_best_vs_modal",
+        "baseline_poisson_recommended_score",
+        "baseline_poisson_ev_gap_best_vs_second",
+        "correct_score_blended_recommended_score",
+        "correct_score_blended_ev_gap_best_vs_second",
+        "final_live_recommended_score",
+        "final_live_ev_gap_best_vs_second",
+        "model_recommendations_agree",
+        "model_disagreement_warning",
+        "dixon_coles_rho",
+        "dixon_coles_recommended_score",
+        "dixon_coles_ev_gap_best_vs_second",
+        "dixon_coles_top_5_ev_predictions",
+        "dixon_coles_changes_recommendation",
+        "estimated_most_crowded_public_score",
+        "estimated_most_crowded_public_pick_share",
+        "public_strategy_score",
+        "public_strategy_ev_cost",
+        "public_strategy_public_pick_share",
+        "public_strategy_leverage_score",
+        "public_strategy_mode",
+        "public_strategy_reason",
+        "friend_strategy_score",
         "warning_flags",
     }.issubset(workflow.match_report.columns)
+    assert workflow.match_report["recommended_score"].equals(workflow.match_report["final_live_recommended_score"])
+    assert workflow.match_report["baseline_poisson_recommended_score"].equals(
+        workflow.match_report["dixon_coles_recommended_score"]
+    )
     assert len(pd.read_csv(settings.csv_output_path)) == 2
     assert len(pd.read_excel(settings.xlsx_output_path)) == 2
 
@@ -206,7 +232,10 @@ def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -
     assert worksheet.cell(2, column["lambda_a"]).number_format == "0.0000"
     assert worksheet.cell(2, column["calibration_loss"]).number_format == "0.0000"
     assert worksheet.cell(2, column["best_expected_points"]).number_format == "0.000"
+    assert worksheet.cell(2, column["estimated_most_crowded_public_pick_share"]).number_format == "0.00%"
+    assert worksheet.cell(2, column["public_strategy_ev_cost"]).number_format == "0.000"
     assert worksheet.cell(2, column["top_5_ev_predictions"]).alignment.wrap_text
+    assert worksheet.cell(2, column["public_strategy_reason"]).alignment.wrap_text
     assert worksheet.cell(2, column["warnings"]).alignment.wrap_text
     assert worksheet.column_dimensions["A"].width >= len("match_id")
 
@@ -378,13 +407,13 @@ def test_model_risk_documentation_exists() -> None:
 
 
 def test_default_world_cup_input_prefers_xlsx_when_both_exist(tmp_path: Path, monkeypatch) -> None:
-    raw = tmp_path / "data" / "raw"
-    raw.mkdir(parents=True)
-    (raw / "world_cup_odds.csv").touch()
-    (raw / "world_cup_odds.xlsx").touch()
+    prepared = tmp_path / "input" / "prepared"
+    prepared.mkdir(parents=True)
+    (prepared / "world_cup_odds.csv").touch()
+    (prepared / "world_cup_odds.xlsx").touch()
     monkeypatch.chdir(tmp_path)
 
-    assert resolve_world_cup_odds_input() == Path("data/raw/world_cup_odds.xlsx")
+    assert resolve_world_cup_odds_input() == Path("input/prepared/world_cup_odds.xlsx")
 
 
 def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: Path) -> None:
@@ -407,6 +436,9 @@ def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: P
     assert "Modal scoreline:" in summary
     assert "EV-optimal scoreline:" in summary
     assert "Top 5 EV scorelines:" in summary
+    assert "Public-ranking strategy:" in summary
+    assert "Estimated most crowded public score:" in summary
+    assert "Public strategy score:" in summary
     assert "CSV recommendations:" in summary
     assert "Excel recommendations:" in summary
     assert "Submission sheet:" in summary

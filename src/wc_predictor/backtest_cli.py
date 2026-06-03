@@ -32,7 +32,7 @@ def run_and_print_backtest(
     detailed_output_path: str | Path,
     aggregate_output_path: str | Path,
     skipped_output_path: str | Path,
-    favourite_strength_output_path: str | Path = "data/processed/backtest_favourite_strength.csv",
+    favourite_strength_output_path: str | Path = "output/research/backtest_favourite_strength.csv",
     verbose: bool = False,
     fast: bool = False,
     max_files: int | None = None,
