@@ -348,8 +348,9 @@ def format_live_prediction_summary(result: LivePredictionResult) -> str:
                     f"- {row.get('ev_explanation')}",
                     "Decision aid:",
                     f"- confidence: {row.get('recommendation_confidence')}",
-                    f"- close alternatives: {row.get('close_alternatives') or 'none'}",
-                    f"- note: {row.get('decision_note')}",
+                    f"- plausible alternatives: {row.get('plausible_top_alternatives') or 'none'}",
+                    f"- manual review flag: {row.get('manual_review_flag')}",
+                    f"- decision note: {row.get('decision_note')}",
                     *(
                         [
                             "Extreme-favourite audit:",

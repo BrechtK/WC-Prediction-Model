@@ -20,7 +20,12 @@ from wc_predictor.world_cup import (
     resolve_world_cup_odds_input,
     run_world_cup_predictions,
 )
-from wc_predictor.workflow import _btts_warning_flags, _decision_aid, _ev_explanation
+from wc_predictor.workflow import (
+    _btts_warning_flags,
+    _decision_aid,
+    _ev_explanation,
+    _plausible_alternative_decision_layer,
+)
 
 
 EXAMPLES = Path("data/examples")
@@ -96,6 +101,9 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "most_likely_scoreline",
         "recommended_score",
         "top_5_ev_predictions",
+        "plausible_top_alternatives",
+        "suppressed_ev_candidates",
+        "suppression_reason",
         "odds_timestamp_min",
         "odds_timestamp_max",
         "bookmakers_used",
@@ -190,6 +198,8 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
     }.issubset(workflow.match_report.columns)
     assert workflow.match_report["recommended_score"].equals(workflow.match_report["final_live_recommended_score"])
     assert "market_consistent_matrix" in workflow.challenger_score_matrices["WC001"]
+    assert workflow.match_report["top_5_ev_predictions"].str.len().gt(0).all()
+    assert workflow.match_report["plausible_top_alternatives"].str.len().gt(0).all()
     assert workflow.match_report["baseline_poisson_recommended_score"].equals(
         workflow.match_report["dixon_coles_recommended_score"]
     )
@@ -300,6 +310,51 @@ def test_decision_aid_marks_clear_ev_lead_as_high_confidence() -> None:
     assert aid["decision_note"] == "No manual review signal."
 
 
+def test_plausible_alternatives_suppress_tiny_probability_high_score_duplicates() -> None:
+    records = [
+        {"predicted_score": "1-0", "total_expected_points": 5.00, "exact_score_probability": 0.08},
+        {"predicted_score": "2-1", "total_expected_points": 4.98, "exact_score_probability": 0.05},
+        {"predicted_score": "3-2", "total_expected_points": 4.96, "exact_score_probability": 0.012},
+        {"predicted_score": "4-3", "total_expected_points": 4.94, "exact_score_probability": 0.004},
+        {"predicted_score": "5-4", "total_expected_points": 4.92, "exact_score_probability": 0.0002},
+    ]
+
+    layer = _plausible_alternative_decision_layer(
+        records,
+        config=ProjectConfig(),
+        extreme_favourite=False,
+        favourite_is_team_a=True,
+    )
+
+    assert "1-0" in layer["plausible_top_alternatives"]
+    assert "5-4" not in layer["plausible_top_alternatives"]
+    assert "5-4" in layer["suppressed_ev_candidates"]
+    assert "lower-probability duplicate result/margin bucket" in layer["suppression_reason"]
+    assert len(records) == 5
+
+
+def test_plausible_alternatives_keep_clean_sheet_scores_for_extreme_favourites() -> None:
+    records = [
+        {"predicted_score": "3-0", "total_expected_points": 5.00, "exact_score_probability": 0.003},
+        {"predicted_score": "4-0", "total_expected_points": 4.99, "exact_score_probability": 0.002},
+        {"predicted_score": "5-0", "total_expected_points": 4.98, "exact_score_probability": 0.001},
+        {"predicted_score": "6-0", "total_expected_points": 4.97, "exact_score_probability": 0.0005},
+    ]
+
+    layer = _plausible_alternative_decision_layer(
+        records,
+        config=ProjectConfig(),
+        extreme_favourite=True,
+        favourite_is_team_a=True,
+    )
+
+    assert "3-0" in layer["plausible_top_alternatives"]
+    assert "4-0" in layer["plausible_top_alternatives"]
+    assert "5-0" in layer["plausible_top_alternatives"]
+    assert "6-0" in layer["plausible_top_alternatives"]
+    assert layer["suppressed_ev_candidates"] == ""
+
+
 def test_btts_warning_appears_for_recommendation_conflicting_with_strong_market_signal() -> None:
     flags = _btts_warning_flags(
         has_btts=True,
@@ -323,6 +378,9 @@ def test_top_ten_ev_decomposition_is_written_to_excel(tmp_path: Path) -> None:
     assert "recommendation_confidence" in recommendation_headers
     assert "manual_review_flag" in recommendation_headers
     assert "decision_note" in recommendation_headers
+    assert "plausible_top_alternatives" in recommendation_headers
+    assert "suppressed_ev_candidates" in recommendation_headers
+    assert "suppression_reason" in recommendation_headers
     assert "ev_decomposition" in workbook.sheetnames
     assert "market_consistent" in workbook.sheetnames
     assert "predicted_score" in diagnostics_headers
@@ -541,6 +599,8 @@ def test_world_cup_submission_sheet_contains_only_entry_columns_and_formatting(t
         "best_expected_points",
         "recommendation_confidence",
         "manual_review_flag",
+        "plausible_top_alternatives",
+        "suppressed_ev_candidates",
         "close_alternatives",
         "ev_gap_to_second",
         "ev_gap_to_third",
@@ -553,6 +613,8 @@ def test_world_cup_submission_sheet_contains_only_entry_columns_and_formatting(t
     assert worksheet.cell(2, column["best_expected_points"]).number_format == "0.000"
     assert worksheet.cell(2, column["ev_gap_to_second"]).number_format == "0.000"
     assert worksheet.cell(2, column["top_3_alternatives"]).alignment.wrap_text
+    assert worksheet.cell(2, column["plausible_top_alternatives"]).alignment.wrap_text
+    assert worksheet.cell(2, column["suppressed_ev_candidates"]).alignment.wrap_text
     assert worksheet.cell(2, column["decision_note"]).alignment.wrap_text
     assert worksheet.cell(2, column["notes"]).alignment.wrap_text
     assert worksheet.cell(2, column["top_3_alternatives"]).value.count(";") == 2

@@ -50,6 +50,17 @@ class StrategyConfig:
     """Shared strategy settings for prediction generation and later backtests."""
 
     top_alternatives: int = 5
+    plausible_exact_probability_threshold: float = 0.005
+    plausible_total_goals_limit: int = 5
+
+    def __post_init__(self) -> None:
+        if self.top_alternatives <= 0:
+            raise ValueError("top_alternatives must be positive")
+        threshold = float(self.plausible_exact_probability_threshold)
+        if not np.isfinite(threshold) or threshold < 0:
+            raise ValueError("plausible_exact_probability_threshold must be finite and non-negative")
+        if self.plausible_total_goals_limit < 0:
+            raise ValueError("plausible_total_goals_limit must be non-negative")
 
 
 @dataclass(frozen=True)

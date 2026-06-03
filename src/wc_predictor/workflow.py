@@ -326,6 +326,8 @@ def _decision_aid(
     records: list[dict[str, object]],
     high_score_cluster: bool,
     high_score_cluster_alternatives: str,
+    plausible_top_alternatives: str = "",
+    suppressed_ev_candidates: str = "",
 ) -> dict[str, object]:
     best_ev = float(records[0]["total_expected_points"]) if records else np.nan
     second_ev = float(records[1]["total_expected_points"]) if len(records) > 1 else np.nan
@@ -355,13 +357,102 @@ def _decision_aid(
         notes.append("EV cluster: top alternatives are very close; manual review recommended.")
     if high_score_cluster:
         notes.append("High-score cluster: consider manual choice among 3-0 / 4-0 / 5-0.")
+    if suppressed_ev_candidates:
+        notes.append("Some raw EV alternatives were suppressed because their exact-score probability is tiny or their scoreline is too high for practical review.")
     return {
         "recommendation_confidence": confidence,
         "manual_review_flag": "yes" if confidence == "low / clustered" or high_score_cluster else "no",
         "close_alternatives": close_alternatives,
+        "plausible_top_alternatives": plausible_top_alternatives,
+        "suppressed_ev_candidates": suppressed_ev_candidates,
         "ev_gap_to_second": ev_gap_to_second,
         "ev_gap_to_third": ev_gap_to_third,
         "decision_note": " ".join(notes) if notes else "No manual review signal.",
+    }
+
+
+def _parse_score_label(label: str) -> tuple[int, int]:
+    left, right = str(label).split("-", maxsplit=1)
+    return int(left), int(right)
+
+
+def _plausible_extreme_favourite_clean_sheet(
+    score: tuple[int, int],
+    *,
+    extreme_favourite: bool,
+    favourite_is_team_a: bool,
+) -> bool:
+    if not extreme_favourite:
+        return False
+    if favourite_is_team_a:
+        return score in {(3, 0), (4, 0), (5, 0), (6, 0)}
+    return score in {(0, 3), (0, 4), (0, 5), (0, 6)}
+
+
+def _result_goal_difference_bucket(score: tuple[int, int]) -> tuple[int, int]:
+    return (1 if score[0] > score[1] else -1 if score[0] < score[1] else 0, score[0] - score[1])
+
+
+def _plausible_alternative_decision_layer(
+    records: list[dict[str, object]],
+    *,
+    config: ProjectConfig,
+    extreme_favourite: bool,
+    favourite_is_team_a: bool,
+) -> dict[str, object]:
+    """Filter raw EV alternatives into practical manual-review candidates."""
+
+    exact_threshold = config.strategies.plausible_exact_probability_threshold
+    total_goals_limit = config.strategies.plausible_total_goals_limit
+    best_exact_by_bucket: dict[tuple[int, int], float] = {}
+    for record in records:
+        score = _parse_score_label(str(record["predicted_score"]))
+        bucket = _result_goal_difference_bucket(score)
+        exact_probability = float(record["exact_score_probability"])
+        best_exact_by_bucket[bucket] = max(best_exact_by_bucket.get(bucket, 0.0), exact_probability)
+
+    plausible: list[str] = []
+    suppressed: list[str] = []
+    reasons: list[str] = []
+    for record in records:
+        score_label = str(record["predicted_score"])
+        score = _parse_score_label(score_label)
+        total_goals = score[0] + score[1]
+        exact_probability = float(record["exact_score_probability"])
+        bucket = _result_goal_difference_bucket(score)
+        extreme_clean_sheet = _plausible_extreme_favourite_clean_sheet(
+            score,
+            extreme_favourite=extreme_favourite,
+            favourite_is_team_a=favourite_is_team_a,
+        )
+        low_probability_duplicate = (
+            exact_probability < exact_threshold
+            and total_goals > total_goals_limit
+            and best_exact_by_bucket.get(bucket, exact_probability) > exact_probability
+        )
+        include = (
+            exact_probability >= exact_threshold
+            and total_goals <= total_goals_limit
+            and not low_probability_duplicate
+        ) or extreme_clean_sheet
+        if include:
+            plausible.append(f"{score_label} ({float(record['total_expected_points']):.3f})")
+            continue
+
+        suppressed.append(score_label)
+        score_reasons: list[str] = []
+        if exact_probability < exact_threshold:
+            score_reasons.append(f"P_exact<{exact_threshold:g}")
+        if total_goals > total_goals_limit:
+            score_reasons.append(f"total_goals>{total_goals_limit}")
+        if low_probability_duplicate:
+            score_reasons.append("lower-probability duplicate result/margin bucket")
+        reasons.append(f"{score_label}: {', '.join(score_reasons) if score_reasons else 'filtered'}")
+
+    return {
+        "plausible_top_alternatives": "; ".join(plausible),
+        "suppressed_ev_candidates": ", ".join(suppressed),
+        "suppression_reason": "; ".join(reasons),
     }
 
 
@@ -1142,10 +1233,18 @@ def run_prediction_workflow(
         if larger_grid_sensitivity["larger_grid_differs_from_live_recommendation"] is True:
             high_score_warning_flags.append("larger_grid_sensitivity")
         warning_flags = "; ".join(filter(None, [warning_flags, *btts_warning_flags, *high_score_warning_flags]))
+        plausible_decision_layer = _plausible_alternative_decision_layer(
+            top_10_ev_decomposition_records,
+            config=config,
+            extreme_favourite=extreme_favourite_audit_triggered,
+            favourite_is_team_a=favourite_is_team_a,
+        )
         decision_aid = _decision_aid(
             top_10_ev_decomposition_records,
             bool(extreme_audit["three_four_five_nil_within_0_10_ev"]),
             str(extreme_audit["high_score_cluster_close_alternatives"]),
+            plausible_top_alternatives=str(plausible_decision_layer["plausible_top_alternatives"]),
+            suppressed_ev_candidates=str(plausible_decision_layer["suppressed_ev_candidates"]),
         )
         public_strategy = build_public_strategy(
             match_row=pd.Series(
@@ -1286,6 +1385,7 @@ def run_prediction_workflow(
                 **extreme_audit,
                 **larger_grid_sensitivity,
                 "normal_grid_tail_mass": normal_grid_tail_mass,
+                **plausible_decision_layer,
                 **decision_aid,
                 "warnings": "; ".join(filter(None, [str(row.get("warnings", "")), *notes])),
                 "warning_flags": warning_flags,

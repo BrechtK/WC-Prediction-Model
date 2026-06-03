@@ -585,6 +585,9 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "most_likely_scoreline",
         "ev_optimal_differs_from_most_likely",
         "top_5_ev_predictions",
+        "plausible_top_alternatives",
+        "suppressed_ev_candidates",
+        "suppression_reason",
         "recommendation_confidence",
         "manual_review_flag",
         "close_alternatives",
@@ -885,6 +888,9 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
     }
     wrapped_columns = {
         "top_5_ev_predictions",
+        "plausible_top_alternatives",
+        "suppressed_ev_candidates",
+        "suppression_reason",
         "top_5_ev_decomposition",
         "top_10_ev_decomposition",
         "ev_explanation",
@@ -958,7 +964,7 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
     path = Path(path)
     ensure_parent_directory(path)
     submission = frame.copy()
-    submission["top_3_alternatives"] = submission["top_alternatives"].fillna("").map(
+    submission["top_3_alternatives"] = submission["plausible_top_alternatives"].fillna("").map(
         lambda value: "; ".join(str(value).split("; ")[:3])
     )
     submission["notes"] = submission[["warning_flags", "warnings", "source_notes"]].fillna("").apply(
@@ -978,6 +984,8 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
             "best_expected_points",
             "recommendation_confidence",
             "manual_review_flag",
+            "plausible_top_alternatives",
+            "suppressed_ev_candidates",
             "close_alternatives",
             "ev_gap_to_second",
             "ev_gap_to_third",
@@ -996,7 +1004,14 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions
     header_fill = PatternFill("solid", fgColor="1F4E78")
-    wrapped_columns = {"top_3_alternatives", "notes", "close_alternatives", "decision_note"}
+    wrapped_columns = {
+        "top_3_alternatives",
+        "notes",
+        "plausible_top_alternatives",
+        "suppressed_ev_candidates",
+        "close_alternatives",
+        "decision_note",
+    }
     for cell in worksheet[1]:
         cell.font = Font(color="FFFFFF", bold=True)
         cell.fill = header_fill

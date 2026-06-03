@@ -180,6 +180,16 @@ The `Final recommended submission` block still uses `recommended_score`, the
 pure-EV live recommendation. Public-ranking columns are for contest strategy
 review, not automatic replacement.
 
+Decision-oriented alternatives are separated from raw EV diagnostics:
+
+- `top_5_ev_predictions` / `top_10_ev_decomposition` are raw EV diagnostics and
+  can include mathematically valid but impractical high-score bucket duplicates.
+- `plausible_top_alternatives` filters those raw candidates for practical manual
+  review using exact-score probability, total-goals limits, and extreme-favourite
+  clean-sheet exceptions.
+- `recommended_score` remains the final model recommendation and is not changed
+  by the plausible-alternatives filter.
+
 Clean `input/odds/*.txt` files refresh their generated `cache/split_pastes/`
 files automatically.
 
@@ -224,6 +234,7 @@ For each match, the live runner prints:
 - parsed schedule mapping and market coverage;
 - fair 1X2 probabilities and calibrated Poisson lambdas;
 - final EV-optimal live score and alternatives;
+- decision aid confidence, plausible alternatives, manual-review flag, and note;
 - baseline Poisson, correct-score blend, and final-live comparison;
 - Dixon-Coles rho, top-five challenger EV predictions, and disagreement flag;
 - estimated crowded public score, public-ranking diagnostic score, EV cost,
