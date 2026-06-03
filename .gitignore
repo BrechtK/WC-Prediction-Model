@@ -11,11 +11,15 @@
 
 # Temporary Excel files created while a workbook is open
 ~$*.xlsx
+~$*.xlsm
+~$*.xls
 
 # Local inputs and generated reports. Keep only directory placeholders tracked.
 input/schedule.txt
+input/Schedule.txt
 input/odds template.txt
 input/odds/*.txt
+!input/.gitkeep
 !input/odds/.gitkeep
 input/prepared/
 input/historical/
@@ -23,6 +27,7 @@ output/
 cache/
 data/raw/
 data/processed/
+.pytest_cache/
 
 # Intentionally tracked sample inputs, templates, and parser fixtures
 !data/examples/

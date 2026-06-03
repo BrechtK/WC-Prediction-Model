@@ -393,6 +393,12 @@ def format_live_prediction_summary(
             "Excel write",
         )
         total = timings.get("total", sum(float(timings.get(key, 0.0)) for key in measured_keys))
+        if terminal_verbosity == "compact":
+            return [
+                "",
+                "Runtime summary:",
+                f"- total: {float(total):.2f}s",
+            ]
         measured_total = sum(float(timings.get(key, 0.0)) for key in measured_keys)
         other = max(0.0, float(total) - measured_total)
         return [
@@ -499,29 +505,31 @@ def format_live_prediction_summary(
             final_line += f" | alt {alternative}"
         final_submissions.append(final_line)
 
+    manual_review_lines: list[str] = []
     dashboard_summary: list[str] = []
     if not dashboard.empty:
         high_count = int(dashboard["confidence_level"].astype(str).eq("high").sum())
         medium_count = int(dashboard["confidence_level"].astype(str).eq("medium").sum())
         manual_rows = dashboard[dashboard["manual_review_flag"].astype(str).str.lower().eq("yes")]
-        dashboard_summary = [
-            "",
-            "Decision dashboard summary:",
-            f"- high confidence: {high_count} matches",
-            f"- medium confidence: {medium_count} matches",
-            f"- manual review: {len(manual_rows)} matches",
-        ]
+        if terminal_verbosity != "compact":
+            dashboard_summary = [
+                "",
+                "Decision dashboard summary:",
+                f"- high confidence: {high_count} matches",
+                f"- medium confidence: {medium_count} matches",
+                f"- manual review: {len(manual_rows)} matches",
+            ]
         if not manual_rows.empty:
-            dashboard_summary.extend(["", "Manual review:"])
+            manual_review_lines.extend(["", "Manual review:"])
             for _, review in manual_rows.iterrows():
                 if terminal_verbosity == "compact":
-                    dashboard_summary.append(
-                        f"{review['match_id']}: default {review['default_score']}, "
-                        f"alternative {review.get('main_alternative_score') or 'none'}, "
-                        f"reason: {review.get('risk_notes') or review['decision_note']}"
+                    manual_review_lines.append(
+                        f"{review['match_id']} {review['team_a']} vs {review['team_b']}: "
+                        f"default {review['default_score']}, alt {review.get('main_alternative_score') or 'none'}, "
+                        f"reason {review.get('risk_notes') or review['decision_note']}"
                     )
                     continue
-                dashboard_summary.extend(
+                manual_review_lines.extend(
                     [
                         f"{review['match_id']} {review['team_a']} vs {review['team_b']}",
                         f"- default: {review['default_score']}",
@@ -531,6 +539,19 @@ def format_live_prediction_summary(
                         f"- note: {review['decision_note']}",
                     ]
                 )
+        elif terminal_verbosity == "compact":
+            manual_review_lines.extend(["", "Manual review:", "none"])
+
+    warning_lines: list[str] = []
+    paste_warnings = {
+        match_id: tuple(warning for warning in warnings if str(warning).strip())
+        for match_id, warnings in result.paste_warnings.items()
+    }
+    paste_warnings = {match_id: warnings for match_id, warnings in paste_warnings.items() if warnings}
+    if paste_warnings:
+        warning_lines = ["", "Input warnings:"]
+        for match_id, warnings in sorted(paste_warnings.items()):
+            warning_lines.append(f"{match_id}: {', '.join(warnings)}")
 
     normal_extra: list[str] = []
     if terminal_verbosity == "normal" and not dashboard.empty:
@@ -553,12 +574,13 @@ def format_live_prediction_summary(
         *(diagnostic_sections if terminal_verbosity == "debug" else []),
         "Live Prediction Summary",
         f"- run profile: {run_profile}",
-        f"- verbosity: {terminal_verbosity}",
         f"- matches processed: {len(result.workflow.match_report)}",
         "",
         "Final recommendations:",
         *final_submissions,
         *normal_extra,
+        *warning_lines,
+        *manual_review_lines,
         *dashboard_summary,
         *runtime_lines(),
         "",

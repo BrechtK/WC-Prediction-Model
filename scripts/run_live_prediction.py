@@ -39,15 +39,24 @@ from wc_predictor.paths import (
 # USER SETTINGS
 # ============================================================
 
-RUN_MODE = "all_available"
-# Options:
-# "all_available"  -> process all odds files in input/odds/
-# "date"           -> process every match on DATE
-# "single_match"   -> process one selected match
-# "list_date"      -> list all games on DATE and exit
+# Normal matchday use:
+# 1. Use RUN_MODE = "list_date" and set DATE to see the numbered games.
+# 2. Paste fresh odds into input/odds/Mxxx.txt.
+# 3. Use RUN_MODE = "single_match", keep the same DATE, and set GAME_NUMBER.
+# 4. Press "Run Python File" in VS Code.
+RUN_MODE = "date"
+# RUN_MODE options:
+# "list_date"      -> list the games on DATE and exit; use this first.
+# "single_match"   -> run one game from DATE, selected by GAME_NUMBER.
+# "date"           -> run every game on DATE; each game needs input/odds/Mxxx.txt.
+# "all_available"  -> run every odds file currently in input/odds/.
 
-DATE = "13-6"
+# DATE accepts 14-6, 14/6, 14-06, or 2026-06-14.
+DATE = "14-6"
+# GAME_NUMBER comes from RUN_MODE = "list_date". It is 1 for the first listed game.
 GAME_NUMBER = 3
+# MATCH_ID is optional. Set it only if you already know the ID, for example "M008".
+# When MATCH_ID is set, it overrides DATE and GAME_NUMBER in single-match mode.
 MATCH_ID = None
 
 STRATEGY_MODE = "ev"
@@ -62,11 +71,20 @@ CORRECT_SCORE_AGGREGATION_METHOD = "auto"
 
 MARGIN_REMOVAL_METHOD = "normalised_inverse_odds"
 
+# Fast matchday defaults.
 RUN_PROFILE = "live"
 TERMINAL_VERBOSITY = "compact"
 ENABLE_MARKET_CONSISTENT_CHALLENGER = "only_if_close"
 ENABLE_MARGIN_METHOD_COMPARISON = False
 ENABLE_CORRECT_SCORE_WEIGHT_SENSITIVITY = False
+# RUN_PROFILE:
+# "live"     -> fast tournament mode; skips slow diagnostics by default.
+# "research" -> slower analysis mode; enables diagnostic comparisons.
+#
+# TERMINAL_VERBOSITY:
+# "compact" -> short final recommendation dashboard for matchday.
+# "normal"  -> adds parse summaries and model-disagreement summaries.
+# "debug"   -> prints detailed per-match diagnostics for investigation.
 
 WRITE_DETAILED_EXCEL = True
 WRITE_CACHE_OUTPUTS = True
@@ -76,9 +94,24 @@ DIXON_COLES_RHO = 0.0
 
 STRICT_INPUT_VALIDATION = False
 
+ODDS_TEMPLATE_PATH = Path("templates/odds_input_template.txt")
+DEPRECATED_INPUT_FOLDERS = (
+    Path("data/raw/oddsportal_combined_pastes"),
+    Path("data/raw/oddsportal_pastes"),
+)
 NO_ODDS_INPUT_MESSAGE = (
-    "No odds input files found. Create files like input/odds/M001.txt with sections "
-    "### 1X2, ### OVER_UNDER, ### BTTS, ### CORRECT_SCORE."
+    "No odds input files found.\n\n"
+    "Create files like:\n"
+    "input/odds/M001.txt\n\n"
+    "Use the template:\n"
+    f"{ODDS_TEMPLATE_PATH}\n\n"
+    "Required section:\n"
+    "### 1X2\n\n"
+    "Recommended sections:\n"
+    "### MATCH\n"
+    "### OVER_UNDER\n"
+    "### BTTS\n"
+    "### CORRECT_SCORE"
 )
 VALID_RUN_MODES = {"all_available", "date", "single_match", "list_date"}
 VALID_STRATEGY_MODES = ("ev", "balanced", "public-ranking", "aggressive-public-ranking")
@@ -131,7 +164,12 @@ def _fixtures_on_date(schedule: pd.DataFrame, date_text: str | None) -> tuple[st
     parsed_date = _parse_schedule_date(date_text, schedule)
     rows = schedule[schedule["date"].astype(str) == parsed_date].copy()
     if rows.empty:
-        raise ValueError(f"No fixtures found on {date_text} ({parsed_date}) in the parsed schedule.")
+        available_dates = ", ".join(sorted(schedule["date"].dropna().astype(str).unique()))
+        raise ValueError(
+            f"No fixtures found on {date_text} ({parsed_date}) in the parsed schedule.\n\n"
+            "Set DATE to one of the dates in input/schedule.txt.\n"
+            f"Available parsed dates: {available_dates or 'none'}"
+        )
     rows = rows.sort_values(["time", "match_id"], kind="stable").reset_index(drop=True)
     return parsed_date, rows
 
@@ -180,7 +218,10 @@ def _resolve_run_selection(
     if selected_match_id:
         matches = schedule[schedule["match_id"].astype(str) == selected_match_id]
         if matches.empty:
-            raise ValueError(f"Selected match ID {selected_match_id} was not found in the parsed schedule.")
+            raise ValueError(
+                f"Selected match ID {selected_match_id} was not found in the parsed schedule.\n\n"
+                "Set RUN_MODE = \"list_date\" and run again to see the correct match IDs."
+            )
         fixture = matches.iloc[0]
         return ResolvedRunSelection(
             run_mode,
@@ -199,7 +240,8 @@ def _resolve_run_selection(
     if game_number < 1 or game_number > len(rows):
         raise ValueError(
             f"GAME_NUMBER {game_number} is out of range for {date}. "
-            f"Choose a number from 1 to {len(rows)}."
+            f"Choose a number from 1 to {len(rows)}.\n\n"
+            "Set RUN_MODE = \"list_date\" and run again to see the available game numbers."
         )
     fixture = rows.iloc[game_number - 1]
     return ResolvedRunSelection(
@@ -239,11 +281,8 @@ def _validate_selected_odds_file(selection: ResolvedRunSelection, combined_input
                     "Missing odds files:",
                     *(str(path) for path in missing_paths),
                     "",
-                    "Create each file with sections:",
-                    "### 1X2",
-                    "### OVER_UNDER",
-                    "### BTTS",
-                    "### CORRECT_SCORE",
+                    "Create each file using:",
+                    str(ODDS_TEMPLATE_PATH),
                 ]
             )
         )
@@ -257,14 +296,21 @@ def _validate_selected_odds_file(selection: ResolvedRunSelection, combined_input
                 "Missing odds file:",
                 str(path),
                 "",
-                "Create this file with sections:",
-                "### 1X2",
-                "### OVER_UNDER",
-                "### BTTS",
-                "### CORRECT_SCORE",
+                "Create it using:",
+                str(ODDS_TEMPLATE_PATH),
             ]
         )
     )
+
+
+def _deprecated_input_warnings() -> tuple[str, ...]:
+    warnings: list[str] = []
+    for folder in DEPRECATED_INPUT_FOLDERS:
+        if folder.exists() and any(folder.glob("*.txt")):
+            warnings.append(
+                f"{folder} contains old paste files. Move live odds to input/odds/Mxxx.txt."
+            )
+    return tuple(warnings)
 
 
 def _format_run_configuration(
@@ -309,6 +355,8 @@ def _user_facing_live_error(error: Exception) -> str:
         "No recognised OddsPortal paste files found below "
     ):
         return NO_ODDS_INPUT_MESSAGE
+    if isinstance(error, CombinedOddsPortalPasteError) and "missing required ### 1X2 section" in message:
+        return f"{message}\n\nAdd the missing section using:\n{ODDS_TEMPLATE_PATH}"
     return message
 
 
@@ -406,11 +454,29 @@ def main() -> None:
             if args.paste_input_folder
             else CACHE_SPLIT_PASTES_DIR
         )
+        deprecated_warnings = _deprecated_input_warnings()
+        if deprecated_warnings and not any(combined_input_folder.glob("*.txt")):
+            raise ValueError(
+                "\n".join(
+                    [
+                        "Old live input files were found in deprecated folders:",
+                        *(f"- {warning}" for warning in deprecated_warnings),
+                        "",
+                        "Move the current match odds to:",
+                        "input/odds/Mxxx.txt",
+                        "",
+                        "Use the template:",
+                        str(ODDS_TEMPLATE_PATH),
+                    ]
+                )
+            )
         total_start = time.perf_counter()
         if not schedule_path.exists():
             raise OddsPortalScheduleParseError(
-                f"{schedule_path} is required. "
-                "Paste the schedule there before running live predictions."
+                f"{schedule_path} is required.\n\n"
+                "Create it by pasting the OddsPortal schedule into:\n"
+                f"{schedule_path}\n\n"
+                "Then run again with RUN_MODE = \"list_date\" to find the game number."
             )
         schedule_start = time.perf_counter()
         prepared_schedule = prepare_schedule_metadata(
@@ -422,7 +488,7 @@ def main() -> None:
         initial_runtime_timings = {
             "schedule parse": time.perf_counter() - schedule_start,
         }
-        if prepared_schedule.parse_result is not None:
+        if terminal_verbosity != "compact" and prepared_schedule.parse_result is not None:
             print(
                 format_oddsportal_schedule_parse_summary(
                     prepared_schedule.parse_result,
@@ -442,19 +508,24 @@ def main() -> None:
             print(_format_date_schedule(str(selection.date), selection.list_date_rows))
             return
         _validate_selected_odds_file(selection, combined_input_folder)
-        print(
-            _format_run_configuration(
-                selection,
-                strategy_mode,
-                run_profile,
-                terminal_verbosity,
-                margin_removal_method,
-                enable_margin_method_comparison,
-                enable_market_consistent_challenger,
-                enable_weight_sensitivity,
+        if terminal_verbosity != "compact":
+            print(
+                _format_run_configuration(
+                    selection,
+                    strategy_mode,
+                    run_profile,
+                    terminal_verbosity,
+                    margin_removal_method,
+                    enable_margin_method_comparison,
+                    enable_market_consistent_challenger,
+                    enable_weight_sensitivity,
+                )
             )
-        )
-        print()
+            print()
+            for warning in deprecated_warnings:
+                print(f"Input warning: {warning}")
+            if deprecated_warnings:
+                print()
         if not args.skip_combined_split:
             split_start = time.perf_counter()
             split_result = split_combined_oddsportal_pastes(
@@ -464,7 +535,7 @@ def main() -> None:
                 schedule=prepared_schedule.schedule,
             )
             initial_runtime_timings["combined paste split"] = time.perf_counter() - split_start
-            if split_result.files_processed:
+            if split_result.files_processed and (terminal_verbosity != "compact" or split_result.warnings):
                 print(format_combined_oddsportal_split_summary(split_result))
                 print()
         else:

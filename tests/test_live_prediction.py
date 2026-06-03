@@ -286,8 +286,9 @@ def test_live_runner_processes_all_pastes_writes_outputs_and_prints_submission(t
     assert "Live Prediction Summary" in summary
     assert "Final recommendations:" in summary
     assert "M001 M001 Alpha vs M001 Beta:" in summary
-    assert "Decision dashboard summary:" in summary
-    assert "- manual review:" in summary
+    assert "Manual review:" in summary
+    assert "review " in summary
+    assert "Decision dashboard summary:" not in summary
     assert "Outputs:" in summary
     assert "Weight sensitivity:" not in summary
     assert "BTTS diagnostics:" not in summary
@@ -321,10 +322,11 @@ def test_live_summary_compact_can_show_runtime_summary(tmp_path: Path) -> None:
     summary = format_live_prediction_summary(result, show_runtime_summary=True)
 
     assert "Runtime summary:" in summary
-    assert "- main model run:" in summary
-    assert "- correct-score weight sensitivity:" in summary
-    assert "- other/unmeasured:" in summary
-    assert "- Excel write:" in summary
+    assert "- total:" in summary
+    assert "- main model run:" not in summary
+    assert "- correct-score weight sensitivity:" not in summary
+    assert "- other/unmeasured:" not in summary
+    assert "- Excel write:" not in summary
 
 
 def test_research_style_config_runs_margin_method_comparison(tmp_path: Path) -> None:
@@ -415,7 +417,7 @@ def test_live_runner_weight_sensitivity_can_be_enabled_without_changing_recommen
 
     assert enabled_result.weight_comparison is not None
     assert enabled_settings.weight_comparison_output_path.exists()
-    assert "- correct-score weight sensitivity:" in summary
+    assert "Weight sensitivity:" in summary
     assert fast_result.workflow.match_report["recommended_score"].tolist() == enabled_result.workflow.match_report[
         "recommended_score"
     ].tolist()
@@ -467,8 +469,15 @@ def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
     monkeypatch,
     capsys,
 ) -> None:
-    _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "M001 Alpha", "M001 Beta")])
-    _write_combined_paste(tmp_path / "input/odds", clean_filename=True)
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+            ("14 Jun 2026", "06:00", "Australia", "Turkey"),
+        ],
+    )
+    _write_combined_paste(tmp_path / "input/odds", "M003", clean_filename=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
 
@@ -476,7 +485,7 @@ def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
 
     output = capsys.readouterr().out
     assert "Final recommendations:" in output
-    assert "M001 M001 Alpha vs M001 Beta:" in output
+    assert "M003 Australia vs Turkey:" in output
     assert (tmp_path / "output/predictions.xlsx").exists()
 
 
@@ -488,17 +497,48 @@ def test_live_runner_script_splits_combined_pastes_before_parsing(
     _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
     _write_combined_paste(tmp_path / "input/odds", clean_filename=True)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    assert "Combined OddsPortal Paste Split" not in output
+    assert "Final recommendations:" in output
+    assert (tmp_path / "cache/split_pastes/M001_1x2.txt").exists()
+    assert (tmp_path / "output/predictions.xlsx").exists()
+
+
+def test_live_runner_compact_prints_split_summary_when_warnings_exist(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
+    source_folder = tmp_path / "combined_source"
+    _write_pastes(source_folder, "M001", include_over_under=False, include_btts=False, include_correct_score=False)
+    odds_folder = tmp_path / "input" / "odds"
+    odds_folder.mkdir(parents=True, exist_ok=True)
+    (odds_folder / "M001.txt").write_text(
+        "### 1X2\n" + (source_folder / "M001_1x2.txt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
 
     runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
     output = capsys.readouterr().out
     assert "Combined OddsPortal Paste Split" in output
-    assert "- Files processed: 1" in output
-    assert "- Files written: 4" in output
+    assert "missing_optional_section:over_under" in output
     assert "Final recommendations:" in output
-    assert (tmp_path / "cache/split_pastes/M001_1x2.txt").exists()
-    assert (tmp_path / "output/predictions.xlsx").exists()
 
 
 def test_live_runner_script_can_skip_combined_paste_split(
@@ -511,13 +551,18 @@ def test_live_runner_script_can_skip_combined_paste_split(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["run_live_prediction.py", "--skip-combined-split", "--skip-weight-sensitivity"],
+        [
+            "run_live_prediction.py",
+            "--run-mode",
+            "all_available",
+            "--skip-combined-split",
+            "--skip-weight-sensitivity",
+        ],
     )
 
     with pytest.raises(
         SystemExit,
-        match=r"No odds input files found\. Create files like input/odds/M001\.txt with sections "
-        r"### 1X2, ### OVER_UNDER, ### BTTS, ### CORRECT_SCORE\.",
+        match=r"No odds input files found\.",
     ):
         runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
@@ -530,12 +575,15 @@ def test_live_runner_script_reports_user_facing_error_when_no_odds_inputs_exist(
 ) -> None:
     _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
 
     with pytest.raises(
         SystemExit,
-        match=r"No odds input files found\. Create files like input/odds/M001\.txt with sections "
-        r"### 1X2, ### OVER_UNDER, ### BTTS, ### CORRECT_SCORE\.",
+        match=r"No odds input files found\.",
     ):
         runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
@@ -548,13 +596,17 @@ def test_live_runner_script_uses_schedule_mapping_for_combined_paste(
     _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
     _write_combined_paste(tmp_path / "input/odds", clean_filename=True)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
 
     runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
     output = capsys.readouterr().out
     parsed_odds = pd.read_csv(tmp_path / "cache/parsed/core_odds.csv")
-    assert "Schedule Paste Parse" in output
+    assert "Schedule Paste Parse" not in output
     assert "Schedule mapping:" not in output
     assert "M001 Schedule Alpha vs Schedule Beta:" in output
     assert parsed_odds["team_a"].eq("Schedule Alpha").all()
@@ -612,9 +664,6 @@ def test_live_runner_script_resolves_single_match_from_date_and_game_number(
 
     output = capsys.readouterr().out
     parsed_odds = pd.read_csv(tmp_path / "cache/parsed/core_odds.csv")
-    assert "- run mode: single_match" in output
-    assert "- game number: 3" in output
-    assert "- resolved match: M003 | Australia vs Turkey" in output
     assert parsed_odds["match_id"].astype(str).unique().tolist() == ["M003"]
     assert "M003 Australia vs Turkey:" in output
 
@@ -646,8 +695,6 @@ def test_live_runner_script_runs_all_matches_on_selected_date(
 
     output = capsys.readouterr().out
     parsed_odds = pd.read_csv(tmp_path / "cache/parsed/core_odds.csv")
-    assert "- run mode: date" in output
-    assert "- resolved matches: M001, M002" in output
     assert parsed_odds["match_id"].astype(str).unique().tolist() == ["M001", "M002"]
     assert "M001 Brazil vs Morocco:" in output
     assert "M002 Haiti vs Scotland:" in output
@@ -708,7 +755,6 @@ def test_live_runner_script_match_id_overrides_date_and_game_number(
     runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
     output = capsys.readouterr().out
-    assert "- resolved match: M003 | Australia vs Turkey" in output
     assert "M001 Brazil vs Morocco:" not in output
     assert "M003 Australia vs Turkey:" in output
 
@@ -733,7 +779,6 @@ def test_live_runner_script_cli_overrides_user_settings_block(
     module.main()
 
     output = capsys.readouterr().out
-    assert "- run mode: all_available" in output
     assert "Final recommendations:" in output
     assert (tmp_path / "output/predictions.xlsx").exists()
 
@@ -779,8 +824,13 @@ def test_live_runner_script_missing_selected_odds_file_gives_helpful_error(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--date", "14-6", "--game-number", "1"])
 
-    with pytest.raises(SystemExit, match=r"Missing odds file:\ninput\\odds\\M001\.txt"):
+    with pytest.raises(SystemExit) as exc_info:
         runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    message = str(exc_info.value)
+    assert "Missing odds file:" in message
+    assert "input\\odds\\M001.txt" in message or "input/odds/M001.txt" in message
+    assert "templates\\odds_input_template.txt" in message or "templates/odds_input_template.txt" in message
 
 
 def test_live_runner_script_rejects_combined_paste_unknown_to_schedule(
@@ -790,7 +840,11 @@ def test_live_runner_script_rejects_combined_paste_unknown_to_schedule(
     _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
     _write_combined_paste(tmp_path / "input/odds", "M999", clean_filename=True)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
 
     with pytest.raises(
         SystemExit,
@@ -812,7 +866,11 @@ def test_live_runner_script_uses_clean_input_output_and_cache_structure(
     stale_split.parent.mkdir(parents=True)
     stale_split.write_text("stale cache", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
 
     runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
@@ -850,7 +908,11 @@ def test_live_runner_script_rejects_clean_odds_match_unknown_to_schedule(
     _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
     _write_combined_paste(tmp_path / "input/odds", "M999", clean_filename=True)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
 
     with pytest.raises(
         SystemExit,
