@@ -98,7 +98,11 @@ def run_world_cup_predictions(
         total_goals_odds=total_goals_odds,
     )
     export_dataframe(workflow.match_report, settings.csv_output_path)
-    export_world_cup_recommendations_excel(workflow.match_report, settings.xlsx_output_path)
+    export_world_cup_recommendations_excel(
+        workflow.match_report,
+        settings.xlsx_output_path,
+        workflow.margin_method_comparison,
+    )
     export_world_cup_submission_sheet_excel(workflow.match_report, settings.submission_xlsx_output_path)
     return workflow
 

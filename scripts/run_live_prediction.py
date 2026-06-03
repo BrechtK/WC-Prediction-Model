@@ -59,6 +59,9 @@ STRATEGY_MODE = "ev"
 CORRECT_SCORE_POISSON_WEIGHT = 0.85
 CORRECT_SCORE_AGGREGATION_METHOD = "auto"
 
+MARGIN_REMOVAL_METHOD = "normalised_inverse_odds"
+ENABLE_MARGIN_METHOD_COMPARISON = True
+
 DIXON_COLES_RHO = 0.0
 
 STRICT_INPUT_VALIDATION = False
@@ -69,6 +72,7 @@ NO_ODDS_INPUT_MESSAGE = (
 )
 VALID_RUN_MODES = {"all_available", "date", "single_match", "list_date"}
 VALID_STRATEGY_MODES = ("ev", "balanced", "public-ranking", "aggressive-public-ranking")
+VALID_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive")
 
 
 @dataclass(frozen=True)
@@ -254,6 +258,8 @@ def _validate_selected_odds_file(selection: ResolvedRunSelection, combined_input
 def _format_run_configuration(
     selection: ResolvedRunSelection,
     strategy_mode: str,
+    margin_removal_method: str,
+    enable_margin_method_comparison: bool,
 ) -> str:
     lines = [
         "Live Prediction Run Configuration",
@@ -270,6 +276,8 @@ def _format_run_configuration(
     elif selection.run_mode == "all_available":
         lines.append("- resolved match: all available odds files")
     lines.append(f"- strategy mode: {strategy_mode}")
+    lines.append(f"- margin removal method: {margin_removal_method}")
+    lines.append(f"- margin method comparison: {'enabled' if enable_margin_method_comparison else 'disabled'}")
     return "\n".join(lines)
 
 
@@ -294,6 +302,9 @@ def main() -> None:
     parser.add_argument("--match-id")
     parser.add_argument("--correct-score-poisson-weight", type=float)
     parser.add_argument("--correct-score-aggregation-method")
+    parser.add_argument("--margin-removal-method", choices=VALID_MARGIN_REMOVAL_METHODS)
+    parser.add_argument("--compare-margin-methods", action="store_true")
+    parser.add_argument("--no-compare-margin-methods", action="store_true")
     parser.add_argument("--dixon-coles-rho", type=float)
     parser.add_argument(
         "--strategy-mode",
@@ -329,6 +340,16 @@ def main() -> None:
             if args.correct_score_aggregation_method is not None
             else CORRECT_SCORE_AGGREGATION_METHOD
         )
+        margin_removal_method = (
+            args.margin_removal_method
+            if args.margin_removal_method is not None
+            else MARGIN_REMOVAL_METHOD
+        )
+        enable_margin_method_comparison = ENABLE_MARGIN_METHOD_COMPARISON
+        if args.compare_margin_methods:
+            enable_margin_method_comparison = True
+        if args.no_compare_margin_methods:
+            enable_margin_method_comparison = False
         dixon_coles_rho = args.dixon_coles_rho if args.dixon_coles_rho is not None else DIXON_COLES_RHO
         strict = args.strict or STRICT_INPUT_VALIDATION
 
@@ -374,7 +395,14 @@ def main() -> None:
             print(_format_date_schedule(str(selection.date), selection.list_date_rows))
             return
         _validate_selected_odds_file(selection, combined_input_folder)
-        print(_format_run_configuration(selection, strategy_mode))
+        print(
+            _format_run_configuration(
+                selection,
+                strategy_mode,
+                margin_removal_method,
+                enable_margin_method_comparison,
+            )
+        )
         print()
         if not args.skip_combined_split:
             split_result = split_combined_oddsportal_pastes(
@@ -402,6 +430,8 @@ def main() -> None:
             ProjectConfig(
                 correct_score_poisson_weight=correct_score_poisson_weight,
                 correct_score_aggregation_method=correct_score_aggregation_method,
+                margin_removal_method=margin_removal_method,
+                enable_margin_method_comparison=enable_margin_method_comparison,
                 dixon_coles_rho=dixon_coles_rho,
                 public_strategy=PublicStrategyConfig(mode=strategy_mode),
             ),

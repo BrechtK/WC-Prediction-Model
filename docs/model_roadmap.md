@@ -7,17 +7,21 @@ profit.
 
 ## Priority 1: Robust Market-Implied Probability Extraction
 
-Compare margin-removal approaches:
+The live workflow now implements diagnostic comparison for:
 
-- proportional normalisation;
+- normalised inverse-odds proportional normalisation;
 - additive removal;
 - power method;
+
+Still to evaluate or implement:
+
 - Shin method where feasible;
 - favourite-longshot-bias-adjusted methods where justified.
 
-Backtest each approach under the pool scoring rules. Record odds timing and
-source quality so early recreational prices are not confused with sharper
-closing markets.
+The comparison sheet reports whether recommendations change across implemented
+methods. Continue backtesting each approach under the pool scoring rules before
+promoting any challenger. Record odds timing and source quality so early
+recreational prices are not confused with sharper closing markets.
 
 ## Priority 2: Correct-Score Odds Validation
 

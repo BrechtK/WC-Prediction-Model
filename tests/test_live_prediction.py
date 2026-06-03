@@ -218,6 +218,9 @@ def test_live_runner_processes_all_pastes_writes_outputs_and_prints_submission(t
     assert "Final recommended submission:" in summary
     assert "M001 M001 Alpha vs M001 Beta:" in summary
     assert "Full Excel outputs:" in summary
+    assert "Margin-removal sensitivity:" in summary
+    assert "- default method: normalised_inverse_odds" in summary
+    assert "- changes recommendation:" in summary
     assert f"- Recommendations: {settings.recommendations_xlsx_output_path}" in summary
     assert "Model comparison:" not in summary
     assert "Dixon-Coles challenger:" not in summary

@@ -8,6 +8,8 @@ from typing import Protocol, Sequence
 import numpy as np
 from scipy.optimize import brentq
 
+IMPLEMENTED_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive")
+
 
 @dataclass(frozen=True)
 class MarginRemovalResult:
@@ -29,10 +31,10 @@ class MarginRemover(Protocol):
         """Convert positive raw implied probabilities into probabilities summing to one."""
 
 
-class ProportionalMarginRemover:
+class NormalisedInverseOddsMarginRemover:
     """Remove margin by normalising each implied probability by the overround."""
 
-    name = "proportional"
+    name = "normalised_inverse_odds"
 
     def remove(self, raw_probabilities: np.ndarray) -> np.ndarray:
         return raw_probabilities / raw_probabilities.sum()
@@ -71,11 +73,15 @@ class ShinMarginRemover:
         raise NotImplementedError("Shin margin removal is reserved for a later release")
 
 
+# TODO: Add odds-ratio and tested Shin margin removal only when their numerical
+# safeguards are clear for both two-way and three-way markets.
 def get_margin_remover(method: str) -> MarginRemover:
     """Return a configured margin remover."""
 
+    normalised = NormalisedInverseOddsMarginRemover()
     methods: dict[str, MarginRemover] = {
-        "proportional": ProportionalMarginRemover(),
+        "normalised_inverse_odds": normalised,
+        "proportional": normalised,
         "additive": AdditiveMarginRemover(),
         "power": PowerMarginRemover(),
         "shin": ShinMarginRemover(),
@@ -112,4 +118,3 @@ def remove_margin(
     if np.any(fair <= 0) or not np.isclose(fair.sum(), 1.0, atol=1e-9):
         raise ValueError("Margin removal must produce positive probabilities summing to one")
     return MarginRemovalResult(raw, fair, overround, remover.name, tuple(warnings))
-

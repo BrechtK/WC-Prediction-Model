@@ -165,10 +165,18 @@ python scripts/run_live_prediction.py --strict
 python scripts/run_live_prediction.py --skip-weight-sensitivity
 python scripts/run_live_prediction.py --dixon-coles-rho -0.08
 python scripts/run_live_prediction.py --strategy-mode public-ranking
+python scripts/run_live_prediction.py --margin-removal-method power
+python scripts/run_live_prediction.py --no-compare-margin-methods
 ```
 
 `--dixon-coles-rho` changes only the diagnostic challenger. It never promotes
 Dixon-Coles to the final live recommendation.
+
+`--margin-removal-method` changes the active fair-probability conversion used
+by the live recommendation. The default is `normalised_inverse_odds`, which is
+the existing normalised inverse-odds method. Margin-method comparison is enabled
+by default and writes diagnostics for `normalised_inverse_odds`, `power`, and
+`additive`; use `--no-compare-margin-methods` to skip that comparison.
 
 `--strategy-mode` controls the diagnostic public-field strategy layer:
 
@@ -227,6 +235,10 @@ cache/
 detailed workbook avoids duplicating the same diagnostic tables under a second
 name.
 
+The `margin_methods` sheet compares implemented overround-removal methods per
+match. If methods disagree on the recommended score, inspect the comparison
+before treating the default output as robust.
+
 ## Interpreting The Terminal Summary
 
 For each match, the live runner prints:
@@ -235,6 +247,7 @@ For each match, the live runner prints:
 - fair 1X2 probabilities and calibrated Poisson lambdas;
 - final EV-optimal live score and alternatives;
 - decision aid confidence, plausible alternatives, manual-review flag, and note;
+- concise margin-removal sensitivity when comparison is enabled;
 - baseline Poisson, correct-score blend, and final-live comparison;
 - Dixon-Coles rho, top-five challenger EV predictions, and disagreement flag;
 - estimated crowded public score, public-ranking diagnostic score, EV cost,

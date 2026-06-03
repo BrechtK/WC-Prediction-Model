@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from typing import Any
 
@@ -20,6 +20,7 @@ from wc_predictor.correct_scores import (
     summarise_correct_score_coverage,
 )
 from wc_predictor.friends import analyse_friend_predictions
+from wc_predictor.margin import IMPLEMENTED_MARGIN_REMOVAL_METHODS
 from wc_predictor.market_consistent import fit_market_consistent_matrix
 from wc_predictor.odds import (
     aggregate_bookmaker_probabilities,
@@ -71,6 +72,7 @@ class PredictionWorkflowResult:
     aggregated_total_goals_probabilities: pd.DataFrame
     baseline_score_matrices: dict[str, ScoreProbabilityMatrix]
     challenger_score_matrices: dict[str, dict[str, ScoreProbabilityMatrix]]
+    margin_method_comparison: pd.DataFrame
 
 
 def _optional_probability(row: pd.Series, column: str) -> float | None:
@@ -673,6 +675,125 @@ def _optimise_score_matrix(
             config.knockout_scoring,
         )
     return optimise_group_prediction(matrix, config.max_candidate_goals, config.strategies.top_alternatives)
+
+
+def _canonical_margin_method(method: str) -> str:
+    return "normalised_inverse_odds" if method == "proportional" else method
+
+
+def _margin_methods_to_compare(active_method: str) -> tuple[str, ...]:
+    ordered = [_canonical_margin_method(active_method), *IMPLEMENTED_MARGIN_REMOVAL_METHODS]
+    return tuple(dict.fromkeys(ordered))
+
+
+def _margin_method_warning_flags(
+    *,
+    method_row: pd.Series,
+    default_row: pd.Series,
+    differs_from_default: bool,
+) -> str:
+    flags: list[str] = []
+    for column in ("market_a_win", "market_draw", "market_b_win"):
+        if (
+            pd.notna(method_row.get(column))
+            and pd.notna(default_row.get(column))
+            and abs(float(method_row[column]) - float(default_row[column])) > 0.02
+        ):
+            flags.append("margin_method_materially_changes_1x2_probabilities")
+            break
+    if differs_from_default:
+        flags.append("margin_method_changes_recommendation")
+    if bool(method_row.get("three_four_five_nil_within_0_10_ev", False)) != bool(
+        default_row.get("three_four_five_nil_within_0_10_ev", False)
+    ):
+        flags.append("margin_method_changes_extreme_favourite_high_score_cluster")
+    return "; ".join(dict.fromkeys(flags))
+
+
+def _failed_margin_method_rows(
+    odds: pd.DataFrame,
+    method: str,
+    error: Exception,
+) -> list[dict[str, object]]:
+    matches = odds[["match_id", "team_a", "team_b"]].drop_duplicates("match_id")
+    return [
+        {
+            "match_id": row["match_id"],
+            "team_a": row["team_a"],
+            "team_b": row["team_b"],
+            "method": method,
+            "method_status": "failed",
+            "method_failure_message": str(error),
+            "differs_from_default": pd.NA,
+            "warning_flags": "margin_method_failed",
+        }
+        for _, row in matches.iterrows()
+    ]
+
+
+def _build_margin_method_comparison(
+    *,
+    odds: pd.DataFrame,
+    config: ProjectConfig,
+    default_report: pd.DataFrame,
+    correct_score_odds: pd.DataFrame | None,
+    total_goals_odds: pd.DataFrame | None,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    default_by_match = default_report.set_index("match_id")
+    for method in _margin_methods_to_compare(config.margin_removal_method):
+        comparison_config = replace(
+            config,
+            margin_removal_method=method,
+            enable_margin_method_comparison=False,
+        )
+        try:
+            comparison = run_prediction_workflow(
+                odds,
+                config=comparison_config,
+                correct_score_odds=correct_score_odds,
+                total_goals_odds=total_goals_odds,
+            )
+        except (ValueError, NotImplementedError) as error:
+            rows.extend(_failed_margin_method_rows(odds, method, error))
+            continue
+        for _, method_row in comparison.match_report.iterrows():
+            match_id = method_row["match_id"]
+            default_row = default_by_match.loc[match_id]
+            differs = str(method_row["recommended_score"]) != str(default_row["recommended_score"])
+            total_goals_targets = str(method_row.get("total_goals_lines_used_for_calibration", ""))
+            warning_flags = _margin_method_warning_flags(
+                method_row=method_row,
+                default_row=default_row,
+                differs_from_default=differs,
+            )
+            rows.append(
+                {
+                    "match_id": match_id,
+                    "team_a": method_row["team_a"],
+                    "team_b": method_row["team_b"],
+                    "method": method,
+                    "method_status": "ok",
+                    "method_failure_message": "",
+                    "fair_1x2_home": method_row["market_a_win"],
+                    "fair_1x2_draw": method_row["market_draw"],
+                    "fair_1x2_away": method_row["market_b_win"],
+                    "fair_btts_yes": method_row.get("market_fair_btts_yes_probability", pd.NA),
+                    "fair_over_2_5": method_row.get("fair_over_2_5", pd.NA),
+                    "selected_total_goals_targets": total_goals_targets,
+                    "lambda_a": method_row["lambda_a"],
+                    "lambda_b": method_row["lambda_b"],
+                    "recommended_score": method_row["recommended_score"],
+                    "best_expected_points": method_row["best_expected_points"],
+                    "top_5_ev_scorelines": method_row["top_5_ev_predictions"],
+                    "differs_from_default": "yes" if differs else "no",
+                    "calibration_error": method_row["calibration_loss"],
+                    "btts_fit_error": method_row.get("btts_fit_error", pd.NA),
+                    "total_goals_fit_error": method_row.get("total_goals_line_fit_error", pd.NA),
+                    "warning_flags": warning_flags,
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def _ev_gap_best_vs_second(
@@ -1286,6 +1407,7 @@ def run_prediction_workflow(
                 "odds_timestamp_max": metadata["odds_timestamp_max"],
                 "bookmakers_used": metadata["bookmakers_used"],
                 "number_of_bookmakers": metadata["number_of_bookmakers"],
+                "margin_removal_method": _canonical_margin_method(config.margin_removal_method),
                 "odds_source_urls": metadata["odds_source_urls"],
                 "source_qualities": metadata["source_qualities"],
                 "source_notes": metadata["source_notes"],
@@ -1411,6 +1533,17 @@ def run_prediction_workflow(
         if predictions is not None
         else pd.DataFrame()
     )
+    margin_method_comparison = (
+        _build_margin_method_comparison(
+            odds=odds,
+            config=config,
+            default_report=match_report,
+            correct_score_odds=correct_score_odds,
+            total_goals_odds=total_goals_odds,
+        )
+        if config.enable_margin_method_comparison
+        else pd.DataFrame()
+    )
     return PredictionWorkflowResult(
         bookmaker_probabilities,
         aggregated,
@@ -1425,4 +1558,5 @@ def run_prediction_workflow(
         aggregated_total_goals,
         baseline_matrices,
         challenger_matrices,
+        margin_method_comparison,
     )

@@ -108,6 +108,7 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "odds_timestamp_max",
         "bookmakers_used",
         "number_of_bookmakers",
+        "margin_removal_method",
         "has_over_under",
         "has_btts",
         "has_qualification_odds",
@@ -200,6 +201,10 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
     assert "market_consistent_matrix" in workflow.challenger_score_matrices["WC001"]
     assert workflow.match_report["top_5_ev_predictions"].str.len().gt(0).all()
     assert workflow.match_report["plausible_top_alternatives"].str.len().gt(0).all()
+    assert not workflow.margin_method_comparison.empty
+    assert {"normalised_inverse_odds", "power", "additive"}.issubset(
+        set(workflow.margin_method_comparison["method"])
+    )
     assert workflow.match_report["baseline_poisson_recommended_score"].equals(
         workflow.match_report["dixon_coles_recommended_score"]
     )
@@ -383,12 +388,38 @@ def test_top_ten_ev_decomposition_is_written_to_excel(tmp_path: Path) -> None:
     assert "suppression_reason" in recommendation_headers
     assert "ev_decomposition" in workbook.sheetnames
     assert "market_consistent" in workbook.sheetnames
+    assert "margin_methods" in workbook.sheetnames
     assert "predicted_score" in diagnostics_headers
     assert "exact_score_component" in diagnostics_headers
     market_consistent_headers = [cell.value for cell in workbook["market_consistent"][1]]
     assert "market_consistent_top_10_ev_scorelines" in recommendation_headers
     assert "market_consistent_top_10_probability_scorelines" in market_consistent_headers
     assert workbook["ev_decomposition"].max_row == 21
+
+
+def test_margin_method_comparison_does_not_change_default_recommended_score(tmp_path: Path) -> None:
+    workflow = run_world_cup_predictions(_settings(tmp_path))
+    report = workflow.match_report.set_index("match_id")
+    comparison = workflow.margin_method_comparison
+    default_rows = comparison[comparison["method"] == "normalised_inverse_odds"].set_index("match_id")
+
+    assert report["recommended_score"].equals(report["final_live_recommended_score"])
+    assert default_rows["recommended_score"].equals(report.loc[default_rows.index, "recommended_score"])
+    assert default_rows["differs_from_default"].eq("no").all()
+
+
+def test_configured_margin_method_changes_active_workflow_probabilities(tmp_path: Path) -> None:
+    default = run_world_cup_predictions(
+        _settings(tmp_path / "default"),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).match_report.set_index("match_id")
+    power = run_world_cup_predictions(
+        _settings(tmp_path / "power"),
+        ProjectConfig(margin_removal_method="power", enable_margin_method_comparison=False),
+    ).match_report.set_index("match_id")
+
+    assert not default["market_a_win"].equals(power["market_a_win"])
+    assert power["margin_removal_method"].eq("power").all()
 
 
 def test_extreme_favourite_audit_and_larger_grid_sensitivity_trigger(tmp_path: Path) -> None:

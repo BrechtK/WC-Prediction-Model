@@ -555,7 +555,11 @@ def _market_consistent_diagnostics_sheet(frame: pd.DataFrame) -> pd.DataFrame:
     return frame[[column for column in columns if column in frame]].copy()
 
 
-def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path) -> None:
+def export_world_cup_recommendations_excel(
+    frame: pd.DataFrame,
+    path: str | Path,
+    margin_method_comparison: pd.DataFrame | None = None,
+) -> None:
     """Export readable real-tournament recommendations with Excel formatting."""
 
     path = Path(path)
@@ -715,6 +719,7 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "friend_strategy_reason",
         "warnings",
         "number_of_bookmakers",
+        "margin_removal_method",
         "has_over_under",
         "total_goals_lines_available",
         "total_goals_lines_used_for_calibration",
@@ -772,6 +777,8 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
             high_score_diagnostics.to_excel(writer, index=False, sheet_name="high_score_diagnostics")
         if not market_consistent_diagnostics.empty:
             market_consistent_diagnostics.to_excel(writer, index=False, sheet_name="market_consistent")
+        if margin_method_comparison is not None and not margin_method_comparison.empty:
+            margin_method_comparison.to_excel(writer, index=False, sheet_name="margin_methods")
 
     probability_columns = {
         "market_a",

@@ -70,7 +70,7 @@ def decimal_odds_to_implied_probabilities(decimal_odds: Sequence[float]) -> np.n
 
 def fair_probabilities_from_decimal_odds(
     decimal_odds: Sequence[float],
-    method: str = "proportional",
+    method: str = "normalised_inverse_odds",
     suspicious_low: float = 1.0,
     suspicious_high: float = 1.20,
 ) -> MarginRemovalResult:
@@ -82,7 +82,7 @@ def fair_probabilities_from_decimal_odds(
 
 def process_bookmaker_odds(
     odds: pd.DataFrame,
-    margin_method: str = "proportional",
+    margin_method: str = "normalised_inverse_odds",
     suspicious_low: float = 1.0,
     suspicious_high: float = 1.20,
 ) -> pd.DataFrame:
@@ -170,7 +170,7 @@ def aggregate_bookmaker_probabilities(
 
 def process_correct_score_odds(
     correct_score_odds: pd.DataFrame,
-    margin_method: str = "proportional",
+    margin_method: str = "normalised_inverse_odds",
 ) -> pd.DataFrame:
     """Remove margin from long-format correct-score odds for each bookmaker.
 
@@ -235,7 +235,7 @@ def total_goals_line_kind(line: float) -> str:
 
 def process_total_goals_odds(
     total_goals_odds: pd.DataFrame,
-    margin_method: str = "proportional",
+    margin_method: str = "normalised_inverse_odds",
     suspicious_low: float = 1.0,
     suspicious_high: float = 1.20,
 ) -> pd.DataFrame:

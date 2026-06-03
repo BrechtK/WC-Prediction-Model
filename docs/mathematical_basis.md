@@ -14,7 +14,7 @@ The bookmaker overround is:
 R = sum_i q_i
 ```
 
-Version 1 removes the margin proportionally:
+The default method removes the margin by normalised inverse odds:
 
 ```text
 p_i = q_i / R
@@ -22,6 +22,32 @@ p_i = q_i / R
 
 Fair probabilities are calculated per bookmaker and market, then aggregated
 across bookmakers.
+
+The live workflow can also compare diagnostic challenger methods. These do not
+change the default recommendation unless `margin_removal_method` is explicitly
+configured.
+
+Power margin removal finds an exponent `alpha` such that:
+
+```text
+sum_i q_i^alpha = 1
+p_i = q_i^alpha
+```
+
+Additive margin removal subtracts equal overround mass from each outcome:
+
+```text
+p_i = q_i - (R - 1) / n
+```
+
+where `n` is the number of outcomes. If this produces a non-positive
+probability, the method is flagged as invalid for that market rather than being
+silently trusted. Shin-style and odds-ratio methods are not promoted until they
+are implemented and tested with clear numerical safeguards.
+
+The `margin_methods` diagnostics compare calibrated lambdas, fit errors, EV
+recommendations, and warning flags across implemented methods. Disagreement
+between methods is a sensitivity signal, not an automatic model switch.
 
 ## Independent Poisson Score Model
 
@@ -61,11 +87,10 @@ shape of the total-goals distribution. Half-goal lines can add constraints:
 P(over L) = P(X + Y > L), for L in {0.5, 1.5, 2.5, ...}
 ```
 
-Integer and quarter Asian totals are stored for diagnostics but do not yet
-enter calibration. Integer lines require an explicit push treatment. Quarter
-lines require their split-line half-stake settlement formula. Adding those
-formulas is a deliberate future task rather than silently treating Asian
-totals as ordinary binary markets.
+Integer and quarter Asian totals are stored for the market-consistent diagnostic
+challenger and skipped from the default Poisson calibration. Integer lines use
+explicit push treatment, and quarter lines split stake across adjacent integer
+and half-goal lines when priced diagnostically.
 
 The recommendation report lists all available ladder lines, the half-goal
 lines actually used as targets, and the skipped Asian lines. For each used

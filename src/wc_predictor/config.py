@@ -7,6 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
+from wc_predictor.margin import IMPLEMENTED_MARGIN_REMOVAL_METHODS
+
 
 @dataclass(frozen=True)
 class CalibrationWeights:
@@ -127,7 +129,8 @@ class ProjectConfig:
 
     max_goals_score_matrix: int = 8
     max_candidate_goals: int = 5
-    margin_removal_method: str = "proportional"
+    margin_removal_method: str = "normalised_inverse_odds"
+    enable_margin_method_comparison: bool = True
     bookmaker_aggregation_method: str = "mean"
     renormalise_score_matrix: bool = True
     suspicious_overround_low: float = 1.0
@@ -146,6 +149,12 @@ class ProjectConfig:
     public_strategy: PublicStrategyConfig = field(default_factory=PublicStrategyConfig)
 
     def __post_init__(self) -> None:
+        allowed_margin_methods = {*IMPLEMENTED_MARGIN_REMOVAL_METHODS, "proportional"}
+        if self.margin_removal_method not in allowed_margin_methods:
+            raise ValueError(
+                "margin_removal_method must be one of "
+                f"{sorted(IMPLEMENTED_MARGIN_REMOVAL_METHODS)}"
+            )
         if not 0 <= self.correct_score_poisson_weight <= 1:
             raise ValueError("correct_score_poisson_weight must lie between zero and one")
         valid_correct_score_aggregation_methods = {

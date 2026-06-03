@@ -328,8 +328,33 @@ def format_live_prediction_summary(result: LivePredictionResult) -> str:
 
     diagnostic_sections: list[str] = []
     final_submissions: list[str] = []
+    margin_comparison = result.workflow.margin_method_comparison
     for _, row in result.workflow.match_report.iterrows():
         match_id = str(row["match_id"])
+        match_margin_comparison = (
+            margin_comparison[margin_comparison["match_id"].astype(str) == match_id]
+            if not margin_comparison.empty
+            else pd.DataFrame()
+        )
+        margin_lines: list[str] = []
+        if not match_margin_comparison.empty:
+            methods = ", ".join(match_margin_comparison["method"].astype(str).tolist())
+            changes = match_margin_comparison["differs_from_default"].astype(str).str.lower().eq("yes").any()
+            margin_lines = [
+                "Margin-removal sensitivity:",
+                f"- default method: {row.get('margin_removal_method')}",
+                f"- methods compared: {methods}",
+                "- recommendations:",
+                *[
+                    (
+                        f"  {comparison_row['method']}: {comparison_row['recommended_score']}"
+                        if str(comparison_row.get("method_status", "ok")) == "ok"
+                        else f"  {comparison_row['method']}: failed / invalid probabilities"
+                    )
+                    for _, comparison_row in match_margin_comparison.iterrows()
+                ],
+                f"- changes recommendation: {'yes' if changes else 'no'}",
+            ]
         btts_difference = (
             row["model_implied_btts_yes_probability"] - row["market_fair_btts_yes_probability"]
             if pd.notna(row.get("market_fair_btts_yes_probability"))
@@ -351,6 +376,7 @@ def format_live_prediction_summary(result: LivePredictionResult) -> str:
                     f"- plausible alternatives: {row.get('plausible_top_alternatives') or 'none'}",
                     f"- manual review flag: {row.get('manual_review_flag')}",
                     f"- decision note: {row.get('decision_note')}",
+                    *margin_lines,
                     *(
                         [
                             "Extreme-favourite audit:",
