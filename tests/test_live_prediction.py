@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 import runpy
 import sys
@@ -137,6 +138,42 @@ def _write_schedule(path: Path, fixtures: list[tuple[str, str, str]]) -> None:
             )
         )
     path.write_text("\n\n".join(blocks), encoding="utf-8")
+
+
+def _write_timed_schedule(path: Path, fixtures: list[tuple[str, str, str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blocks = []
+    for date, time, team_a, team_b in fixtures:
+        blocks.append(
+            "\n".join(
+                [
+                    date,
+                    "1",
+                    "X",
+                    "2",
+                    "",
+                    time,
+                    team_a,
+                    team_a,
+                    "-",
+                    team_b,
+                    team_b,
+                    "1.50",
+                    "4.00",
+                    "7.00",
+                ]
+            )
+        )
+    path.write_text("\n\n".join(blocks), encoding="utf-8")
+
+
+def _load_run_live_module():
+    spec = importlib.util.spec_from_file_location("run_live_prediction_for_test", RUN_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _settings(tmp_path: Path, **overrides) -> LivePredictionSettings:
@@ -350,6 +387,228 @@ def test_live_runner_script_uses_schedule_mapping_for_combined_paste(
     assert "M001 Schedule Alpha vs Schedule Beta:" in output
     assert parsed_odds["team_a"].eq("Schedule Alpha").all()
     assert parsed_odds["team_b"].eq("Schedule Beta").all()
+
+
+def test_live_runner_script_list_date_lists_fixtures_and_exits(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+            ("14 Jun 2026", "06:00", "Australia", "Turkey"),
+        ],
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--run-mode", "list_date", "--date", "14-6"])
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    assert "14 Jun 2026" in output
+    assert "1. M001 | 00:00 | Brazil vs Morocco" in output
+    assert "3. M003 | 06:00 | Australia vs Turkey" in output
+    assert "Final recommended submission:" not in output
+    assert not (tmp_path / "output/predictions.xlsx").exists()
+
+
+def test_live_runner_script_resolves_single_match_from_date_and_game_number(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+            ("14 Jun 2026", "06:00", "Australia", "Turkey"),
+        ],
+    )
+    _write_combined_paste(tmp_path / "input/odds", "M003", clean_filename=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--date", "14-6", "--game-number", "3", "--skip-weight-sensitivity"],
+    )
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    parsed_odds = pd.read_csv(tmp_path / "cache/parsed/core_odds.csv")
+    assert "- run mode: single_match" in output
+    assert "- game number: 3" in output
+    assert "- resolved match: M003 | Australia vs Turkey" in output
+    assert parsed_odds["match_id"].astype(str).unique().tolist() == ["M003"]
+    assert "M003 Australia vs Turkey:" in output
+
+
+def test_live_runner_script_runs_all_matches_on_selected_date(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+            ("15 Jun 2026", "06:00", "Australia", "Turkey"),
+        ],
+    )
+    _write_combined_paste(tmp_path / "input/odds", "M001", clean_filename=True)
+    _write_combined_paste(tmp_path / "input/odds", "M002", clean_filename=True)
+    _write_combined_paste(tmp_path / "input/odds", "M003", clean_filename=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "date", "--date", "14-6", "--skip-weight-sensitivity"],
+    )
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    parsed_odds = pd.read_csv(tmp_path / "cache/parsed/core_odds.csv")
+    assert "- run mode: date" in output
+    assert "- resolved matches: M001, M002" in output
+    assert parsed_odds["match_id"].astype(str).unique().tolist() == ["M001", "M002"]
+    assert "M001 Brazil vs Morocco:" in output
+    assert "M002 Haiti vs Scotland:" in output
+    assert "M003 Australia vs Turkey:" not in output
+
+
+def test_live_runner_script_date_mode_reports_missing_odds_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+        ],
+    )
+    _write_combined_paste(tmp_path / "input/odds", "M001", clean_filename=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--run-mode", "date", "--date", "14-6"])
+
+    with pytest.raises(SystemExit, match=r"Selected date fixtures with missing odds:"):
+        runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+
+def test_live_runner_script_match_id_overrides_date_and_game_number(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+            ("14 Jun 2026", "06:00", "Australia", "Turkey"),
+        ],
+    )
+    _write_combined_paste(tmp_path / "input/odds", "M003", clean_filename=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_live_prediction.py",
+            "--run-mode",
+            "single_match",
+            "--date",
+            "14-6",
+            "--game-number",
+            "1",
+            "--match-id",
+            "M003",
+            "--skip-weight-sensitivity",
+        ],
+    )
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    assert "- resolved match: M003 | Australia vs Turkey" in output
+    assert "M001 Brazil vs Morocco:" not in output
+    assert "M003 Australia vs Turkey:" in output
+
+
+def test_live_runner_script_cli_overrides_user_settings_block(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
+    _write_combined_paste(tmp_path / "input/odds", clean_filename=True)
+    module = _load_run_live_module()
+    monkeypatch.setattr(module, "RUN_MODE", "list_date")
+    monkeypatch.setattr(module, "DATE", "11-6")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
+
+    module.main()
+
+    output = capsys.readouterr().out
+    assert "- run mode: all_available" in output
+    assert "Final recommended submission:" in output
+    assert (tmp_path / "output/predictions.xlsx").exists()
+
+
+def test_live_runner_script_invalid_date_gives_helpful_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--run-mode", "list_date", "--date", "bad-date"])
+
+    with pytest.raises(SystemExit, match="Invalid date 'bad-date'"):
+        runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+
+def test_live_runner_script_invalid_game_number_gives_helpful_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+        ],
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--date", "14-6", "--game-number", "3"])
+
+    with pytest.raises(SystemExit, match="GAME_NUMBER 3 is out of range"):
+        runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+
+def test_live_runner_script_missing_selected_odds_file_gives_helpful_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [("14 Jun 2026", "06:00", "Australia", "Turkey")],
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--date", "14-6", "--game-number", "1"])
+
+    with pytest.raises(SystemExit, match=r"Missing odds file:\ninput\\odds\\M001\.txt"):
+        runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
 
 def test_live_runner_script_rejects_combined_paste_unknown_to_schedule(

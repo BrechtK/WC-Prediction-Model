@@ -1,8 +1,10 @@
+import json
 from pathlib import Path
 import runpy
 import sys
 
 import pandas as pd
+import pytest
 from openpyxl import load_workbook
 
 from wc_predictor.config import ProjectConfig
@@ -18,6 +20,7 @@ from wc_predictor.world_cup import (
     resolve_world_cup_odds_input,
     run_world_cup_predictions,
 )
+from wc_predictor.workflow import _btts_warning_flags, _decision_aid, _ev_explanation
 
 
 EXAMPLES = Path("data/examples")
@@ -126,6 +129,51 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "public_strategy_reason",
         "friend_strategy_score",
         "warning_flags",
+        "recommendation_confidence",
+        "manual_review_flag",
+        "close_alternatives",
+        "ev_gap_to_second",
+        "ev_gap_to_third",
+        "decision_note",
+        "market_fair_btts_yes_probability",
+        "market_fair_btts_no_probability",
+        "model_implied_btts_yes_probability",
+        "model_implied_btts_no_probability",
+        "btts_fit_error",
+        "btts_market_available",
+        "model_probability_team_a_clean_sheet",
+        "model_probability_team_b_clean_sheet",
+        "model_probability_no_btts",
+        "model_probability_btts",
+        "expected_total_goals",
+        "expected_team_a_goals",
+        "expected_team_b_goals",
+        "probability_total_goals_0",
+        "probability_total_goals_1",
+        "probability_total_goals_2",
+        "probability_total_goals_3",
+        "probability_total_goals_4_plus",
+        "top_5_ev_decomposition",
+        "top_5_ev_decomposition_json",
+        "top_10_ev_decomposition",
+        "top_10_ev_decomposition_json",
+        "ev_explanation",
+        "extreme_favourite_audit_triggered",
+        "normal_grid_recommendation",
+        "normal_grid_poisson_recommendation",
+        "larger_grid_recommendation",
+        "larger_grid_poisson_recommendation",
+        "recommendation_changes_with_larger_grid",
+        "larger_grid_poisson_changes_recommendation",
+        "larger_grid_differs_from_live_recommendation",
+        "normal_grid_tail_mass",
+        "larger_grid_tail_mass",
+        "ev_favourite_3_0_normal_grid",
+        "ev_favourite_4_0_normal_grid",
+        "ev_favourite_5_0_normal_grid",
+        "ev_favourite_3_0_larger_grid",
+        "ev_favourite_4_0_larger_grid",
+        "ev_favourite_5_0_larger_grid",
     }.issubset(workflow.match_report.columns)
     assert workflow.match_report["recommended_score"].equals(workflow.match_report["final_live_recommended_score"])
     assert workflow.match_report["baseline_poisson_recommended_score"].equals(
@@ -133,6 +181,222 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
     )
     assert len(pd.read_csv(settings.csv_output_path)) == 2
     assert len(pd.read_excel(settings.xlsx_output_path)) == 2
+
+
+def test_btts_audit_uses_aggregated_market_fair_probability(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(_settings(tmp_path)).match_report.set_index("match_id")
+    yes_one = (1 / 1.95) / ((1 / 1.95) + (1 / 1.87))
+    yes_two = (1 / 1.98) / ((1 / 1.98) + (1 / 1.85))
+    expected_yes = (yes_one + yes_two) / 2
+
+    assert report.loc["WC001", "market_fair_btts_yes_probability"] == pytest.approx(expected_yes)
+    assert report.loc["WC001", "market_fair_btts_no_probability"] == pytest.approx(1 - expected_yes)
+    assert report.loc["WC001", "btts_market_available"] == "yes"
+
+
+def test_model_implied_btts_audit_is_computed_from_score_matrix(tmp_path: Path) -> None:
+    workflow = run_world_cup_predictions(_settings(tmp_path))
+    report = workflow.match_report.set_index("match_id")
+    matrix = workflow.score_matrices["WC001"]
+
+    assert report.loc["WC001", "model_implied_btts_yes_probability"] == pytest.approx(
+        matrix.btts_yes_probability()
+    )
+    assert report.loc["WC001", "model_implied_btts_no_probability"] == pytest.approx(
+        1 - matrix.btts_yes_probability()
+    )
+    assert report.loc["WC001", "model_probability_btts"] == pytest.approx(matrix.btts_yes_probability())
+    assert report.loc["WC001", "model_probability_no_btts"] == pytest.approx(1 - matrix.btts_yes_probability())
+
+
+def test_ev_decomposition_components_sum_to_total_ev(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(_settings(tmp_path)).match_report.set_index("match_id")
+    records = json.loads(report.loc["WC001", "top_10_ev_decomposition_json"])
+
+    assert len(records) == 10
+    for record in records:
+        component_total = (
+            record["participation_component"]
+            + record["result_component"]
+            + record["goal_difference_component"]
+            + record["exact_score_component"]
+        )
+        assert component_total == pytest.approx(record["total_expected_points"])
+        assert record["total_expected_points_from_components"] == pytest.approx(record["total_expected_points"])
+
+
+def test_ev_explanation_uses_probability_weighted_margin_wording() -> None:
+    explanation = _ev_explanation(
+        [
+            {
+                "predicted_score": "3-0",
+                "result_component": 3.6,
+                "goal_difference_component": 0.50,
+                "exact_score_component": 0.20,
+                "participation_component": 1.0,
+            },
+            {
+                "predicted_score": "4-0",
+                "result_component": 3.6,
+                "goal_difference_component": 0.40,
+                "exact_score_component": 0.20,
+                "participation_component": 1.0,
+            },
+        ]
+    )
+
+    assert "expected value to the +3 margin than the +4 margin" in explanation
+    assert "payoff is higher" not in explanation
+
+
+def test_decision_aid_flags_clustered_recommendations_for_manual_review() -> None:
+    aid = _decision_aid(
+        [
+            {"predicted_score": "3-0", "total_expected_points": 5.00},
+            {"predicted_score": "4-0", "total_expected_points": 4.96},
+            {"predicted_score": "5-0", "total_expected_points": 4.94},
+        ],
+        high_score_cluster=True,
+        high_score_cluster_alternatives="3-0, 4-0, 5-0",
+    )
+
+    assert aid["recommendation_confidence"] == "low / clustered"
+    assert aid["manual_review_flag"] == "yes"
+    assert aid["ev_gap_to_second"] == pytest.approx(0.04)
+    assert aid["ev_gap_to_third"] == pytest.approx(0.06)
+    assert aid["close_alternatives"] == "4-0, 5-0, 3-0"
+    assert "High-score cluster" in aid["decision_note"]
+
+
+def test_decision_aid_marks_clear_ev_lead_as_high_confidence() -> None:
+    aid = _decision_aid(
+        [
+            {"predicted_score": "2-0", "total_expected_points": 5.00},
+            {"predicted_score": "1-0", "total_expected_points": 4.80},
+            {"predicted_score": "3-0", "total_expected_points": 4.70},
+        ],
+        high_score_cluster=False,
+        high_score_cluster_alternatives="",
+    )
+
+    assert aid["recommendation_confidence"] == "high"
+    assert aid["manual_review_flag"] == "no"
+    assert aid["close_alternatives"] == ""
+    assert aid["ev_gap_to_second"] == pytest.approx(0.20)
+    assert aid["decision_note"] == "No manual review signal."
+
+
+def test_btts_warning_appears_for_recommendation_conflicting_with_strong_market_signal() -> None:
+    flags = _btts_warning_flags(
+        has_btts=True,
+        market_btts_yes=0.60,
+        market_btts_no=0.40,
+        model_btts_yes=0.58,
+        recommended_score=(1, 0),
+    )
+
+    assert "recommended_no_btts_against_strong_btts_yes_market" in flags
+
+
+def test_top_ten_ev_decomposition_is_written_to_excel(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    run_world_cup_predictions(settings)
+    workbook = load_workbook(settings.xlsx_output_path)
+    recommendation_headers = [cell.value for cell in workbook["recommendations"][1]]
+    diagnostics_headers = [cell.value for cell in workbook["ev_decomposition"][1]]
+
+    assert "top_10_ev_decomposition" in recommendation_headers
+    assert "recommendation_confidence" in recommendation_headers
+    assert "manual_review_flag" in recommendation_headers
+    assert "decision_note" in recommendation_headers
+    assert "ev_decomposition" in workbook.sheetnames
+    assert "predicted_score" in diagnostics_headers
+    assert "exact_score_component" in diagnostics_headers
+    assert workbook["ev_decomposition"].max_row == 21
+
+
+def test_extreme_favourite_audit_and_larger_grid_sensitivity_trigger(tmp_path: Path) -> None:
+    input_path = tmp_path / "extreme.csv"
+    pd.DataFrame(
+        [
+            {
+                "match_id": "EXTREME",
+                "date": "2026-06-12",
+                "stage": "group stage",
+                "group": "A",
+                "team_a": "Favourite",
+                "team_b": "Longshot",
+                "bookmaker": "MarketOne",
+                "odds_a_win": 1.08,
+                "odds_draw": 12.0,
+                "odds_b_win": 35.0,
+                "odds_btts_yes": 2.30,
+                "odds_btts_no": 1.65,
+            }
+        ]
+    ).to_csv(input_path, index=False)
+    settings = WorldCupPredictionSettings(
+        input_path=input_path,
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+    report = run_world_cup_predictions(settings).match_report.iloc[0]
+
+    assert report["favourite_probability"] > 0.75
+    assert bool(report["extreme_favourite_audit_triggered"])
+    assert report["top_clean_sheet_scores"]
+    assert report["top_favourite_margin_probabilities"]
+    assert report["current_final_recommendation"] == report["recommended_score"]
+    assert report["normal_grid_poisson_recommendation"] == report["baseline_poisson_recommended_score"]
+    assert report["larger_grid_recommendation"]
+    assert report["larger_grid_poisson_recommendation"] == report["larger_grid_recommendation"]
+    assert pd.notna(report["larger_grid_tail_mass"])
+    assert report["larger_grid_tail_mass"] < report["normal_grid_tail_mass"]
+    assert pd.notna(report["ev_favourite_3_0_normal_grid"])
+    assert pd.notna(report["ev_favourite_3_0_larger_grid"])
+
+
+def test_larger_grid_sensitivity_can_change_poisson_recommendation_on_synthetic_extreme_favourite(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "extreme_small_grid.csv"
+    pd.DataFrame(
+        [
+            {
+                "match_id": "EXTREME_GRID",
+                "date": "2026-06-12",
+                "stage": "group stage",
+                "group": "A",
+                "team_a": "Favourite",
+                "team_b": "Longshot",
+                "bookmaker": "MarketOne",
+                "odds_a_win": 1.04,
+                "odds_draw": 17.0,
+                "odds_b_win": 55.0,
+                "odds_btts_yes": 2.60,
+                "odds_btts_no": 1.55,
+            }
+        ]
+    ).to_csv(input_path, index=False)
+    settings = WorldCupPredictionSettings(
+        input_path=input_path,
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+    report = run_world_cup_predictions(
+        settings,
+        ProjectConfig(max_goals_score_matrix=2, max_candidate_goals=5),
+    ).match_report.iloc[0]
+
+    assert bool(report["extreme_favourite_audit_triggered"])
+    assert bool(report["larger_grid_poisson_changes_recommendation"])
+    assert report["normal_grid_poisson_recommendation"] != report["larger_grid_poisson_recommendation"]
+    assert report["larger_grid_tail_mass"] < report["normal_grid_tail_mass"]
+    assert "larger_grid_sensitivity" in report["warning_flags"]
 
 
 def test_world_cup_workflow_optionally_uses_correct_score_blend(tmp_path: Path) -> None:
@@ -257,13 +521,21 @@ def test_world_cup_submission_sheet_contains_only_entry_columns_and_formatting(t
         "recommended_score",
         "recommended_qualifier",
         "best_expected_points",
+        "recommendation_confidence",
+        "manual_review_flag",
+        "close_alternatives",
+        "ev_gap_to_second",
+        "ev_gap_to_third",
+        "decision_note",
         "favourite_bucket",
         "top_3_alternatives",
         "notes",
     ]
     assert worksheet.freeze_panes == "A2"
     assert worksheet.cell(2, column["best_expected_points"]).number_format == "0.000"
+    assert worksheet.cell(2, column["ev_gap_to_second"]).number_format == "0.000"
     assert worksheet.cell(2, column["top_3_alternatives"]).alignment.wrap_text
+    assert worksheet.cell(2, column["decision_note"]).alignment.wrap_text
     assert worksheet.cell(2, column["notes"]).alignment.wrap_text
     assert worksheet.cell(2, column["top_3_alternatives"]).value.count(";") == 2
     assert worksheet.cell(2, column["match_id"]).value == "WC001"

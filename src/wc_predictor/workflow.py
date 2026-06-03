@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from wc_predictor.calibration import CalibrationTargets, calibrate_poisson_model, poisson_over_total_probability
-from wc_predictor.config import ProjectConfig
+from wc_predictor.config import KnockoutScoringConfig, ProjectConfig
 from wc_predictor.correct_scores import (
     aggregate_correct_score_market,
     blend_score_matrices,
@@ -27,7 +28,9 @@ from wc_predictor.odds import (
     process_total_goals_odds,
 )
 from wc_predictor.optimiser import (
+    GroupPredictionEvaluation,
     GroupPredictionRecommendation,
+    KnockoutPredictionEvaluation,
     KnockoutPredictionRecommendation,
     evaluate_group_prediction,
     evaluate_knockout_prediction,
@@ -41,6 +44,13 @@ from wc_predictor.utils import favourite_strength_bucket, is_knockout_stage
 
 HIGH_TAIL_MASS_THRESHOLD = 0.01
 STALE_ODDS_THRESHOLD = pd.Timedelta(hours=24)
+BTTS_FIT_WARNING_THRESHOLD = 0.05
+STRONG_BTTS_SIGNAL_THRESHOLD = 0.55
+EXTREME_FAVOURITE_PROBABILITY_THRESHOLD = 0.75
+HIGH_SCORE_EV_CLUSTER_THRESHOLD = 0.10
+LARGER_GRID_MAX_GOALS = 15
+HIGH_CONFIDENCE_EV_GAP_THRESHOLD = 0.15
+MEDIUM_CONFIDENCE_EV_GAP_THRESHOLD = 0.07
 
 
 @dataclass(frozen=True)
@@ -99,6 +109,429 @@ def _format_bookmaker_raw_probabilities(bookmaker_probabilities: pd.DataFrame, m
 
 def _format_top_ev_predictions(recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation) -> str:
     return _format_evaluations((recommendation.best, *recommendation.alternatives[:4]))
+
+
+def _score_has_btts(score: tuple[int, int]) -> bool:
+    return score[0] > 0 and score[1] > 0
+
+
+def _score_label(score: tuple[int, int]) -> str:
+    return f"{score[0]}-{score[1]}"
+
+
+def _score_matrix_audit(matrix: ScoreProbabilityMatrix) -> dict[str, float]:
+    scores_a, scores_b = np.indices(matrix.probabilities.shape)
+    total_goals = scores_a + scores_b
+    btts_yes = matrix.btts_yes_probability()
+    audit = {
+        "model_implied_btts_yes_probability": btts_yes,
+        "model_implied_btts_no_probability": 1.0 - btts_yes,
+        "model_probability_team_a_clean_sheet": float(matrix.probabilities[:, 0].sum()),
+        "model_probability_team_b_clean_sheet": float(matrix.probabilities[0, :].sum()),
+        "model_probability_no_btts": 1.0 - btts_yes,
+        "model_probability_btts": btts_yes,
+        "expected_total_goals": float((total_goals * matrix.probabilities).sum()),
+        "expected_team_a_goals": float((scores_a * matrix.probabilities).sum()),
+        "expected_team_b_goals": float((scores_b * matrix.probabilities).sum()),
+        "probability_total_goals_0": float(matrix.probabilities[total_goals == 0].sum()),
+        "probability_total_goals_1": float(matrix.probabilities[total_goals == 1].sum()),
+        "probability_total_goals_2": float(matrix.probabilities[total_goals == 2].sum()),
+        "probability_total_goals_3": float(matrix.probabilities[total_goals == 3].sum()),
+        "probability_total_goals_4_plus": float(matrix.probabilities[total_goals >= 4].sum()),
+    }
+    for goals in range(6):
+        audit[f"probability_team_a_scores_{goals}"] = (
+            float(matrix.probabilities[goals, :].sum()) if goals < matrix.probabilities.shape[0] else 0.0
+        )
+        audit[f"probability_team_b_scores_{goals}"] = (
+            float(matrix.probabilities[:, goals].sum()) if goals < matrix.probabilities.shape[1] else 0.0
+        )
+    audit["probability_team_a_scores_6_plus"] = float(matrix.probabilities[6:, :].sum())
+    audit["probability_team_b_scores_6_plus"] = float(matrix.probabilities[:, 6:].sum())
+    for goals in range(7):
+        audit[f"probability_total_goals_{goals}"] = float(matrix.probabilities[total_goals == goals].sum())
+    audit["probability_total_goals_7_plus"] = float(matrix.probabilities[total_goals >= 7].sum())
+    for margin in range(1, 6):
+        audit[f"probability_team_a_wins_by_{margin}"] = float(
+            matrix.probabilities[scores_a - scores_b == margin].sum()
+        )
+        audit[f"probability_team_b_wins_by_{margin}"] = float(
+            matrix.probabilities[scores_b - scores_a == margin].sum()
+        )
+    audit["probability_team_a_wins_by_6_plus"] = float(matrix.probabilities[scores_a - scores_b >= 6].sum())
+    audit["probability_team_b_wins_by_6_plus"] = float(matrix.probabilities[scores_b - scores_a >= 6].sum())
+    audit["probability_draw"] = float(np.trace(matrix.probabilities))
+    return audit
+
+
+def _group_ev_components(evaluation: GroupPredictionEvaluation) -> dict[str, float]:
+    return {
+        "participation_component": 1.0,
+        "result_component": 4.0 * evaluation.correct_result_probability,
+        "goal_difference_component": 2.0 * evaluation.correct_goal_difference_probability,
+        "exact_score_component": 3.0 * evaluation.exact_score_probability,
+        "correct_result_probability": evaluation.correct_result_probability,
+        "correct_goal_difference_probability": evaluation.correct_goal_difference_probability,
+    }
+
+
+def _knockout_ev_components(
+    evaluation: KnockoutPredictionEvaluation,
+    config: KnockoutScoringConfig,
+) -> dict[str, float]:
+    return {
+        "participation_component": float(config.participation_points),
+        "result_component": float(config.qualifier_points * evaluation.qualifier_probability),
+        "goal_difference_component": float(config.goal_difference_points * evaluation.correct_goal_difference_probability),
+        "exact_score_component": float(config.exact_score_points * evaluation.exact_score_probability),
+        "correct_result_probability": evaluation.qualifier_probability,
+        "correct_goal_difference_probability": evaluation.correct_goal_difference_probability,
+    }
+
+
+def _top_ev_evaluations(
+    matrix: ScoreProbabilityMatrix,
+    knockout: bool,
+    qualifier_probabilities: dict[str, float] | None,
+    config: ProjectConfig,
+    top_n: int,
+) -> tuple[GroupPredictionEvaluation | KnockoutPredictionEvaluation, ...]:
+    if knockout:
+        evaluations = [
+            evaluate_knockout_prediction(
+                matrix,
+                pred_a,
+                pred_b,
+                qualifier,
+                qualifier_probabilities or {},
+                config.knockout_scoring,
+            )
+            for pred_a in range(config.max_candidate_goals + 1)
+            for pred_b in range(config.max_candidate_goals + 1)
+            for qualifier in (qualifier_probabilities or {})
+        ]
+        evaluations.sort(key=lambda item: (-item.expected_points, item.predicted_score, item.predicted_qualifier))
+    else:
+        evaluations = [
+            evaluate_group_prediction(matrix, pred_a, pred_b)
+            for pred_a in range(config.max_candidate_goals + 1)
+            for pred_b in range(config.max_candidate_goals + 1)
+        ]
+        evaluations.sort(key=lambda item: (-item.expected_points, item.predicted_score))
+    return tuple(evaluations[:top_n])
+
+
+def _ev_decomposition_records_from_evaluations(
+    match_id: str,
+    evaluations: tuple[GroupPredictionEvaluation | KnockoutPredictionEvaluation, ...],
+    config: ProjectConfig,
+) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for rank, evaluation in enumerate(evaluations, start=1):
+        if isinstance(evaluation, KnockoutPredictionEvaluation):
+            components = _knockout_ev_components(evaluation, config.knockout_scoring)
+        else:
+            components = _group_ev_components(evaluation)
+        total_from_components = (
+            components["participation_component"]
+            + components["result_component"]
+            + components["goal_difference_component"]
+            + components["exact_score_component"]
+        )
+        records.append(
+            {
+                "match_id": match_id,
+                "rank": rank,
+                "predicted_score": _score_label(evaluation.predicted_score),
+                "total_expected_points": evaluation.expected_points,
+                **components,
+                "total_expected_points_from_components": total_from_components,
+                "exact_score_probability": evaluation.exact_score_probability,
+                "btts_status_of_prediction": "btts_yes" if _score_has_btts(evaluation.predicted_score) else "btts_no",
+            }
+        )
+    return records
+
+
+def _ev_decomposition_records(
+    match_id: str,
+    recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    config: ProjectConfig,
+) -> list[dict[str, object]]:
+    return _ev_decomposition_records_from_evaluations(
+        match_id,
+        (recommendation.best, *recommendation.alternatives[:4]),
+        config,
+    )
+
+
+def _format_ev_decomposition(records: list[dict[str, object]]) -> str:
+    parts: list[str] = []
+    for record in records:
+        parts.append(
+            f"{record['predicted_score']}: EV={float(record['total_expected_points']):.3f} "
+            f"participation={float(record['participation_component']):.3f} "
+            f"result={float(record['result_component']):.3f} "
+            f"goal_difference={float(record['goal_difference_component']):.3f} "
+            f"exact_score={float(record['exact_score_component']):.3f} "
+            f"P_exact={float(record['exact_score_probability']):.4f} "
+            f"P_result={float(record['correct_result_probability']):.4f} "
+            f"P_goal_difference={float(record['correct_goal_difference_probability']):.4f} "
+            f"{record['btts_status_of_prediction']}"
+        )
+    return "; ".join(parts)
+
+
+def _ev_explanation(records: list[dict[str, object]]) -> str:
+    if len(records) < 2:
+        return "No second-best score available for comparison."
+    best, second = records[0], records[1]
+    component_names = [
+        ("exact score", "exact_score_component"),
+        ("result", "result_component"),
+        ("goal difference", "goal_difference_component"),
+        ("participation", "participation_component"),
+    ]
+    deltas = {label: float(best[column]) - float(second[column]) for label, column in component_names}
+    positive_deltas = {label: delta for label, delta in deltas.items() if delta > 0}
+    main_label, main_delta = max(
+        (positive_deltas or deltas).items(),
+        key=lambda item: abs(item[1]),
+    )
+    shared: list[str] = []
+    if np.isclose(float(best["result_component"]), float(second["result_component"]), atol=1e-9):
+        shared.append("result")
+    if np.isclose(float(best["goal_difference_component"]), float(second["goal_difference_component"]), atol=1e-9):
+        shared.append("goal-difference")
+    shared_text = f", while both share the same {' and '.join(shared)} payoff" if shared else ""
+    direction = "more" if main_delta >= 0 else "less"
+    if main_label == "goal difference":
+        best_margin = int(str(best["predicted_score"]).split("-")[0]) - int(str(best["predicted_score"]).split("-")[1])
+        second_margin = int(str(second["predicted_score"]).split("-")[0]) - int(
+            str(second["predicted_score"]).split("-")[1]
+        )
+        return (
+            f"{best['predicted_score']} beats {second['predicted_score']} mainly because the model assigns "
+            f"{direction} expected value to the {best_margin:+d} margin than the {second_margin:+d} margin"
+            f"{shared_text}."
+        )
+    return (
+        f"{best['predicted_score']} beats {second['predicted_score']} mainly because the model assigns "
+        f"{direction} expected value to the {main_label} component{shared_text}."
+    )
+
+
+def _decision_aid(
+    records: list[dict[str, object]],
+    high_score_cluster: bool,
+    high_score_cluster_alternatives: str,
+) -> dict[str, object]:
+    best_ev = float(records[0]["total_expected_points"]) if records else np.nan
+    second_ev = float(records[1]["total_expected_points"]) if len(records) > 1 else np.nan
+    third_ev = float(records[2]["total_expected_points"]) if len(records) > 2 else np.nan
+    ev_gap_to_second = best_ev - second_ev if np.isfinite(best_ev) and np.isfinite(second_ev) else pd.NA
+    ev_gap_to_third = best_ev - third_ev if np.isfinite(best_ev) and np.isfinite(third_ev) else pd.NA
+    if pd.isna(ev_gap_to_second):
+        confidence = "unknown"
+    elif float(ev_gap_to_second) >= HIGH_CONFIDENCE_EV_GAP_THRESHOLD:
+        confidence = "high"
+    elif float(ev_gap_to_second) >= MEDIUM_CONFIDENCE_EV_GAP_THRESHOLD:
+        confidence = "medium"
+    else:
+        confidence = "low / clustered"
+
+    close_scores = [
+        str(record["predicted_score"])
+        for record in records[1:]
+        if np.isfinite(best_ev)
+        and best_ev - float(record["total_expected_points"]) < MEDIUM_CONFIDENCE_EV_GAP_THRESHOLD
+    ]
+    if high_score_cluster_alternatives:
+        close_scores.extend(score.strip() for score in high_score_cluster_alternatives.split(",") if score.strip())
+    close_alternatives = ", ".join(dict.fromkeys(close_scores))
+    notes: list[str] = []
+    if confidence == "low / clustered":
+        notes.append("EV cluster: top alternatives are very close; manual review recommended.")
+    if high_score_cluster:
+        notes.append("High-score cluster: consider manual choice among 3-0 / 4-0 / 5-0.")
+    return {
+        "recommendation_confidence": confidence,
+        "manual_review_flag": "yes" if confidence == "low / clustered" or high_score_cluster else "no",
+        "close_alternatives": close_alternatives,
+        "ev_gap_to_second": ev_gap_to_second,
+        "ev_gap_to_third": ev_gap_to_third,
+        "decision_note": " ".join(notes) if notes else "No manual review signal.",
+    }
+
+
+def _btts_warning_flags(
+    *,
+    has_btts: bool,
+    market_btts_yes: float | object,
+    market_btts_no: float | object,
+    model_btts_yes: float,
+    recommended_score: tuple[int, int],
+) -> list[str]:
+    if not has_btts:
+        return ["btts_market_missing"]
+    flags: list[str] = []
+    if pd.notna(market_btts_yes) and abs(model_btts_yes - float(market_btts_yes)) > BTTS_FIT_WARNING_THRESHOLD:
+        flags.append("btts_model_market_mismatch_gt_5pp")
+    if (
+        not _score_has_btts(recommended_score)
+        and pd.notna(market_btts_yes)
+        and float(market_btts_yes) > STRONG_BTTS_SIGNAL_THRESHOLD
+    ):
+        flags.append("recommended_no_btts_against_strong_btts_yes_market")
+    if (
+        _score_has_btts(recommended_score)
+        and pd.notna(market_btts_no)
+        and float(market_btts_no) > STRONG_BTTS_SIGNAL_THRESHOLD
+    ):
+        flags.append("recommended_btts_against_strong_btts_no_market")
+    return flags
+
+
+def _format_probability_items(items: list[tuple[str, float]], limit: int = 5) -> str:
+    return "; ".join(f"{label}: {probability:.4f}" for label, probability in items[:limit])
+
+
+def _candidate_ev(
+    matrix: ScoreProbabilityMatrix,
+    score: tuple[int, int],
+    recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    qualifier_probabilities: dict[str, float] | None,
+    config: ProjectConfig,
+) -> float:
+    if isinstance(recommendation, KnockoutPredictionRecommendation):
+        evaluation = evaluate_knockout_prediction(
+            matrix,
+            score[0],
+            score[1],
+            recommendation.best.predicted_qualifier,
+            qualifier_probabilities or {},
+            config.knockout_scoring,
+        )
+    else:
+        evaluation = evaluate_group_prediction(matrix, score[0], score[1])
+    return evaluation.expected_points
+
+
+def _larger_grid_sensitivity(
+    *,
+    targets: CalibrationTargets,
+    config: ProjectConfig,
+    knockout: bool,
+    qualifier_probabilities: dict[str, float] | None,
+    final_recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    normal_poisson_matrix: ScoreProbabilityMatrix,
+    normal_poisson_recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    favourite_is_team_a: bool,
+) -> dict[str, object]:
+    final_score = _score_label(final_recommendation.best.predicted_score)
+    normal_poisson_score = _score_label(normal_poisson_recommendation.best.predicted_score)
+    larger_calibration = calibrate_poisson_model(
+        targets,
+        LARGER_GRID_MAX_GOALS,
+        config.calibration_weights,
+        config.renormalise_score_matrix,
+        config.poor_calibration_loss_threshold,
+    )
+    larger_recommendation = _optimise_score_matrix(
+        larger_calibration.score_matrix,
+        knockout,
+        qualifier_probabilities,
+        config,
+    )
+    larger_score = _score_label(larger_recommendation.best.predicted_score)
+    watched_scores = ((3, 0), (4, 0), (5, 0)) if favourite_is_team_a else ((0, 3), (0, 4), (0, 5))
+    clean_sheet_evs: dict[str, object] = {}
+    for favourite_goals, score in zip((3, 4, 5), watched_scores, strict=True):
+        label = _score_label(score).replace("-", "_")
+        normal_ev = _candidate_ev(
+            normal_poisson_matrix,
+            score,
+            normal_poisson_recommendation,
+            qualifier_probabilities,
+            config,
+        )
+        larger_ev = _candidate_ev(
+            larger_calibration.score_matrix,
+            score,
+            larger_recommendation,
+            qualifier_probabilities,
+            config,
+        )
+        clean_sheet_evs[f"ev_{label}_normal_grid"] = normal_ev
+        clean_sheet_evs[f"ev_{label}_larger_grid"] = larger_ev
+        clean_sheet_evs[f"ev_favourite_{favourite_goals}_0_normal_grid"] = normal_ev
+        clean_sheet_evs[f"ev_favourite_{favourite_goals}_0_larger_grid"] = larger_ev
+    return {
+        "current_final_recommendation": final_score,
+        "normal_grid_recommendation": normal_poisson_score,
+        "normal_grid_poisson_recommendation": normal_poisson_score,
+        "larger_grid_recommendation": larger_score,
+        "larger_grid_poisson_recommendation": larger_score,
+        "recommendation_changes_with_larger_grid": normal_poisson_score != larger_score,
+        "larger_grid_poisson_changes_recommendation": normal_poisson_score != larger_score,
+        "larger_grid_differs_from_live_recommendation": final_score != larger_score,
+        "larger_grid_tail_mass": larger_calibration.score_matrix.tail_probability,
+        **clean_sheet_evs,
+    }
+
+
+def _extreme_favourite_audit(
+    *,
+    matrix: ScoreProbabilityMatrix,
+    favourite_is_team_a: bool,
+    recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    qualifier_probabilities: dict[str, float] | None,
+    config: ProjectConfig,
+) -> dict[str, object]:
+    scores_a, scores_b = np.indices(matrix.probabilities.shape)
+    favourite_scores = scores_a if favourite_is_team_a else scores_b
+    underdog_scores = scores_b if favourite_is_team_a else scores_a
+    favourite_margins = favourite_scores - underdog_scores
+    clean_sheet_mask = underdog_scores == 0
+    clean_sheet_items = [
+        (
+            _score_label((int(a), int(b))),
+            float(matrix.probabilities[int(a), int(b)]),
+        )
+        for a, b in zip(scores_a[clean_sheet_mask], scores_b[clean_sheet_mask], strict=True)
+    ]
+    clean_sheet_items.sort(key=lambda item: (-item[1], item[0]))
+    margin_items = [
+        (f"+{margin}", float(matrix.probabilities[favourite_margins == margin].sum()))
+        for margin in range(1, 6)
+    ]
+    margin_items.append(("+6+", float(matrix.probabilities[favourite_margins >= 6].sum())))
+    score_count_items = [
+        (str(goals), float(matrix.probabilities[favourite_scores == goals].sum()))
+        for goals in range(6)
+    ]
+    score_count_items.append(("6+", float(matrix.probabilities[favourite_scores >= 6].sum())))
+    score_count_items.sort(key=lambda item: (-item[1], item[0]))
+    watched_scores = ((3, 0), (4, 0), (5, 0)) if favourite_is_team_a else ((0, 3), (0, 4), (0, 5))
+    watched_evs = {
+        _score_label(score): _candidate_ev(matrix, score, recommendation, qualifier_probabilities, config)
+        for score in watched_scores
+    }
+    watched_values = list(watched_evs.values())
+    cluster = max(watched_values) - min(watched_values) <= HIGH_SCORE_EV_CLUSTER_THRESHOLD
+    cluster_ceiling = max(watched_values) if watched_values else np.nan
+    cluster_alternatives = [
+        score for score, ev in watched_evs.items() if np.isfinite(cluster_ceiling) and cluster_ceiling - ev <= HIGH_SCORE_EV_CLUSTER_THRESHOLD
+    ]
+    return {
+        "top_clean_sheet_scores": _format_probability_items(clean_sheet_items),
+        "top_favourite_margin_probabilities": _format_probability_items(margin_items, limit=len(margin_items)),
+        "top_5_favourite_score_count_probabilities": _format_probability_items(score_count_items),
+        "high_score_cluster_scores": "; ".join(f"{score}: {ev:.3f}" for score, ev in watched_evs.items()),
+        "three_four_five_nil_within_0_10_ev": cluster,
+        "high_score_cluster": "yes" if cluster else "no",
+        "high_score_cluster_close_alternatives": ", ".join(cluster_alternatives) if cluster else "",
+    }
 
 
 def _optimise_score_matrix(
@@ -512,6 +945,80 @@ def run_prediction_workflow(
         correct_score_blended_recommended_score = correct_score_blended_recommendation.best.predicted_score
         final_live_recommended_score = recommendation.best.predicted_score
         dixon_coles_recommended_score = dixon_coles_recommendation.best.predicted_score
+        score_audit = _score_matrix_audit(score_matrix)
+        market_btts_yes = row.get("fair_btts_yes", pd.NA)
+        market_btts_no = row.get("fair_btts_no", pd.NA)
+        btts_fit_error = (
+            score_audit["model_implied_btts_yes_probability"] - float(market_btts_yes)
+            if pd.notna(market_btts_yes)
+            else pd.NA
+        )
+        ev_decomposition_records = _ev_decomposition_records(match_id, recommendation, config)
+        top_10_evaluations = _top_ev_evaluations(score_matrix, knockout, qualifier_probabilities, config, 10)
+        top_10_ev_decomposition_records = _ev_decomposition_records_from_evaluations(
+            match_id,
+            top_10_evaluations,
+            config,
+        )
+        ev_decomposition_json = json.dumps(ev_decomposition_records)
+        top_10_ev_decomposition_json = json.dumps(top_10_ev_decomposition_records)
+        normal_grid_tail_mass = poisson_matrix.tail_probability
+        extreme_favourite_audit_triggered = (
+            favourite_probability > EXTREME_FAVOURITE_PROBABILITY_THRESHOLD
+            or normal_grid_tail_mass > HIGH_TAIL_MASS_THRESHOLD
+        )
+        favourite_is_team_a = targets.a_win >= targets.b_win
+        if extreme_favourite_audit_triggered:
+            extreme_audit = _extreme_favourite_audit(
+                matrix=score_matrix,
+                favourite_is_team_a=favourite_is_team_a,
+                recommendation=recommendation,
+                qualifier_probabilities=qualifier_probabilities,
+                config=config,
+            )
+            larger_grid_sensitivity = _larger_grid_sensitivity(
+                targets=targets,
+                config=config,
+                knockout=knockout,
+                qualifier_probabilities=qualifier_probabilities,
+                final_recommendation=recommendation,
+                normal_poisson_matrix=poisson_matrix,
+                normal_poisson_recommendation=baseline_recommendation,
+                favourite_is_team_a=favourite_is_team_a,
+            )
+        else:
+            extreme_audit = {
+                "top_clean_sheet_scores": "",
+                "top_favourite_margin_probabilities": "",
+                "top_5_favourite_score_count_probabilities": "",
+                "high_score_cluster_scores": "",
+                "three_four_five_nil_within_0_10_ev": False,
+                "high_score_cluster": "no",
+                "high_score_cluster_close_alternatives": "",
+            }
+            larger_grid_sensitivity = {
+                "current_final_recommendation": _score_label(final_live_recommended_score),
+                "normal_grid_recommendation": _score_label(final_live_recommended_score),
+                "normal_grid_poisson_recommendation": _score_label(baseline_poisson_recommended_score),
+                "larger_grid_recommendation": "",
+                "larger_grid_poisson_recommendation": "",
+                "recommendation_changes_with_larger_grid": False,
+                "larger_grid_poisson_changes_recommendation": False,
+                "larger_grid_differs_from_live_recommendation": False,
+                "larger_grid_tail_mass": pd.NA,
+                "ev_3_0_normal_grid": pd.NA,
+                "ev_4_0_normal_grid": pd.NA,
+                "ev_5_0_normal_grid": pd.NA,
+                "ev_3_0_larger_grid": pd.NA,
+                "ev_4_0_larger_grid": pd.NA,
+                "ev_5_0_larger_grid": pd.NA,
+                "ev_favourite_3_0_normal_grid": pd.NA,
+                "ev_favourite_4_0_normal_grid": pd.NA,
+                "ev_favourite_5_0_normal_grid": pd.NA,
+                "ev_favourite_3_0_larger_grid": pd.NA,
+                "ev_favourite_4_0_larger_grid": pd.NA,
+                "ev_favourite_5_0_larger_grid": pd.NA,
+            }
         model_recommendations_agree = len(
             {
                 baseline_poisson_recommended_score,
@@ -536,6 +1043,26 @@ def run_prediction_workflow(
             lambda_b_near_bound="lambda_b_near_bound" in calibration.warnings,
             correct_score_blend_suppressed=correct_score_blend_suppressed,
             challenger_models_disagree=not model_recommendations_agree,
+        )
+        btts_warning_flags = _btts_warning_flags(
+            has_btts=has_btts,
+            market_btts_yes=market_btts_yes,
+            market_btts_no=market_btts_no,
+            model_btts_yes=score_audit["model_implied_btts_yes_probability"],
+            recommended_score=final_live_recommended_score,
+        )
+        high_score_warning_flags = []
+        if bool(extreme_audit["three_four_five_nil_within_0_10_ev"]):
+            high_score_warning_flags.append("high_score_ev_cluster")
+        if larger_grid_sensitivity["recommendation_changes_with_larger_grid"] is True:
+            high_score_warning_flags.append("larger_grid_changes_recommendation")
+        if larger_grid_sensitivity["larger_grid_differs_from_live_recommendation"] is True:
+            high_score_warning_flags.append("larger_grid_sensitivity")
+        warning_flags = "; ".join(filter(None, [warning_flags, *btts_warning_flags, *high_score_warning_flags]))
+        decision_aid = _decision_aid(
+            top_10_ev_decomposition_records,
+            bool(extreme_audit["three_four_five_nil_within_0_10_ev"]),
+            str(extreme_audit["high_score_cluster_close_alternatives"]),
         )
         public_strategy = build_public_strategy(
             match_row=pd.Series(
@@ -591,6 +1118,10 @@ def run_prediction_workflow(
                 or any(np.isclose(line, 2.5) for line, _ in total_goals_targets),
                 "multi_line_totals_used": len(total_goals_targets) > 1,
                 "has_btts": has_btts,
+                "btts_market_available": "yes" if has_btts else "no",
+                "market_fair_btts_yes_probability": market_btts_yes,
+                "market_fair_btts_no_probability": market_btts_no,
+                "btts_fit_error": btts_fit_error,
                 "has_qualification_odds": has_qualification_odds,
                 "has_correct_score_market": has_correct_score_market,
                 "correct_score_poisson_weight": config.correct_score_poisson_weight,
@@ -615,6 +1146,7 @@ def run_prediction_workflow(
                 "model_a_win": model_outcomes["a_win"],
                 "model_draw": model_outcomes["draw"],
                 "model_b_win": model_outcomes["b_win"],
+                **score_audit,
                 "calibration_loss": calibration.loss,
                 "recommended_score": f"{recommendation.best.predicted_score[0]}-{recommendation.best.predicted_score[1]}",
                 "recommended_qualifier": recommended_qualifier,
@@ -643,8 +1175,18 @@ def run_prediction_workflow(
                 "most_likely_scoreline": f"{recommendation.most_likely_scoreline[0]}-{recommendation.most_likely_scoreline[1]}",
                 "ev_optimal_differs_from_most_likely": recommendation.differs_from_most_likely,
                 "top_5_ev_predictions": _format_top_ev_predictions(recommendation),
+                "top_5_ev_decomposition": _format_ev_decomposition(ev_decomposition_records),
+                "top_5_ev_decomposition_json": ev_decomposition_json,
+                "top_10_ev_decomposition": _format_ev_decomposition(top_10_ev_decomposition_records),
+                "top_10_ev_decomposition_json": top_10_ev_decomposition_json,
+                "ev_explanation": _ev_explanation(ev_decomposition_records),
                 "top_alternatives": _format_alternatives(recommendation),
-                "tail_probability_before_renormalisation": poisson_matrix.tail_probability,
+                "tail_probability_before_renormalisation": normal_grid_tail_mass,
+                "extreme_favourite_audit_triggered": extreme_favourite_audit_triggered,
+                **extreme_audit,
+                **larger_grid_sensitivity,
+                "normal_grid_tail_mass": normal_grid_tail_mass,
+                **decision_aid,
                 "warnings": "; ".join(filter(None, [str(row.get("warnings", "")), *notes])),
                 "warning_flags": warning_flags,
                 "estimated_most_crowded_public_score": public_strategy.estimated_most_crowded_public_score,

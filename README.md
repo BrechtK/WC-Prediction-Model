@@ -47,6 +47,78 @@ The runner automatically parses the schedule, validates match IDs, splits the
 combined odds files into `cache/split_pastes/`, writes parsed CSVs below
 `cache/parsed/`, runs the model, and writes the live reports below `output/`.
 
+## Running Daily From VS Code
+
+During the tournament, the intended daily workflow is to edit the clearly
+marked `USER SETTINGS` block at the top of:
+
+```text
+scripts/run_live_prediction.py
+```
+
+Then press `Run Python File` in VS Code.
+
+1. Paste or update the full schedule in:
+
+```text
+input/schedule.txt
+```
+
+2. Set:
+
+```python
+RUN_MODE = "list_date"
+DATE = "14-6"
+```
+
+Then run the file to list the fixtures and game numbers for that date.
+
+3. Paste odds into the relevant combined odds file, for example:
+
+```text
+input/odds/M008.txt
+```
+
+4. Set:
+
+```python
+RUN_MODE = "date"
+DATE = "14-6"
+```
+
+This runs every match on that date whose odds file exists in `input/odds/`.
+
+To run just one match on the date, set:
+
+```python
+RUN_MODE = "single_match"
+DATE = "14-6"
+GAME_NUMBER = 3
+MATCH_ID = None
+```
+
+If you already know the match ID, you can use:
+
+```python
+MATCH_ID = "M008"
+```
+
+5. Press `Run Python File`.
+
+6. Read the terminal recommendation and open:
+
+```text
+output/submission_sheet.xlsx
+```
+
+Use `RUN_MODE = "all_available"` to process every valid odds file in
+`input/odds/`, which preserves the original all-matches workflow. CLI arguments
+still work for advanced use and override the editable settings, for example:
+
+```powershell
+python scripts/run_live_prediction.py --date 14-6 --game-number 3
+```
+
 ## Input Format
 
 Each `input/odds/M001.txt` file contains the pasted tables for one fixture.

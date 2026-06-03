@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -470,6 +471,58 @@ def export_dataframe(frame: pd.DataFrame, path: str | Path) -> None:
         raise ValueError(f"Unsupported report file type: {path.suffix}")
 
 
+def _ev_decomposition_sheet(frame: pd.DataFrame) -> pd.DataFrame:
+    source_column = "top_10_ev_decomposition_json" if "top_10_ev_decomposition_json" in frame else "top_5_ev_decomposition_json"
+    if source_column not in frame:
+        return pd.DataFrame()
+    records: list[dict[str, object]] = []
+    for _, row in frame.iterrows():
+        raw_records = json.loads(str(row[source_column] or "[]"))
+        for record in raw_records:
+            record = dict(record)
+            record.setdefault("match_id", row["match_id"])
+            record.setdefault("team_a", row["team_a"])
+            record.setdefault("team_b", row["team_b"])
+            records.append(record)
+    return pd.DataFrame(records)
+
+
+def _high_score_diagnostics_sheet(frame: pd.DataFrame) -> pd.DataFrame:
+    if "extreme_favourite_audit_triggered" not in frame:
+        return pd.DataFrame()
+    columns = [
+        "match_id",
+        "team_a",
+        "team_b",
+        "recommended_score",
+        "favourite_probability",
+        "current_final_recommendation",
+        "normal_grid_poisson_recommendation",
+        "larger_grid_poisson_recommendation",
+        "normal_grid_recommendation",
+        "larger_grid_recommendation",
+        "recommendation_changes_with_larger_grid",
+        "larger_grid_poisson_changes_recommendation",
+        "larger_grid_differs_from_live_recommendation",
+        "normal_grid_tail_mass",
+        "larger_grid_tail_mass",
+        "ev_favourite_3_0_normal_grid",
+        "ev_favourite_4_0_normal_grid",
+        "ev_favourite_5_0_normal_grid",
+        "ev_favourite_3_0_larger_grid",
+        "ev_favourite_4_0_larger_grid",
+        "ev_favourite_5_0_larger_grid",
+        "top_clean_sheet_scores",
+        "top_favourite_margin_probabilities",
+        "top_5_favourite_score_count_probabilities",
+        "high_score_cluster_scores",
+        "three_four_five_nil_within_0_10_ev",
+        "warning_flags",
+    ]
+    diagnostics = frame[frame["extreme_favourite_audit_triggered"]].copy()
+    return diagnostics[[column for column in columns if column in diagnostics]]
+
+
 def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path) -> None:
     """Export readable real-tournament recommendations with Excel formatting."""
 
@@ -500,6 +553,87 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "most_likely_scoreline",
         "ev_optimal_differs_from_most_likely",
         "top_5_ev_predictions",
+        "recommendation_confidence",
+        "manual_review_flag",
+        "close_alternatives",
+        "ev_gap_to_second",
+        "ev_gap_to_third",
+        "decision_note",
+        "expected_team_a_goals",
+        "expected_team_b_goals",
+        "expected_total_goals",
+        "probability_team_a_scores_0",
+        "probability_team_a_scores_1",
+        "probability_team_a_scores_2",
+        "probability_team_a_scores_3",
+        "probability_team_a_scores_4",
+        "probability_team_a_scores_5",
+        "probability_team_a_scores_6_plus",
+        "probability_team_b_scores_0",
+        "probability_team_b_scores_1",
+        "probability_team_b_scores_2",
+        "probability_team_b_scores_3",
+        "probability_team_b_scores_4",
+        "probability_team_b_scores_5",
+        "probability_team_b_scores_6_plus",
+        "probability_total_goals_0",
+        "probability_total_goals_1",
+        "probability_total_goals_2",
+        "probability_total_goals_3",
+        "probability_total_goals_4",
+        "probability_total_goals_5",
+        "probability_total_goals_6",
+        "probability_total_goals_7_plus",
+        "probability_team_a_wins_by_1",
+        "probability_team_a_wins_by_2",
+        "probability_team_a_wins_by_3",
+        "probability_team_a_wins_by_4",
+        "probability_team_a_wins_by_5",
+        "probability_team_a_wins_by_6_plus",
+        "probability_team_b_wins_by_1",
+        "probability_team_b_wins_by_2",
+        "probability_team_b_wins_by_3",
+        "probability_team_b_wins_by_4",
+        "probability_team_b_wins_by_5",
+        "probability_team_b_wins_by_6_plus",
+        "probability_draw",
+        "top_5_ev_decomposition",
+        "top_10_ev_decomposition",
+        "ev_explanation",
+        "market_fair_btts_yes_probability",
+        "market_fair_btts_no_probability",
+        "model_implied_btts_yes_probability",
+        "model_implied_btts_no_probability",
+        "btts_fit_error",
+        "btts_market_available",
+        "model_probability_team_a_clean_sheet",
+        "model_probability_team_b_clean_sheet",
+        "model_probability_no_btts",
+        "model_probability_btts",
+        "extreme_favourite_audit_triggered",
+        "top_clean_sheet_scores",
+        "top_favourite_margin_probabilities",
+        "top_5_favourite_score_count_probabilities",
+        "high_score_cluster_scores",
+        "three_four_five_nil_within_0_10_ev",
+        "high_score_cluster",
+        "high_score_cluster_close_alternatives",
+        "current_final_recommendation",
+        "normal_grid_poisson_recommendation",
+        "larger_grid_poisson_recommendation",
+        "normal_grid_recommendation",
+        "larger_grid_recommendation",
+        "recommendation_changes_with_larger_grid",
+        "larger_grid_poisson_changes_recommendation",
+        "larger_grid_differs_from_live_recommendation",
+        "normal_grid_tail_mass",
+        "larger_grid_tail_mass",
+        "ev_favourite_3_0_normal_grid",
+        "ev_favourite_4_0_normal_grid",
+        "ev_favourite_5_0_normal_grid",
+        "ev_favourite_3_0_larger_grid",
+        "ev_favourite_4_0_larger_grid",
+        "ev_favourite_5_0_larger_grid",
         "baseline_poisson_recommended_score",
         "baseline_poisson_ev_gap_best_vs_second",
         "correct_score_blended_recommended_score",
@@ -572,7 +706,14 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
     ordered_columns = [column for column in key_columns if column in frame]
     ordered_columns.extend(column for column in frame.columns if column not in ordered_columns)
     display_frame = frame[ordered_columns].rename(columns=aliases)
-    display_frame.to_excel(path, index=False, sheet_name="recommendations")
+    ev_decomposition = _ev_decomposition_sheet(frame)
+    high_score_diagnostics = _high_score_diagnostics_sheet(frame)
+    with pd.ExcelWriter(path) as writer:
+        display_frame.to_excel(writer, index=False, sheet_name="recommendations")
+        if not ev_decomposition.empty:
+            ev_decomposition.to_excel(writer, index=False, sheet_name="ev_decomposition")
+        if not high_score_diagnostics.empty:
+            high_score_diagnostics.to_excel(writer, index=False, sheet_name="high_score_diagnostics")
 
     probability_columns = {
         "market_a",
@@ -582,6 +723,50 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "model_a_win",
         "model_draw",
         "model_b_win",
+        "market_fair_btts_yes_probability",
+        "market_fair_btts_no_probability",
+        "model_implied_btts_yes_probability",
+        "model_implied_btts_no_probability",
+        "model_probability_team_a_clean_sheet",
+        "model_probability_team_b_clean_sheet",
+        "model_probability_no_btts",
+        "model_probability_btts",
+        "probability_total_goals_0",
+        "probability_total_goals_1",
+        "probability_total_goals_2",
+        "probability_total_goals_3",
+        "probability_total_goals_4",
+        "probability_total_goals_5",
+        "probability_total_goals_6",
+        "probability_total_goals_7_plus",
+        "probability_total_goals_4_plus",
+        "probability_team_a_scores_0",
+        "probability_team_a_scores_1",
+        "probability_team_a_scores_2",
+        "probability_team_a_scores_3",
+        "probability_team_a_scores_4",
+        "probability_team_a_scores_5",
+        "probability_team_a_scores_6_plus",
+        "probability_team_b_scores_0",
+        "probability_team_b_scores_1",
+        "probability_team_b_scores_2",
+        "probability_team_b_scores_3",
+        "probability_team_b_scores_4",
+        "probability_team_b_scores_5",
+        "probability_team_b_scores_6_plus",
+        "probability_team_a_wins_by_1",
+        "probability_team_a_wins_by_2",
+        "probability_team_a_wins_by_3",
+        "probability_team_a_wins_by_4",
+        "probability_team_a_wins_by_5",
+        "probability_team_a_wins_by_6_plus",
+        "probability_team_b_wins_by_1",
+        "probability_team_b_wins_by_2",
+        "probability_team_b_wins_by_3",
+        "probability_team_b_wins_by_4",
+        "probability_team_b_wins_by_5",
+        "probability_team_b_wins_by_6_plus",
+        "probability_draw",
         "exact_score_probability",
         "correct_goal_difference_probability",
         "correct_result_probability",
@@ -604,9 +789,23 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "dixon_coles_rho",
         "public_strategy_leverage_score",
         "public_strategy_public_ranking_score",
+        "expected_team_a_goals",
+        "expected_team_b_goals",
+        "expected_total_goals",
+        "btts_fit_error",
+        "normal_grid_tail_mass",
+        "larger_grid_tail_mass",
+        "ev_favourite_3_0_normal_grid",
+        "ev_favourite_4_0_normal_grid",
+        "ev_favourite_5_0_normal_grid",
+        "ev_favourite_3_0_larger_grid",
+        "ev_favourite_4_0_larger_grid",
+        "ev_favourite_5_0_larger_grid",
     }
     ev_columns = {
         "best_expected_points",
+        "ev_gap_to_second",
+        "ev_gap_to_third",
         "ev_gap_best_vs_second",
         "ev_gap_best_vs_modal",
         "baseline_poisson_ev_gap_best_vs_second",
@@ -618,6 +817,15 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
     }
     wrapped_columns = {
         "top_5_ev_predictions",
+        "top_5_ev_decomposition",
+        "top_10_ev_decomposition",
+        "ev_explanation",
+        "close_alternatives",
+        "decision_note",
+        "top_clean_sheet_scores",
+        "top_favourite_margin_probabilities",
+        "top_5_favourite_score_count_probabilities",
+        "high_score_cluster_scores",
         "correct_score_market_top_10",
         "correct_score_blended_top_10",
         "top_10_market_scorelines",
@@ -696,6 +904,12 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
             "recommended_score",
             "recommended_qualifier",
             "best_expected_points",
+            "recommendation_confidence",
+            "manual_review_flag",
+            "close_alternatives",
+            "ev_gap_to_second",
+            "ev_gap_to_third",
+            "decision_note",
             "favourite_bucket",
             "top_3_alternatives",
             "notes",
@@ -710,7 +924,7 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions
     header_fill = PatternFill("solid", fgColor="1F4E78")
-    wrapped_columns = {"top_3_alternatives", "notes"}
+    wrapped_columns = {"top_3_alternatives", "notes", "close_alternatives", "decision_note"}
     for cell in worksheet[1]:
         cell.font = Font(color="FFFFFF", bold=True)
         cell.fill = header_fill
@@ -720,7 +934,7 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
         column_name = str(cell.value)
         for value_cell in worksheet.iter_cols(min_col=index, max_col=index, min_row=2):
             for value in value_cell:
-                if column_name == "best_expected_points":
+                if column_name in {"best_expected_points", "ev_gap_to_second", "ev_gap_to_third"}:
                     value.number_format = "0.000"
                 if column_name in wrapped_columns:
                     value.alignment = Alignment(wrap_text=True, vertical="top")

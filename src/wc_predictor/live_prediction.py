@@ -64,6 +64,7 @@ class LivePredictionSettings:
 
     input_folder: Path = DEFAULT_INPUT_FOLDER
     match_id: str | None = None
+    match_ids: Sequence[str] | None = None
     strict: bool = False
     skip_weight_sensitivity: bool = False
     metadata_odds_path: Path | None = DEFAULT_METADATA_ODDS_PATH
@@ -138,12 +139,18 @@ def _append_warning(warnings: dict[str, list[str]], match_id: str, warning: str)
 def _select_and_validate_pastes(
     input_folder: Path,
     match_id: str | None,
+    match_ids: Sequence[str] | None,
     strict: bool,
 ) -> tuple[tuple[str, ...], dict[str, list[str]]]:
     """Choose matches and fail early when required paste files are absent."""
 
     discovered = discover_live_paste_markets(input_folder)
-    if match_id is not None:
+    if match_ids is not None:
+        selected = tuple(str(selected_match_id) for selected_match_id in match_ids)
+        missing = [selected_match_id for selected_match_id in selected if selected_match_id not in discovered]
+        if missing:
+            raise LivePredictionError(f"No OddsPortal paste files found for match IDs: {', '.join(missing)}")
+    elif match_id is not None:
         if match_id not in discovered:
             raise LivePredictionError(f"No OddsPortal paste files found for match_id {match_id!r}")
         selected = (match_id,)
@@ -281,7 +288,12 @@ def parse_live_prediction_inputs(
         existing_metadata_path=settings.metadata_odds_path,
         skip_parse=settings.skip_schedule_parse,
     )
-    selected, mutable_warnings = _select_and_validate_pastes(settings.input_folder, settings.match_id, settings.strict)
+    selected, mutable_warnings = _select_and_validate_pastes(
+        settings.input_folder,
+        settings.match_id,
+        settings.match_ids,
+        settings.strict,
+    )
     core_parse = parse_oddsportal_core_odds_folder(
         settings.input_folder,
         settings.core_odds_output_path,
@@ -311,12 +323,63 @@ def parse_live_prediction_inputs(
 def format_live_prediction_summary(result: LivePredictionResult) -> str:
     """Render a concise submission-focused live terminal report."""
 
+    def format_probability(value: object) -> str:
+        return f"{float(value):.1%}" if pd.notna(value) else "n/a"
+
+    diagnostic_sections: list[str] = []
     final_submissions: list[str] = []
     for _, row in result.workflow.match_report.iterrows():
         match_id = str(row["match_id"])
+        btts_difference = (
+            row["model_implied_btts_yes_probability"] - row["market_fair_btts_yes_probability"]
+            if pd.notna(row.get("market_fair_btts_yes_probability"))
+            else pd.NA
+        )
+        diagnostic_sections.append(
+            "\n".join(
+                [
+                    f"{match_id} {row['team_a']} vs {row['team_b']}",
+                    "BTTS diagnostics:",
+                    f"- market BTTS Yes: {format_probability(row.get('market_fair_btts_yes_probability'))}",
+                    f"- model BTTS Yes: {format_probability(row.get('model_implied_btts_yes_probability'))}",
+                    f"- difference: {format_probability(btts_difference)}",
+                    f"- P(no BTTS): {format_probability(row.get('model_probability_no_btts'))}",
+                    "EV explanation:",
+                    f"- {row.get('ev_explanation')}",
+                    "Decision aid:",
+                    f"- confidence: {row.get('recommendation_confidence')}",
+                    f"- close alternatives: {row.get('close_alternatives') or 'none'}",
+                    f"- note: {row.get('decision_note')}",
+                    *(
+                        [
+                            "Extreme-favourite audit:",
+                            f"- top clean-sheet scores: {row.get('top_clean_sheet_scores')}",
+                            f"- favourite margins: {row.get('top_favourite_margin_probabilities')}",
+                            f"- favourite score counts: {row.get('top_5_favourite_score_count_probabilities')}",
+                            f"- 3/4/5-nil EV cluster: {row.get('high_score_cluster_scores')}",
+                            f"- current final: {row.get('current_final_recommendation')}",
+                            f"- normal-grid Poisson: {row.get('normal_grid_poisson_recommendation')} "
+                            f"(tail {format_probability(row.get('normal_grid_tail_mass'))})",
+                            f"- larger-grid Poisson: {row.get('larger_grid_poisson_recommendation')} "
+                            f"(tail {format_probability(row.get('larger_grid_tail_mass'))})",
+                            f"- favourite 3-0 EV: normal {row.get('ev_favourite_3_0_normal_grid'):.3f} "
+                            f"larger {row.get('ev_favourite_3_0_larger_grid'):.3f}",
+                            f"- favourite 4-0 EV: normal {row.get('ev_favourite_4_0_normal_grid'):.3f} "
+                            f"larger {row.get('ev_favourite_4_0_larger_grid'):.3f}",
+                            f"- favourite 5-0 EV: normal {row.get('ev_favourite_5_0_normal_grid'):.3f} "
+                            f"larger {row.get('ev_favourite_5_0_larger_grid'):.3f}",
+                        ]
+                        if bool(row.get("extreme_favourite_audit_triggered"))
+                        else []
+                    ),
+                ]
+            )
+        )
         final_submissions.append(f"{match_id} {row['team_a']} vs {row['team_b']}: {row['recommended_score']}")
 
     sections = [
+        *diagnostic_sections,
+        "",
         "Final recommended submission:",
         *final_submissions,
         "",
