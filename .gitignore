@@ -14,6 +14,7 @@
 
 # Local inputs and generated reports. Keep only directory placeholders tracked.
 input/schedule.txt
+input/odds template.txt
 input/odds/*.txt
 !input/odds/.gitkeep
 input/prepared/
