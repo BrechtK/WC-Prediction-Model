@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 import json
 import time
@@ -954,6 +955,7 @@ def _dashboard_risk_notes(
             or "high_tail_mass" in flag
             or "larger_grid_sensitivity" in flag
             or "stale_odds" in flag
+            or "market_consistent_optimisation_failed" in flag
         )
     ]
     if severe_flags:
@@ -1276,10 +1278,12 @@ def run_prediction_workflow(
     correct_score_odds: pd.DataFrame | None = None,
     total_goals_odds: pd.DataFrame | None = None,
     runtime_timings: dict[str, float] | None = None,
+    extra_warning_flags_by_match: Mapping[str, Sequence[str]] | None = None,
 ) -> PredictionWorkflowResult:
     """Produce market-implied score recommendations and optional friend EV analysis."""
 
     config = config or ProjectConfig()
+    extra_warning_flags_by_match = extra_warning_flags_by_match or {}
     bookmaker_probabilities = process_bookmaker_odds(
         odds,
         config.margin_removal_method,
@@ -1532,6 +1536,7 @@ def run_prediction_workflow(
                         "market_consistent_status": "skipped",
                         "market_consistent_skip_reason": skip_note,
                         "market_consistent_optimisation_success": pd.NA,
+                        "market_consistent_optimisation_status_code": pd.NA,
                         "market_consistent_optimisation_message": skip_note,
                         "market_consistent_kl_divergence_vs_prior": pd.NA,
                         "market_consistent_1x2_fit_error": pd.NA,
@@ -1638,6 +1643,15 @@ def run_prediction_workflow(
             market_consistent_top_10_ev_decomposition_records = []
             market_consistent_top_10_ev_decomposition_json = "[]"
             market_consistent_top_10_probability_scorelines = ""
+        market_consistent_status = str(
+            market_consistent_result.diagnostics.get("market_consistent_status", "")
+        )
+        market_consistent_success = market_consistent_result.diagnostics.get(
+            "market_consistent_optimisation_success"
+        )
+        market_consistent_warning_flags = []
+        if market_consistent_status not in {"", "ok", "skipped"} or market_consistent_success is False:
+            market_consistent_warning_flags.append("market_consistent_optimisation_failed")
         normal_grid_tail_mass = poisson_matrix.tail_probability
         extreme_favourite_audit_triggered = (
             favourite_probability > EXTREME_FAVOURITE_PROBABILITY_THRESHOLD
@@ -1747,7 +1761,28 @@ def run_prediction_workflow(
             high_score_warning_flags.append("larger_grid_changes_recommendation")
         if larger_grid_sensitivity["larger_grid_differs_from_live_recommendation"] is True:
             high_score_warning_flags.append("larger_grid_sensitivity")
-        warning_flags = "; ".join(filter(None, [warning_flags, *btts_warning_flags, *high_score_warning_flags]))
+        extra_warning_flags = [
+            str(flag).strip()
+            for flag in extra_warning_flags_by_match.get(match_id, ())
+            if str(flag).strip()
+        ]
+        warning_flags = "; ".join(
+            filter(
+                None,
+                [
+                    warning_flags,
+                    *btts_warning_flags,
+                    *high_score_warning_flags,
+                    *market_consistent_warning_flags,
+                    *extra_warning_flags,
+                ],
+            )
+        )
+        if market_consistent_warning_flags:
+            notes.append(
+                "Market-consistent optimiser did not converge: "
+                + str(market_consistent_result.diagnostics.get("market_consistent_optimisation_message", ""))
+            )
         plausible_decision_layer = _plausible_alternative_decision_layer(
             top_10_ev_decomposition_records,
             config=config,

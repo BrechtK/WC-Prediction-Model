@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from openpyxl import load_workbook
 
+import wc_predictor.workflow as workflow_module
 from wc_predictor.config import ProjectConfig
 from wc_predictor.reporting import (
     format_world_cup_console_summary,
@@ -27,6 +28,7 @@ from wc_predictor.workflow import (
     _ev_explanation,
     _plausible_alternative_decision_layer,
     _should_run_market_consistent_challenger,
+    run_prediction_workflow,
 )
 
 
@@ -451,6 +453,72 @@ def test_final_decision_dashboard_flags_margin_method_sensitivity() -> None:
     assert "margin-removal methods change recommendation" in dashboard["risk_notes"]
 
 
+def test_final_decision_dashboard_flags_market_consistent_failure() -> None:
+    dashboard = _build_final_decision_dashboard(
+        _dashboard_match_report(warning_flags="market_consistent_optimisation_failed"),
+        _dashboard_margin_rows(),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).iloc[0]
+
+    assert dashboard["manual_review_flag"] == "yes"
+    assert "market_consistent_optimisation_failed" in dashboard["risk_notes"]
+
+
+def test_market_consistent_failure_warning_propagates_to_report_and_dashboard(monkeypatch) -> None:
+    odds = pd.DataFrame(
+        [
+            {
+                "match_id": "MFAIL",
+                "date": "2026-06-11",
+                "stage": "group stage",
+                "group": "A",
+                "team_a": "Alpha",
+                "team_b": "Beta",
+                "bookmaker": "Book",
+                "odds_a_win": 2.0,
+                "odds_draw": 3.5,
+                "odds_b_win": 4.0,
+            }
+        ]
+    )
+
+    def failed_fit(prior, market_probabilities, total_goals=None, correct_score_matrix=None, weights=None):
+        return type(
+            "FailedMarketConsistentResult",
+            (),
+            {
+                "matrix": prior,
+                "diagnostics": {
+                    "market_consistent_status": "failed",
+                    "market_consistent_optimisation_success": False,
+                    "market_consistent_optimisation_status_code": 1,
+                    "market_consistent_optimisation_message": "iteration limit reached",
+                    "market_consistent_kl_divergence_vs_prior": 0.0,
+                    "market_consistent_1x2_fit_error": 0.0,
+                    "market_consistent_btts_fit_error": pd.NA,
+                    "market_consistent_total_goals_fit_error": pd.NA,
+                    "market_consistent_correct_score_fit_error": pd.NA,
+                    "market_consistent_asian_totals_used": "",
+                },
+            },
+        )()
+
+    monkeypatch.setattr(workflow_module, "fit_market_consistent_matrix", failed_fit)
+
+    workflow = run_prediction_workflow(
+        odds,
+        config=ProjectConfig(enable_market_consistent_challenger=True, enable_margin_method_comparison=False),
+    )
+    report = workflow.match_report.iloc[0]
+    dashboard = workflow.final_decision_dashboard.iloc[0]
+
+    assert "market_consistent_optimisation_failed" in report["warning_flags"]
+    assert report["market_consistent_status"] == "failed"
+    assert "Market-consistent optimiser did not converge" in report["warnings"]
+    assert "market_consistent_optimisation_failed" in dashboard["warning_flags"]
+    assert "market_consistent_optimisation_failed" in dashboard["risk_notes"]
+
+
 def test_final_decision_dashboard_marks_margin_method_not_run_when_disabled() -> None:
     dashboard = _build_final_decision_dashboard(
         _dashboard_match_report(),
@@ -545,6 +613,9 @@ def test_top_ten_ev_decomposition_is_written_to_excel(tmp_path: Path) -> None:
     market_consistent_headers = [cell.value for cell in workbook["market_consistent"][1]]
     dashboard_headers = [cell.value for cell in workbook["final_decision_dashboard"][1]]
     assert "market_consistent_top_10_ev_scorelines" in recommendation_headers
+    assert "market_consistent_status" in market_consistent_headers
+    assert "market_consistent_optimisation_message" in market_consistent_headers
+    assert "warning_flags" in market_consistent_headers
     assert "market_consistent_top_10_probability_scorelines" in market_consistent_headers
     assert "final_decision_score" in recommendation_headers
     assert "final_decision_score" in dashboard_headers

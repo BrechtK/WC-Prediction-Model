@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import runpy
 import sys
+import time
 from types import SimpleNamespace
 
 import pandas as pd
@@ -233,6 +235,8 @@ def _capture_script_weight_sensitivity(
         captured["skip_weight_sensitivity"] = settings.skip_weight_sensitivity
         captured["enable_margin_method_comparison"] = config.enable_margin_method_comparison
         captured["enable_market_consistent_challenger"] = config.enable_market_consistent_challenger
+        captured["correct_score_poisson_weight"] = config.correct_score_poisson_weight
+        captured["extra_warning_flags_by_match"] = settings.extra_warning_flags_by_match
         return SimpleNamespace(runtime_timings={})
 
     monkeypatch.setattr(module, "run_live_prediction", fake_run_live_prediction)
@@ -327,6 +331,25 @@ def test_live_summary_compact_can_show_runtime_summary(tmp_path: Path) -> None:
     assert "- correct-score weight sensitivity:" not in summary
     assert "- other/unmeasured:" not in summary
     assert "- Excel write:" not in summary
+
+
+def test_live_warning_flags_reach_dashboard_and_compact_summary(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        skip_weight_sensitivity=True,
+        extra_warning_flags_by_match={"M001": ("stale_odds_file",)},
+    )
+    _write_metadata(settings.metadata_odds_path)
+    _write_pastes(settings.input_folder)
+
+    result = run_live_prediction(settings)
+    summary = format_live_prediction_summary(result)
+    dashboard = result.workflow.final_decision_dashboard.iloc[0]
+
+    assert "stale_odds_file" in result.workflow.match_report.iloc[0]["warning_flags"]
+    assert "stale_odds_file" in dashboard["risk_notes"]
+    assert "Manual review:" in summary
+    assert "stale_odds_file" in summary
 
 
 def test_research_style_config_runs_margin_method_comparison(tmp_path: Path) -> None:
@@ -439,6 +462,7 @@ def test_script_live_profile_disables_weight_sensitivity_by_default(tmp_path: Pa
     assert captured["skip_weight_sensitivity"] is True
     assert captured["enable_margin_method_comparison"] is False
     assert captured["enable_market_consistent_challenger"] == "only_if_close"
+    assert captured["correct_score_poisson_weight"] == pytest.approx(1.0)
 
 
 def test_script_research_profile_enables_weight_sensitivity_by_default(tmp_path: Path, monkeypatch) -> None:
@@ -510,6 +534,33 @@ def test_live_runner_script_splits_combined_pastes_before_parsing(
     assert "Final recommendations:" in output
     assert (tmp_path / "cache/split_pastes/M001_1x2.txt").exists()
     assert (tmp_path / "output/predictions.xlsx").exists()
+
+
+def test_live_runner_script_warns_when_selected_odds_file_is_stale(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
+    _write_combined_paste(tmp_path / "input/odds", clean_filename=True)
+    stale_path = tmp_path / "input" / "odds" / "M001.txt"
+    stale_mtime = time.time() - 25 * 60 * 60
+    os.utime(stale_path, (stale_mtime, stale_mtime))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--run-mode", "all_available", "--skip-weight-sensitivity"],
+    )
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    assert (
+        "Warning: input/odds/M001.txt was last modified more than 24 hours ago. "
+        "Check that odds are fresh."
+    ) in output
+    assert "Final recommendations:" in output
 
 
 def test_live_runner_compact_prints_split_summary_when_warnings_exist(

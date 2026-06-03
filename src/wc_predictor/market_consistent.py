@@ -117,20 +117,16 @@ def _build_constraints(
                 continue
             line = float(row["line"])
             line_weight = _total_goals_weight(row, weights.liquid_total_goals)
+            # After two-way margin removal, fair Under is the complement of fair
+            # Over for half, integer, and quarter Asian totals. The Under
+            # expected-profit vector is therefore a scalar multiple of the Over
+            # vector, including push and half-push cases. Keep one independent
+            # constraint per line so a totals market is not double-weighted.
             constraints.append(
                 _Constraint(
                     f"total_over_{line:g}",
                     "total_goals",
                     asian_total_profit_vector(shape, line, "over", _fair_decimal_odds(fair_over)).reshape(-1),
-                    0.0,
-                    line_weight,
-                )
-            )
-            constraints.append(
-                _Constraint(
-                    f"total_under_{line:g}",
-                    "total_goals",
-                    asian_total_profit_vector(shape, line, "under", _fair_decimal_odds(fair_under)).reshape(-1),
                     0.0,
                     line_weight,
                 )
@@ -191,7 +187,10 @@ def fit_market_consistent_matrix(
                 lambda_b=prior.lambda_b,
             ),
             {
+                "market_consistent_status": "ok",
                 "market_consistent_optimisation_success": True,
+                "market_consistent_optimisation_status_code": 0,
+                "market_consistent_optimisation_message": "no active constraints",
                 "market_consistent_kl_divergence_vs_prior": 0.0,
                 "market_consistent_1x2_fit_error": pd.NA,
                 "market_consistent_btts_fit_error": pd.NA,
@@ -231,7 +230,9 @@ def fit_market_consistent_matrix(
         lambda_b=prior.lambda_b,
     )
     diagnostics = {
+        "market_consistent_status": "ok" if result.success and int(result.status) == 0 else "failed",
         "market_consistent_optimisation_success": bool(result.success),
+        "market_consistent_optimisation_status_code": int(result.status),
         "market_consistent_optimisation_message": str(result.message),
         "market_consistent_kl_divergence_vs_prior": float(np.dot(p, np.log(p / q))),
         "market_consistent_1x2_fit_error": _constraint_rmse(p, constraints, "1x2"),

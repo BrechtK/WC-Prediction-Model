@@ -80,7 +80,11 @@ class StrategyConfig:
 
 @dataclass(frozen=True)
 class PublicStrategyConfig:
-    """Diagnostic settings for public-field ranking strategy."""
+    """Diagnostic settings for public-field ranking strategy.
+
+    These parameters are heuristic and unvalidated; keep public strategy
+    diagnostic-only until backtests justify changing live submissions.
+    """
 
     mode: str = "ev"
     alpha: float = 0.20

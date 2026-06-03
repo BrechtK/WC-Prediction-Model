@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import copyfile
@@ -44,6 +45,7 @@ class WorldCupPredictionSettings:
     xlsx_output_path: Path = OUTPUT_PREDICTIONS_XLSX_PATH
     submission_xlsx_output_path: Path = OUTPUT_SUBMISSION_XLSX_PATH
     write_detailed_excel: bool = True
+    extra_warning_flags_by_match: Mapping[str, Sequence[str]] | None = None
 
 
 def resolve_world_cup_odds_input(input_path: str | Path | None = None) -> Path:
@@ -105,6 +107,7 @@ def run_world_cup_predictions(
         correct_score_odds=correct_score_odds,
         total_goals_odds=total_goals_odds,
         runtime_timings=runtime_timings,
+        extra_warning_flags_by_match=settings.extra_warning_flags_by_match,
     )
     if runtime_timings is not None:
         model_elapsed = time.perf_counter() - model_start
@@ -148,6 +151,7 @@ def run_and_print_world_cup_predictions(
         xlsx_output_path=settings.xlsx_output_path,
         submission_xlsx_output_path=settings.submission_xlsx_output_path,
         write_detailed_excel=settings.write_detailed_excel,
+        extra_warning_flags_by_match=settings.extra_warning_flags_by_match,
     )
     workflow = run_world_cup_predictions(resolved_settings, config)
     print(

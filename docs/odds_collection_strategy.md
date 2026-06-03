@@ -223,18 +223,20 @@ P_final(score)
   + (1 - w) * P_market(score)
 ```
 
-The following weights are governance starting points, not empirically proven
-optima. Backtesting should decide whether any lower `w` improves realised pool
-points out of sample.
+The conservative live default is `w=1.0`, which preserves the Poisson-only
+baseline. The following lower weights are research-mode governance starting
+points, not empirically proven optima. Backtesting should decide whether any
+lower `w` improves realised pool points out of sample before it becomes a live
+default.
 
-| Correct-score input quality | Suggested live policy | Reason |
+| Correct-score input quality | Suggested policy | Reason |
 | --- | --- | --- |
 | No correct-score input | `w=1.0` | Preserve the Poisson baseline. |
 | Hand-picked or sparse scorelines | `w=1.0` | Do not blend a distribution conditioned on collector selection. |
 | Best-price composite across bookmakers | `w=1.0` by default | Use as a diagnostic until a composite-market method is validated. |
-| Average-price comparison-site composite | `w=0.9` to `1.0` only after review | Treat cautiously because coverage and averaging may be opaque. |
-| One coherent major or sharp bookmaker, full listed grid | Start around `w=0.85` | Adds direct evidence while retaining a strong Poisson anchor. |
-| Two coherent bookmakers, full listed grids | Consider `w=0.7` to `0.85` | Better consensus can justify more market weight after inspection. |
+| Average-price comparison-site composite | Research: `w=0.9` to `1.0` only after review | Treat cautiously because coverage and averaging may be opaque. |
+| One coherent major or sharp bookmaker, full listed grid | Research: start around `w=0.85` | Adds direct evidence while retaining a strong Poisson anchor. |
+| Two coherent bookmakers, full listed grids | Research: consider `w=0.7` to `0.85` | Better consensus can justify more market weight after inspection. |
 | Many coherent bookmakers with automated, fresh coverage | Select by out-of-sample backtest | Automation reduces manual omissions, but validation still governs the weight. |
 
 Never use `w=0.0` in live recommendations merely because correct-score odds are

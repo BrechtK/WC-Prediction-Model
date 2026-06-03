@@ -44,7 +44,7 @@ from wc_predictor.paths import (
 # 2. Paste fresh odds into input/odds/Mxxx.txt.
 # 3. Use RUN_MODE = "single_match", keep the same DATE, and set GAME_NUMBER.
 # 4. Press "Run Python File" in VS Code.
-RUN_MODE = "date"
+RUN_MODE = "all_available"
 # RUN_MODE options:
 # "list_date"      -> list the games on DATE and exit; use this first.
 # "single_match"   -> run one game from DATE, selected by GAME_NUMBER.
@@ -66,7 +66,9 @@ STRATEGY_MODE = "ev"
 # "public-ranking"
 # "aggressive-public-ranking"
 
-CORRECT_SCORE_POISSON_WEIGHT = 0.85
+# Conservative live default: keep the Poisson-only score matrix until a
+# blended correct-score default is validated. Use 0.85 only for research runs.
+CORRECT_SCORE_POISSON_WEIGHT = 1.0
 CORRECT_SCORE_AGGREGATION_METHOD = "auto"
 
 MARGIN_REMOVAL_METHOD = "normalised_inverse_odds"
@@ -93,6 +95,7 @@ SHOW_RUNTIME_SUMMARY = True
 DIXON_COLES_RHO = 0.0
 
 STRICT_INPUT_VALIDATION = False
+STALE_ODDS_WARNING_HOURS = 24
 
 ODDS_TEMPLATE_PATH = Path("templates/odds_input_template.txt")
 DEPRECATED_INPUT_FOLDERS = (
@@ -313,6 +316,46 @@ def _deprecated_input_warnings() -> tuple[str, ...]:
     return tuple(warnings)
 
 
+def _display_path(path: Path) -> str:
+    try:
+        return path.relative_to(Path.cwd()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _selected_odds_file_stale_warnings(
+    selection: ResolvedRunSelection,
+    combined_input_folder: Path,
+    threshold_hours: float,
+) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...]]:
+    """Return non-blocking warnings for selected combined odds files with old mtimes."""
+
+    if threshold_hours <= 0:
+        return {}, ()
+    if selection.run_mode in {"single_match", "date"}:
+        paths = tuple(combined_input_folder / f"{match_id}.txt" for match_id in selection.match_ids)
+    else:
+        paths = tuple(sorted(combined_input_folder.glob("*.txt")))
+    threshold_seconds = threshold_hours * 60 * 60
+    now = time.time()
+    flags_by_match: dict[str, tuple[str, ...]] = {}
+    messages: list[str] = []
+    threshold_label = f"{threshold_hours:g}"
+    for path in paths:
+        if not path.exists():
+            continue
+        age_seconds = now - path.stat().st_mtime
+        if age_seconds <= threshold_seconds:
+            continue
+        match_id = path.stem
+        flags_by_match[match_id] = ("stale_odds_file",)
+        messages.append(
+            f"Warning: {_display_path(path)} was last modified more than {threshold_label} "
+            "hours ago. Check that odds are fresh."
+        )
+    return flags_by_match, tuple(messages)
+
+
 def _format_run_configuration(
     selection: ResolvedRunSelection,
     strategy_mode: str,
@@ -392,6 +435,7 @@ def main() -> None:
     parser.add_argument("--schedule-report-output", default=str(DEFAULT_SCHEDULE_REPORT_PATH))
     parser.add_argument("--skip-schedule-parse", action="store_true")
     parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--stale-odds-warning-hours", type=float)
     args = parser.parse_args()
 
     try:
@@ -442,6 +486,11 @@ def main() -> None:
             enable_weight_sensitivity = False
         dixon_coles_rho = args.dixon_coles_rho if args.dixon_coles_rho is not None else DIXON_COLES_RHO
         strict = args.strict or STRICT_INPUT_VALIDATION
+        stale_odds_warning_hours = (
+            args.stale_odds_warning_hours
+            if args.stale_odds_warning_hours is not None
+            else STALE_ODDS_WARNING_HOURS
+        )
 
         schedule_path = Path(args.schedule) if args.schedule else INPUT_SCHEDULE_PATH
         combined_input_folder = (
@@ -508,6 +557,11 @@ def main() -> None:
             print(_format_date_schedule(str(selection.date), selection.list_date_rows))
             return
         _validate_selected_odds_file(selection, combined_input_folder)
+        stale_warning_flags, stale_warning_messages = _selected_odds_file_stale_warnings(
+            selection,
+            combined_input_folder,
+            stale_odds_warning_hours,
+        )
         if terminal_verbosity != "compact":
             print(
                 _format_run_configuration(
@@ -526,6 +580,10 @@ def main() -> None:
                 print(f"Input warning: {warning}")
             if deprecated_warnings:
                 print()
+        for warning in stale_warning_messages:
+            print(warning)
+        if stale_warning_messages:
+            print()
         if not args.skip_combined_split:
             split_start = time.perf_counter()
             split_result = split_combined_oddsportal_pastes(
@@ -554,6 +612,7 @@ def main() -> None:
                 skip_schedule_parse=True,
                 write_detailed_excel=WRITE_DETAILED_EXCEL,
                 initial_runtime_timings=initial_runtime_timings,
+                extra_warning_flags_by_match=stale_warning_flags,
             ),
             ProjectConfig(
                 correct_score_poisson_weight=correct_score_poisson_weight,

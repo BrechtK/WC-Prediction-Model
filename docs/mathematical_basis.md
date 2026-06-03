@@ -92,6 +92,15 @@ challenger and skipped from the default Poisson calibration. Integer lines use
 explicit push treatment, and quarter lines split stake across adjacent integer
 and half-goal lines when priced diagnostically.
 
+The market-consistent challenger represents totals with expected-profit
+constraints at fair decimal odds. For half-goal, integer Asian, and quarter
+Asian total lines, two-way margin removal makes fair Under the complement of
+fair Over. The Under expected-profit vector is therefore a scalar multiple of
+the Over vector, including push and half-push outcomes. The optimiser keeps
+one independent Over-side constraint per total line so a line is not silently
+double-weighted. Both Over and Under odds are still parsed and stored for
+diagnostics and fair-odds checks.
+
 The recommendation report lists all available ladder lines, the half-goal
 lines actually used as targets, and the skipped Asian lines. For each used
 half-goal line it also reports the aggregated fair market over probability,
@@ -177,6 +186,11 @@ the pure-EV score. Other modes are diagnostics for contest strategy review.
 They must be validated against realised leaderboard outcomes before replacing
 the default live submission.
 
+The public-pick power exponent, common-score multiplier, Belgium/public-team
+bias, and alpha/beta/gamma ranking weights are heuristic and unvalidated. They
+are retained as diagnostic-only parameters, not as public strategy features
+that should override the final live decision.
+
 ## Final Decision Dashboard
 
 The final decision dashboard is not a new probability model. It is a reporting
@@ -201,6 +215,15 @@ For a group-stage score prediction `(a,b)`:
 EV(a,b) = sum_{x,y} P(X=x,Y=y) S_group(a,b;x,y)
 ```
 
+The implemented group-stage scoring rule is:
+
+```text
+exact score                      -> 10 points
+correct goal difference/result   -> 7 points
+correct result                   -> 5 points
+participation/otherwise          -> 1 point
+```
+
 Under the baseline additive knockout interpretation:
 
 ```text
@@ -212,7 +235,9 @@ EV(a,b,q)
 ```
 
 Knockout score timing remains configurable because the competition app's exact
-interpretation must be confirmed.
+interpretation must be confirmed. Before relying on knockout EV, verify the
+actual Sporza knockout rules, especially score timing, qualifier treatment, and
+whether score and qualifier points are additive.
 
 ## Optional Correct-Score Market Blend
 
@@ -267,7 +292,9 @@ P_final(score)
 ```
 
 where `0 <= w <= 1`. The default `w=1` exactly preserves the Poisson-only
-workflow. Blending is suppressed for matches with fewer than the configured
+workflow. A value such as `w=0.85` may be useful in research comparisons, but
+it is not the conservative live default until validated by backtesting.
+Blending is suppressed for matches with fewer than the configured
 `min_scorelines_for_blend` usable scorelines; those matches fall back to pure
 Poisson while retaining direct-market diagnostics and a warning. Diagnostics
 report the top market-implied and blended scorelines plus:

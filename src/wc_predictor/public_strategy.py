@@ -134,6 +134,7 @@ def public_pick_distribution(
     popularity_delta = popularity_a - popularity_b
     favourite_is_a = matrix.outcome_probabilities()["a_win"] >= matrix.outcome_probabilities()["b_win"]
     market_scores = _parse_score_labels(correct_score_market_top_10)
+    # Heuristic, unvalidated public-pick multipliers; diagnostic-only.
     market_boosts = {score: 1.0 + 0.35 * (len(market_scores) - index) / max(len(market_scores), 1) for index, score in enumerate(market_scores)}
     friend_counts: dict[tuple[int, int], int] = {}
     if friend_predictions is not None and not friend_predictions.empty:

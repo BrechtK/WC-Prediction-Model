@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
@@ -85,6 +85,7 @@ class LivePredictionSettings:
     weight_comparison_output_path: Path = DEFAULT_WEIGHT_COMPARISON_OUTPUT_PATH
     weight_sensitivity_weights: Sequence[float] = DEFAULT_CORRECT_SCORE_WEIGHTS
     initial_runtime_timings: dict[str, float] = field(default_factory=dict)
+    extra_warning_flags_by_match: Mapping[str, Sequence[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -239,7 +240,7 @@ def run_live_prediction(
     settings = settings or LivePredictionSettings()
     total_start = time.perf_counter()
     config = config or ProjectConfig(
-        correct_score_poisson_weight=0.85,
+        correct_score_poisson_weight=1.0,
         enable_margin_method_comparison=False,
         enable_market_consistent_challenger="only_if_close",
     )
@@ -257,6 +258,7 @@ def run_live_prediction(
             xlsx_output_path=settings.recommendations_xlsx_output_path,
             submission_xlsx_output_path=settings.submission_xlsx_output_path,
             write_detailed_excel=settings.write_detailed_excel,
+            extra_warning_flags_by_match=settings.extra_warning_flags_by_match,
         ),
         config,
         runtime_timings,
