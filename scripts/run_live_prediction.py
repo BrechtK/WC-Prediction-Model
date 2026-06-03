@@ -6,6 +6,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import time
 
 import pandas as pd
 
@@ -60,7 +61,16 @@ CORRECT_SCORE_POISSON_WEIGHT = 0.85
 CORRECT_SCORE_AGGREGATION_METHOD = "auto"
 
 MARGIN_REMOVAL_METHOD = "normalised_inverse_odds"
-ENABLE_MARGIN_METHOD_COMPARISON = True
+
+RUN_PROFILE = "live"
+TERMINAL_VERBOSITY = "compact"
+ENABLE_MARKET_CONSISTENT_CHALLENGER = "only_if_close"
+ENABLE_MARGIN_METHOD_COMPARISON = False
+ENABLE_CORRECT_SCORE_WEIGHT_SENSITIVITY = False
+
+WRITE_DETAILED_EXCEL = True
+WRITE_CACHE_OUTPUTS = True
+SHOW_RUNTIME_SUMMARY = True
 
 DIXON_COLES_RHO = 0.0
 
@@ -73,6 +83,8 @@ NO_ODDS_INPUT_MESSAGE = (
 VALID_RUN_MODES = {"all_available", "date", "single_match", "list_date"}
 VALID_STRATEGY_MODES = ("ev", "balanced", "public-ranking", "aggressive-public-ranking")
 VALID_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive")
+VALID_RUN_PROFILES = ("live", "research")
+VALID_TERMINAL_VERBOSITIES = ("compact", "normal", "debug")
 
 
 @dataclass(frozen=True)
@@ -258,8 +270,12 @@ def _validate_selected_odds_file(selection: ResolvedRunSelection, combined_input
 def _format_run_configuration(
     selection: ResolvedRunSelection,
     strategy_mode: str,
+    run_profile: str,
+    terminal_verbosity: str,
     margin_removal_method: str,
     enable_margin_method_comparison: bool,
+    enable_market_consistent_challenger: bool | str,
+    enable_weight_sensitivity: bool,
 ) -> str:
     lines = [
         "Live Prediction Run Configuration",
@@ -275,9 +291,13 @@ def _format_run_configuration(
         lines.append(f"- resolved matches: {', '.join(selection.match_ids)}")
     elif selection.run_mode == "all_available":
         lines.append("- resolved match: all available odds files")
+    lines.append(f"- run profile: {run_profile}")
+    lines.append(f"- terminal verbosity: {terminal_verbosity}")
     lines.append(f"- strategy mode: {strategy_mode}")
     lines.append(f"- margin removal method: {margin_removal_method}")
     lines.append(f"- margin method comparison: {'enabled' if enable_margin_method_comparison else 'disabled'}")
+    lines.append(f"- market-consistent challenger: {enable_market_consistent_challenger}")
+    lines.append(f"- correct-score weight sensitivity: {'enabled' if enable_weight_sensitivity else 'disabled'}")
     return "\n".join(lines)
 
 
@@ -305,12 +325,16 @@ def main() -> None:
     parser.add_argument("--margin-removal-method", choices=VALID_MARGIN_REMOVAL_METHODS)
     parser.add_argument("--compare-margin-methods", action="store_true")
     parser.add_argument("--no-compare-margin-methods", action="store_true")
+    parser.add_argument("--run-profile", choices=VALID_RUN_PROFILES)
+    parser.add_argument("--terminal-verbosity", choices=VALID_TERMINAL_VERBOSITIES)
     parser.add_argument("--dixon-coles-rho", type=float)
     parser.add_argument(
         "--strategy-mode",
         choices=VALID_STRATEGY_MODES,
     )
     parser.add_argument("--skip-weight-sensitivity", action="store_true")
+    parser.add_argument("--enable-weight-sensitivity", action="store_true")
+    parser.add_argument("--disable-weight-sensitivity", action="store_true")
     parser.add_argument("--skip-combined-split", action="store_true")
     parser.add_argument("--overwrite-combined-split", action="store_true")
     parser.add_argument("--combined-input-folder")
@@ -330,6 +354,14 @@ def main() -> None:
         game_number = args.game_number if args.game_number is not None else GAME_NUMBER
         match_id = args.match_id if args.match_id is not None else MATCH_ID
         strategy_mode = args.strategy_mode if args.strategy_mode is not None else STRATEGY_MODE
+        run_profile = args.run_profile if args.run_profile is not None else RUN_PROFILE
+        terminal_verbosity = (
+            args.terminal_verbosity
+            if args.terminal_verbosity is not None
+            else TERMINAL_VERBOSITY
+            if run_profile == "live"
+            else "normal"
+        )
         correct_score_poisson_weight = (
             args.correct_score_poisson_weight
             if args.correct_score_poisson_weight is not None
@@ -345,11 +377,21 @@ def main() -> None:
             if args.margin_removal_method is not None
             else MARGIN_REMOVAL_METHOD
         )
+        enable_market_consistent_challenger = ENABLE_MARKET_CONSISTENT_CHALLENGER
         enable_margin_method_comparison = ENABLE_MARGIN_METHOD_COMPARISON
+        enable_weight_sensitivity = ENABLE_CORRECT_SCORE_WEIGHT_SENSITIVITY
+        if run_profile == "research":
+            enable_market_consistent_challenger = True
+            enable_margin_method_comparison = True
+            enable_weight_sensitivity = True
         if args.compare_margin_methods:
             enable_margin_method_comparison = True
         if args.no_compare_margin_methods:
             enable_margin_method_comparison = False
+        if args.enable_weight_sensitivity:
+            enable_weight_sensitivity = True
+        if args.disable_weight_sensitivity or args.skip_weight_sensitivity:
+            enable_weight_sensitivity = False
         dixon_coles_rho = args.dixon_coles_rho if args.dixon_coles_rho is not None else DIXON_COLES_RHO
         strict = args.strict or STRICT_INPUT_VALIDATION
 
@@ -364,17 +406,22 @@ def main() -> None:
             if args.paste_input_folder
             else CACHE_SPLIT_PASTES_DIR
         )
+        total_start = time.perf_counter()
         if not schedule_path.exists():
             raise OddsPortalScheduleParseError(
                 f"{schedule_path} is required. "
                 "Paste the schedule there before running live predictions."
             )
+        schedule_start = time.perf_counter()
         prepared_schedule = prepare_schedule_metadata(
             schedule_path,
             args.schedule_output,
             args.schedule_report_output,
             skip_parse=args.skip_schedule_parse,
         )
+        initial_runtime_timings = {
+            "schedule parse": time.perf_counter() - schedule_start,
+        }
         if prepared_schedule.parse_result is not None:
             print(
                 format_oddsportal_schedule_parse_summary(
@@ -399,46 +446,65 @@ def main() -> None:
             _format_run_configuration(
                 selection,
                 strategy_mode,
+                run_profile,
+                terminal_verbosity,
                 margin_removal_method,
                 enable_margin_method_comparison,
+                enable_market_consistent_challenger,
+                enable_weight_sensitivity,
             )
         )
         print()
         if not args.skip_combined_split:
+            split_start = time.perf_counter()
             split_result = split_combined_oddsportal_pastes(
                 combined_input_folder,
                 paste_input_folder,
                 overwrite=args.overwrite_combined_split or combined_input_folder == INPUT_ODDS_DIR,
                 schedule=prepared_schedule.schedule,
             )
+            initial_runtime_timings["combined paste split"] = time.perf_counter() - split_start
             if split_result.files_processed:
                 print(format_combined_oddsportal_split_summary(split_result))
                 print()
+        else:
+            initial_runtime_timings["combined paste split"] = 0.0
         result = run_live_prediction(
             LivePredictionSettings(
                 input_folder=paste_input_folder,
                 match_id=selection.match_id,
                 match_ids=selection.match_ids or None,
                 strict=strict,
-                skip_weight_sensitivity=args.skip_weight_sensitivity,
+                skip_weight_sensitivity=not enable_weight_sensitivity,
                 metadata_odds_path=prepared_schedule.metadata_path,
                 schedule_input_path=schedule_path,
                 schedule_output_path=args.schedule_output,
                 schedule_parse_report_path=args.schedule_report_output,
                 skip_schedule_parse=True,
+                write_detailed_excel=WRITE_DETAILED_EXCEL,
+                initial_runtime_timings=initial_runtime_timings,
             ),
             ProjectConfig(
                 correct_score_poisson_weight=correct_score_poisson_weight,
                 correct_score_aggregation_method=correct_score_aggregation_method,
                 margin_removal_method=margin_removal_method,
                 enable_margin_method_comparison=enable_margin_method_comparison,
+                enable_market_consistent_challenger=enable_market_consistent_challenger,
                 dixon_coles_rho=dixon_coles_rho,
                 public_strategy=PublicStrategyConfig(mode=strategy_mode),
             ),
         )
+        result.runtime_timings["total"] = time.perf_counter() - total_start
     except (CombinedOddsPortalPasteError, LivePredictionError, OddsPortalScheduleParseError, ValueError) as error:
         raise SystemExit(_user_facing_live_error(error)) from error
-    print(format_live_prediction_summary(result))
+    print(
+        format_live_prediction_summary(
+            result,
+            terminal_verbosity=terminal_verbosity,
+            run_profile=run_profile,
+            show_runtime_summary=SHOW_RUNTIME_SUMMARY,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -559,6 +559,7 @@ def export_world_cup_recommendations_excel(
     frame: pd.DataFrame,
     path: str | Path,
     margin_method_comparison: pd.DataFrame | None = None,
+    final_decision_dashboard: pd.DataFrame | None = None,
 ) -> None:
     """Export readable real-tournament recommendations with Excel formatting."""
 
@@ -572,11 +573,22 @@ def export_world_cup_recommendations_excel(
     key_columns = [
         "match_id",
         "date",
+        "time",
         "stage",
         "group",
         "team_a",
         "team_b",
         "recommended_score",
+        "final_decision_score",
+        "confidence_level",
+        "manual_review_flag",
+        "main_alternative_score",
+        "plausible_alternatives",
+        "strategic_alternative_score",
+        "override_candidate",
+        "model_consensus",
+        "risk_notes",
+        "decision_note",
         "market_a_win",
         "market_draw",
         "market_b_win",
@@ -763,7 +775,7 @@ def export_world_cup_recommendations_excel(
         "lambda_a_near_bound",
         "lambda_b_near_bound",
     ]
-    ordered_columns = [column for column in key_columns if column in frame]
+    ordered_columns = list(dict.fromkeys(column for column in key_columns if column in frame))
     ordered_columns.extend(column for column in frame.columns if column not in ordered_columns)
     display_frame = frame[ordered_columns].rename(columns=aliases)
     ev_decomposition = _ev_decomposition_sheet(frame)
@@ -779,6 +791,8 @@ def export_world_cup_recommendations_excel(
             market_consistent_diagnostics.to_excel(writer, index=False, sheet_name="market_consistent")
         if margin_method_comparison is not None and not margin_method_comparison.empty:
             margin_method_comparison.to_excel(writer, index=False, sheet_name="margin_methods")
+        if final_decision_dashboard is not None and not final_decision_dashboard.empty:
+            final_decision_dashboard.to_excel(writer, index=False, sheet_name="final_decision_dashboard")
 
     probability_columns = {
         "market_a",
@@ -902,7 +916,9 @@ def export_world_cup_recommendations_excel(
         "top_10_ev_decomposition",
         "ev_explanation",
         "close_alternatives",
+        "plausible_alternatives",
         "decision_note",
+        "risk_notes",
         "top_clean_sheet_scores",
         "top_favourite_margin_probabilities",
         "top_5_favourite_score_count_probabilities",
@@ -987,16 +1003,20 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
             "team_a",
             "team_b",
             "recommended_score",
+            "final_decision_score",
+            "confidence_level",
+            "manual_review_flag",
+            "main_alternative_score",
+            "plausible_alternatives",
+            "decision_note",
             "recommended_qualifier",
             "best_expected_points",
             "recommendation_confidence",
-            "manual_review_flag",
             "plausible_top_alternatives",
             "suppressed_ev_candidates",
             "close_alternatives",
             "ev_gap_to_second",
             "ev_gap_to_third",
-            "decision_note",
             "favourite_bucket",
             "top_3_alternatives",
             "notes",
@@ -1015,7 +1035,9 @@ def export_world_cup_submission_sheet_excel(frame: pd.DataFrame, path: str | Pat
         "top_3_alternatives",
         "notes",
         "plausible_top_alternatives",
+        "plausible_alternatives",
         "suppressed_ev_candidates",
+        "main_alternative_score",
         "close_alternatives",
         "decision_note",
     }

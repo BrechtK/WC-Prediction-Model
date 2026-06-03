@@ -22,9 +22,11 @@ from wc_predictor.world_cup import (
 )
 from wc_predictor.workflow import (
     _btts_warning_flags,
+    _build_final_decision_dashboard,
     _decision_aid,
     _ev_explanation,
     _plausible_alternative_decision_layer,
+    _should_run_market_consistent_challenger,
 )
 
 
@@ -360,6 +362,154 @@ def test_plausible_alternatives_keep_clean_sheet_scores_for_extreme_favourites()
     assert layer["suppressed_ev_candidates"] == ""
 
 
+def _dashboard_match_report(**overrides) -> pd.DataFrame:
+    row = {
+        "match_id": "M001",
+        "date": "2026-06-11",
+        "time": "18:00",
+        "team_a": "Alpha",
+        "team_b": "Beta",
+        "recommended_score": "1-0",
+        "market_consistent_recommended_score": "1-0",
+        "dixon_coles_recommended_score": "1-0",
+        "correct_score_blended_recommended_score": "1-0",
+        "public_strategy_score": "1-0",
+        "public_strategy_ev_cost": 0.0,
+        "ev_gap_to_second": 0.18,
+        "ev_gap_to_third": 0.25,
+        "plausible_top_alternatives": "2-0 (4.820); 2-1 (4.700)",
+        "high_score_cluster": "no",
+        "warning_flags": "",
+    }
+    row.update(overrides)
+    return pd.DataFrame([row])
+
+
+def _dashboard_margin_rows(score: str = "1-0", differs: str = "no", default_score: str = "1-0") -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "match_id": "M001",
+                "team_a": "Alpha",
+                "team_b": "Beta",
+                "method": "normalised_inverse_odds",
+                "method_status": "ok",
+                "recommended_score": default_score,
+                "differs_from_default": "no",
+            },
+            {
+                "match_id": "M001",
+                "team_a": "Alpha",
+                "team_b": "Beta",
+                "method": "power",
+                "method_status": "ok",
+                "recommended_score": score,
+                "differs_from_default": differs,
+            },
+        ]
+    )
+
+
+def test_final_decision_dashboard_marks_strong_consensus_high_confidence() -> None:
+    dashboard = _build_final_decision_dashboard(
+        _dashboard_match_report(),
+        _dashboard_margin_rows(),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).iloc[0]
+
+    assert dashboard["final_decision_score"] == "1-0"
+    assert dashboard["model_consensus"] == "strong_consensus"
+    assert dashboard["confidence_level"] == "high"
+    assert dashboard["manual_review_flag"] == "no"
+    assert dashboard["decision_note"] == "Default recommendation supported by all challenger diagnostics."
+
+
+def test_final_decision_dashboard_flags_market_consistent_disagreement() -> None:
+    dashboard = _build_final_decision_dashboard(
+        _dashboard_match_report(market_consistent_recommended_score="1-1", ev_gap_to_second=0.03),
+        _dashboard_margin_rows(),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).iloc[0]
+
+    assert dashboard["model_consensus"] == "moderate_consensus"
+    assert dashboard["confidence_level"] == "low"
+    assert dashboard["manual_review_flag"] == "yes"
+    assert dashboard["main_alternative_score"] == "1-1"
+    assert "market-consistent challenger differs" in dashboard["risk_notes"]
+    assert "consider 1-1" in dashboard["decision_note"]
+
+
+def test_final_decision_dashboard_flags_margin_method_sensitivity() -> None:
+    dashboard = _build_final_decision_dashboard(
+        _dashboard_match_report(),
+        _dashboard_margin_rows(score="1-1", differs="yes"),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).iloc[0]
+
+    assert dashboard["margin_method_sensitive"] == "yes"
+    assert dashboard["manual_review_flag"] == "yes"
+    assert "margin-removal methods change recommendation" in dashboard["risk_notes"]
+
+
+def test_final_decision_dashboard_marks_margin_method_not_run_when_disabled() -> None:
+    dashboard = _build_final_decision_dashboard(
+        _dashboard_match_report(),
+        pd.DataFrame(),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).iloc[0]
+
+    assert dashboard["margin_method_sensitive"] == "not_run"
+
+
+def test_market_consistent_only_if_close_runs_only_for_risky_matches() -> None:
+    config = ProjectConfig(enable_market_consistent_challenger="only_if_close")
+
+    assert not _should_run_market_consistent_challenger(
+        setting="only_if_close",
+        ev_gap_to_second=0.20,
+        extreme_favourite=False,
+        warning_flags="",
+        config=config,
+    )
+    assert _should_run_market_consistent_challenger(
+        setting="only_if_close",
+        ev_gap_to_second=0.03,
+        extreme_favourite=False,
+        warning_flags="",
+        config=config,
+    )
+    assert _should_run_market_consistent_challenger(
+        setting="only_if_close",
+        ev_gap_to_second=0.20,
+        extreme_favourite=True,
+        warning_flags="",
+        config=config,
+    )
+
+
+def test_final_decision_dashboard_flags_extreme_favourite_cluster() -> None:
+    dashboard = _build_final_decision_dashboard(
+        _dashboard_match_report(
+            recommended_score="3-0",
+            market_consistent_recommended_score="3-0",
+            dixon_coles_recommended_score="3-0",
+            correct_score_blended_recommended_score="3-0",
+            public_strategy_score="4-0",
+            public_strategy_ev_cost=0.02,
+            plausible_top_alternatives="4-0 (4.960); 5-0 (4.800)",
+            high_score_cluster="yes",
+        ),
+        _dashboard_margin_rows(score="3-0", differs="no", default_score="3-0"),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).iloc[0]
+
+    assert dashboard["confidence_level"] == "clustered"
+    assert dashboard["high_score_cluster"] == "yes"
+    assert dashboard["manual_review_flag"] == "yes"
+    assert dashboard["main_alternative_score"] == "4-0"
+    assert "High-score cluster" in dashboard["decision_note"]
+
+
 def test_btts_warning_appears_for_recommendation_conflicting_with_strong_market_signal() -> None:
     flags = _btts_warning_flags(
         has_btts=True,
@@ -389,11 +539,16 @@ def test_top_ten_ev_decomposition_is_written_to_excel(tmp_path: Path) -> None:
     assert "ev_decomposition" in workbook.sheetnames
     assert "market_consistent" in workbook.sheetnames
     assert "margin_methods" in workbook.sheetnames
+    assert "final_decision_dashboard" in workbook.sheetnames
     assert "predicted_score" in diagnostics_headers
     assert "exact_score_component" in diagnostics_headers
     market_consistent_headers = [cell.value for cell in workbook["market_consistent"][1]]
+    dashboard_headers = [cell.value for cell in workbook["final_decision_dashboard"][1]]
     assert "market_consistent_top_10_ev_scorelines" in recommendation_headers
     assert "market_consistent_top_10_probability_scorelines" in market_consistent_headers
+    assert "final_decision_score" in recommendation_headers
+    assert "final_decision_score" in dashboard_headers
+    assert "risk_notes" in dashboard_headers
     assert workbook["ev_decomposition"].max_row == 21
 
 
@@ -576,14 +731,25 @@ def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -
     headers = [cell.value for cell in worksheet[1]]
 
     assert worksheet.freeze_panes == "A2"
-    assert headers[:19] == [
+    assert headers[:30] == [
         "match_id",
         "date",
+        "time",
         "stage",
         "group",
         "team_a",
         "team_b",
         "recommended_score",
+        "final_decision_score",
+        "confidence_level",
+        "manual_review_flag",
+        "main_alternative_score",
+        "plausible_alternatives",
+        "strategic_alternative_score",
+        "override_candidate",
+        "model_consensus",
+        "risk_notes",
+        "decision_note",
         "market_a",
         "market_draw",
         "market_b",
@@ -626,16 +792,20 @@ def test_world_cup_submission_sheet_contains_only_entry_columns_and_formatting(t
         "team_a",
         "team_b",
         "recommended_score",
+        "final_decision_score",
+        "confidence_level",
+        "manual_review_flag",
+        "main_alternative_score",
+        "plausible_alternatives",
+        "decision_note",
         "recommended_qualifier",
         "best_expected_points",
         "recommendation_confidence",
-        "manual_review_flag",
         "plausible_top_alternatives",
         "suppressed_ev_candidates",
         "close_alternatives",
         "ev_gap_to_second",
         "ev_gap_to_third",
-        "decision_note",
         "favourite_bucket",
         "top_3_alternatives",
         "notes",
@@ -644,6 +814,7 @@ def test_world_cup_submission_sheet_contains_only_entry_columns_and_formatting(t
     assert worksheet.cell(2, column["best_expected_points"]).number_format == "0.000"
     assert worksheet.cell(2, column["ev_gap_to_second"]).number_format == "0.000"
     assert worksheet.cell(2, column["top_3_alternatives"]).alignment.wrap_text
+    assert worksheet.cell(2, column["plausible_alternatives"]).alignment.wrap_text
     assert worksheet.cell(2, column["plausible_top_alternatives"]).alignment.wrap_text
     assert worksheet.cell(2, column["suppressed_ev_candidates"]).alignment.wrap_text
     assert worksheet.cell(2, column["decision_note"]).alignment.wrap_text

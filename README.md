@@ -162,15 +162,34 @@ Useful switches:
 ```powershell
 python scripts/run_live_prediction.py --match-id M001
 python scripts/run_live_prediction.py --strict
-python scripts/run_live_prediction.py --skip-weight-sensitivity
+python scripts/run_live_prediction.py --enable-weight-sensitivity
+python scripts/run_live_prediction.py --disable-weight-sensitivity
 python scripts/run_live_prediction.py --dixon-coles-rho -0.08
 python scripts/run_live_prediction.py --strategy-mode public-ranking
 python scripts/run_live_prediction.py --margin-removal-method power
 python scripts/run_live_prediction.py --no-compare-margin-methods
+python scripts/run_live_prediction.py --run-profile research --terminal-verbosity debug
 ```
+
+The run file has live-speed controls in the `USER SETTINGS` block:
+
+- `RUN_PROFILE = "live"` is the fast tournament mode. It defaults to compact
+  terminal output, skips margin-method comparison, and runs the
+  market-consistent challenger only for close/risky matches. It also disables
+  correct-score weight sensitivity by default.
+- `RUN_PROFILE = "research"` enables slower diagnostic comparisons for model
+  review, including correct-score weight sensitivity.
+- `TERMINAL_VERBOSITY = "compact"` prints final recommendations, confidence,
+  manual-review flags, alternatives, output paths, and runtime timings.
+- `TERMINAL_VERBOSITY = "debug"` restores the detailed BTTS, EV, margin,
+  market-consistent, and extreme-favourite diagnostics.
 
 `--dixon-coles-rho` changes only the diagnostic challenger. It never promotes
 Dixon-Coles to the final live recommendation.
+
+`--enable-weight-sensitivity` turns on the correct-score blend-weight workbook
+for a live run. `--disable-weight-sensitivity` turns it off, including in
+research profile.
 
 `--margin-removal-method` changes the active fair-probability conversion used
 by the live recommendation. The default is `normalised_inverse_odds`, which is
@@ -197,6 +216,11 @@ Decision-oriented alternatives are separated from raw EV diagnostics:
   clean-sheet exceptions.
 - `recommended_score` remains the final model recommendation and is not changed
   by the plausible-alternatives filter.
+- `final_decision_dashboard` consolidates default EV, challenger models,
+  margin-method sensitivity, public strategy, warning flags, and plausible
+  alternatives into a practical submission review sheet. Its
+  `final_decision_score` defaults to `recommended_score`; override candidates
+  are flagged for human review rather than applied automatically.
 
 Clean `input/odds/*.txt` files refresh their generated `cache/split_pastes/`
 files automatically.
@@ -210,7 +234,7 @@ Normal live outputs:
 | `output/submission_sheet.xlsx` | Concise entry-ready recommendations |
 | `output/predictions.xlsx` | Full prediction and model diagnostics |
 | `output/predictions.csv` | Machine-readable detailed recommendations |
-| `output/correct_score_weight_sensitivity.xlsx` | Correct-score blend-weight comparison |
+| `output/correct_score_weight_sensitivity.xlsx` | Correct-score blend-weight comparison, written only when weight sensitivity is enabled |
 | `output/parse_reports/schedule_parse_report.csv` | Schedule parsing diagnostics |
 | `output/parse_reports/odds_parse_report.csv` | 1X2, O/U, and BTTS parsing diagnostics |
 | `output/parse_reports/correct_score_parse_report.csv` | Correct-score parsing diagnostics |
@@ -239,6 +263,10 @@ The `margin_methods` sheet compares implemented overround-removal methods per
 match. If methods disagree on the recommended score, inspect the comparison
 before treating the default output as robust.
 
+The `final_decision_dashboard` sheet is the live submission cockpit: it marks
+high-confidence picks, manual-review matches, main alternatives, strategic
+alternatives, and risk notes while leaving the model recommendation unchanged.
+
 ## Interpreting The Terminal Summary
 
 For each match, the live runner prints:
@@ -248,6 +276,7 @@ For each match, the live runner prints:
 - final EV-optimal live score and alternatives;
 - decision aid confidence, plausible alternatives, manual-review flag, and note;
 - concise margin-removal sensitivity when comparison is enabled;
+- final decision dashboard counts and manual-review matches;
 - baseline Poisson, correct-score blend, and final-live comparison;
 - Dixon-Coles rho, top-five challenger EV predictions, and disagreement flag;
 - estimated crowded public score, public-ranking diagnostic score, EV cost,

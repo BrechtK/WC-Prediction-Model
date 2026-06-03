@@ -81,6 +81,18 @@ This layer is not a replacement for pure EV. Before promotion, validate:
 The eventual objective may be probability of winning the pool rather than
 expected points alone, but that requires out-of-sample leaderboard evidence.
 
+## Final Decision Dashboard
+
+The live workflow now includes a final decision dashboard that consolidates the
+default EV recommendation, challenger model agreement, margin-removal
+sensitivity, public-strategy suggestions, high-score clusters, plausible
+alternatives, and warning flags.
+
+This layer is reporting-only. `recommended_score` remains the pure default EV
+recommendation, and `final_decision_score` defaults to that same score. The
+dashboard highlights manual-review and override-candidate situations so a human
+can make the final submission decision under tournament pressure.
+
 ## Priority 6: Own Challenger Models
 
 Only after the market baseline is robust:

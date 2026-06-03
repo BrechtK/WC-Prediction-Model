@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import json
+import time
 from typing import Any
 
 import numpy as np
@@ -73,6 +74,7 @@ class PredictionWorkflowResult:
     baseline_score_matrices: dict[str, ScoreProbabilityMatrix]
     challenger_score_matrices: dict[str, dict[str, ScoreProbabilityMatrix]]
     margin_method_comparison: pd.DataFrame
+    final_decision_dashboard: pd.DataFrame
 
 
 def _optional_probability(row: pd.Series, column: str) -> float | None:
@@ -404,8 +406,8 @@ def _plausible_alternative_decision_layer(
 ) -> dict[str, object]:
     """Filter raw EV alternatives into practical manual-review candidates."""
 
-    exact_threshold = config.strategies.plausible_exact_probability_threshold
-    total_goals_limit = config.strategies.plausible_total_goals_limit
+    exact_threshold = config.strategies.plausible_alternative_min_exact_probability
+    total_goals_limit = config.strategies.plausible_alternative_max_total_goals
     best_exact_by_bucket: dict[tuple[int, int], float] = {}
     for record in records:
         score = _parse_score_label(str(record["predicted_score"]))
@@ -658,6 +660,48 @@ def _market_consistent_high_score_comparison(
     return comparison
 
 
+def _should_run_market_consistent_challenger(
+    *,
+    setting: bool | str,
+    ev_gap_to_second: object,
+    extreme_favourite: bool,
+    warning_flags: str,
+    config: ProjectConfig,
+) -> bool:
+    if setting is True:
+        return True
+    if setting is False:
+        return False
+    if setting != "only_if_close":
+        raise ValueError("enable_market_consistent_challenger must be True, False, or 'only_if_close'")
+    severe_warning = any(
+        flag
+        for flag in str(warning_flags or "").split("; ")
+        if flag
+        and (
+            "poor_calibration" in flag
+            or "high_tail_mass" in flag
+            or "larger_grid_sensitivity" in flag
+            or "challenger_model_recommendations_disagree" in flag
+        )
+    )
+    return (
+        pd.notna(ev_gap_to_second)
+        and float(ev_gap_to_second) < config.strategies.low_confidence_ev_gap_threshold
+    ) or extreme_favourite or severe_warning
+
+
+def _empty_market_consistent_high_score_comparison() -> dict[str, object]:
+    return {
+        "market_consistent_poisson_ev_favourite_3_0": pd.NA,
+        "market_consistent_poisson_ev_favourite_4_0": pd.NA,
+        "market_consistent_poisson_ev_favourite_5_0": pd.NA,
+        "market_consistent_matrix_ev_favourite_3_0": pd.NA,
+        "market_consistent_matrix_ev_favourite_4_0": pd.NA,
+        "market_consistent_matrix_ev_favourite_5_0": pd.NA,
+    }
+
+
 def _optimise_score_matrix(
     matrix: ScoreProbabilityMatrix,
     knockout: bool,
@@ -793,6 +837,288 @@ def _build_margin_method_comparison(
                     "warning_flags": warning_flags,
                 }
             )
+    return pd.DataFrame(rows)
+
+
+def _extract_score_from_formatted_candidate(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.split(" ", maxsplit=1)[0]
+
+
+def _format_margin_method_scores(rows: pd.DataFrame) -> str:
+    if rows.empty:
+        return ""
+    parts: list[str] = []
+    for _, row in rows.iterrows():
+        if str(row.get("method_status", "ok")) == "ok":
+            parts.append(f"{row['method']}:{row['recommended_score']}")
+        else:
+            parts.append(f"{row['method']}:failed")
+    return "; ".join(parts)
+
+
+def _score_counts_for_consensus(default_score: str, challenger_scores: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for score in [default_score, *challenger_scores]:
+        if score:
+            counts[score] = counts.get(score, 0) + 1
+    return counts
+
+
+def _model_consensus(default_score: str, challenger_scores: list[str]) -> str:
+    serious_scores = [score for score in challenger_scores if score]
+    if not serious_scores or all(score == default_score for score in serious_scores):
+        return "strong_consensus"
+    differing = sum(score != default_score for score in serious_scores)
+    unique_scores = set([default_score, *serious_scores])
+    if differing == 1:
+        return "moderate_consensus"
+    if len(unique_scores) >= 4:
+        return "no_consensus"
+    return "weak_consensus"
+
+
+def _dashboard_confidence(
+    *,
+    ev_gap_to_second: object,
+    model_consensus: str,
+    high_score_cluster: bool,
+    strategic_alternative_score: str,
+    config: ProjectConfig,
+) -> str:
+    if high_score_cluster:
+        return "clustered"
+    if strategic_alternative_score:
+        return "strategic"
+    if pd.notna(ev_gap_to_second):
+        gap = float(ev_gap_to_second)
+        if gap < config.strategies.low_confidence_ev_gap_threshold:
+            return "low"
+        if gap >= config.strategies.high_confidence_ev_gap_threshold and model_consensus == "strong_consensus":
+            return "high"
+    if model_consensus in {"weak_consensus", "no_consensus"}:
+        return "low"
+    return "medium"
+
+
+def _dashboard_main_alternative(
+    *,
+    default_score: str,
+    strategic_alternative_score: str,
+    plausible_alternatives: str,
+    challenger_scores: list[str],
+) -> str:
+    if strategic_alternative_score and strategic_alternative_score != default_score:
+        return strategic_alternative_score
+    for score in challenger_scores:
+        if score and score != default_score:
+            return score
+    for candidate in str(plausible_alternatives or "").split("; "):
+        score = _extract_score_from_formatted_candidate(candidate)
+        if score and score != default_score:
+            return score
+    return ""
+
+
+def _dashboard_risk_notes(
+    *,
+    ev_gap_small: bool,
+    market_consistent_differs: bool,
+    margin_method_sensitive: bool,
+    dixon_coles_differs: bool,
+    public_strategy_differs: bool,
+    high_score_cluster: bool,
+    warning_flags: str,
+) -> str:
+    notes: list[str] = []
+    if ev_gap_small:
+        notes.append("EV gap to second is small")
+    if market_consistent_differs:
+        notes.append("market-consistent challenger differs")
+    if margin_method_sensitive:
+        notes.append("margin-removal methods change recommendation")
+    if dixon_coles_differs:
+        notes.append("Dixon-Coles challenger differs")
+    if public_strategy_differs:
+        notes.append("public strategy suggests a different score")
+    if high_score_cluster:
+        notes.append("high-score cluster present")
+    severe_flags = [
+        flag
+        for flag in str(warning_flags or "").split("; ")
+        if flag
+        and (
+            "poor_calibration" in flag
+            or "high_tail_mass" in flag
+            or "larger_grid_sensitivity" in flag
+            or "stale_odds" in flag
+        )
+    ]
+    if severe_flags:
+        notes.append("severe warning flags: " + ", ".join(severe_flags))
+    return "; ".join(notes)
+
+
+def _dashboard_decision_note(
+    *,
+    default_score: str,
+    model_consensus: str,
+    confidence_level: str,
+    risk_notes: str,
+    main_alternative_score: str,
+    high_score_cluster: bool,
+) -> str:
+    if not risk_notes and model_consensus == "strong_consensus" and confidence_level == "high":
+        return "Default recommendation supported by all challenger diagnostics."
+    if high_score_cluster and main_alternative_score:
+        return (
+            f"High-score cluster: {default_score} is model-favoured, but "
+            f"{main_alternative_score} is a plausible strategic alternative."
+        )
+    if main_alternative_score:
+        return (
+            f"Default remains {default_score}; consider {main_alternative_score} for manual review. "
+            f"{risk_notes or 'Challenger diagnostics provide an alternative signal.'}"
+        )
+    return risk_notes or "Default recommendation retained; no override signal."
+
+
+def _build_final_decision_dashboard(
+    match_report: pd.DataFrame,
+    margin_method_comparison: pd.DataFrame,
+    config: ProjectConfig,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for _, row in match_report.iterrows():
+        match_id = str(row["match_id"])
+        default_score = str(row["recommended_score"])
+        margin_rows = (
+            margin_method_comparison[margin_method_comparison["match_id"].astype(str) == match_id]
+            if not margin_method_comparison.empty
+            else pd.DataFrame()
+        )
+        margin_method_scores = _format_margin_method_scores(margin_rows)
+        margin_method_sensitive_value = (
+            "not_run"
+            if margin_rows.empty
+            else "yes"
+            if margin_rows["differs_from_default"].astype(str).str.lower().eq("yes").any()
+            else "no"
+        )
+        margin_method_sensitive = margin_method_sensitive_value == "yes"
+        margin_scores = [
+            str(score)
+            for score in margin_rows.loc[
+                margin_rows.get("method_status", pd.Series(dtype=str)).astype(str).eq("ok"),
+                "recommended_score",
+            ].dropna()
+            if str(score)
+        ] if not margin_rows.empty and "recommended_score" in margin_rows else []
+        market_consistent_score = str(row.get("market_consistent_recommended_score", ""))
+        dixon_coles_score = str(row.get("dixon_coles_recommended_score", ""))
+        public_strategy_score = str(row.get("public_strategy_score", ""))
+        correct_score_blended_score = str(row.get("correct_score_blended_recommended_score", ""))
+        challenger_scores = [
+            market_consistent_score,
+            dixon_coles_score,
+            correct_score_blended_score,
+            *margin_scores,
+        ]
+        model_consensus = _model_consensus(default_score, challenger_scores)
+        ev_gap_small = (
+            pd.notna(row.get("ev_gap_to_second"))
+            and float(row["ev_gap_to_second"]) < config.strategies.low_confidence_ev_gap_threshold
+        )
+        high_score_cluster = str(row.get("high_score_cluster", "no")).lower() == "yes"
+        market_consistent_differs = market_consistent_score not in {"", default_score}
+        dixon_coles_differs = dixon_coles_score not in {"", default_score}
+        public_strategy_differs = public_strategy_score not in {"", default_score}
+        strategic_alternative_score = (
+            public_strategy_score
+            if public_strategy_differs
+            and pd.notna(row.get("public_strategy_ev_cost"))
+            and float(row.get("public_strategy_ev_cost", 0.0)) <= config.public_strategy.effective_max_ev_loss
+            and str(row.get("warning_flags", "")).find("poor_calibration") == -1
+            else ""
+        )
+        confidence_level = _dashboard_confidence(
+            ev_gap_to_second=row.get("ev_gap_to_second"),
+            model_consensus=model_consensus,
+            high_score_cluster=high_score_cluster,
+            strategic_alternative_score=strategic_alternative_score,
+            config=config,
+        )
+        plausible_alternatives = str(row.get("plausible_top_alternatives", ""))
+        main_alternative_score = _dashboard_main_alternative(
+            default_score=default_score,
+            strategic_alternative_score=strategic_alternative_score,
+            plausible_alternatives=plausible_alternatives,
+            challenger_scores=challenger_scores,
+        )
+        risk_notes = _dashboard_risk_notes(
+            ev_gap_small=ev_gap_small,
+            market_consistent_differs=market_consistent_differs,
+            margin_method_sensitive=margin_method_sensitive,
+            dixon_coles_differs=dixon_coles_differs,
+            public_strategy_differs=public_strategy_differs,
+            high_score_cluster=high_score_cluster,
+            warning_flags=str(row.get("warning_flags", "")),
+        )
+        manual_review = any(
+            [
+                ev_gap_small,
+                market_consistent_differs,
+                margin_method_sensitive,
+                dixon_coles_differs,
+                bool(strategic_alternative_score),
+                high_score_cluster,
+                bool(risk_notes),
+            ]
+        )
+        override_candidate = bool(main_alternative_score and manual_review)
+        decision_note = _dashboard_decision_note(
+            default_score=default_score,
+            model_consensus=model_consensus,
+            confidence_level=confidence_level,
+            risk_notes=risk_notes,
+            main_alternative_score=main_alternative_score,
+            high_score_cluster=high_score_cluster,
+        )
+        rows.append(
+            {
+                "match_id": row["match_id"],
+                "date": row["date"],
+                "time": row.get("time", ""),
+                "team_a": row["team_a"],
+                "team_b": row["team_b"],
+                "default_score": default_score,
+                "final_decision_score": default_score,
+                "market_consistent_score": market_consistent_score,
+                "dixon_coles_score": dixon_coles_score,
+                "public_strategy_score": public_strategy_score,
+                "margin_method_scores": margin_method_scores,
+                "model_consensus": model_consensus,
+                "confidence_level": confidence_level,
+                "manual_review_flag": "yes" if manual_review else "no",
+                "ev_gap_to_second": row.get("ev_gap_to_second", pd.NA),
+                "ev_gap_to_third": row.get("ev_gap_to_third", pd.NA),
+                "main_alternative_score": main_alternative_score,
+                "plausible_alternatives": plausible_alternatives,
+                "strategic_alternative_score": strategic_alternative_score,
+                "override_candidate": "yes" if override_candidate else "no",
+                "high_score_cluster": "yes" if high_score_cluster else "no",
+                "margin_method_sensitive": margin_method_sensitive_value,
+                "market_consistent_differs": "yes" if market_consistent_differs else "no",
+                "dixon_coles_differs": "yes" if dixon_coles_differs else "no",
+                "public_strategy_differs": "yes" if public_strategy_differs else "no",
+                "warning_flags": row.get("warning_flags", ""),
+                "risk_notes": risk_notes,
+                "decision_note": decision_note,
+                "final_decision_basis": "default_ev_recommendation",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -949,6 +1275,7 @@ def run_prediction_workflow(
     config: ProjectConfig | None = None,
     correct_score_odds: pd.DataFrame | None = None,
     total_goals_odds: pd.DataFrame | None = None,
+    runtime_timings: dict[str, float] | None = None,
 ) -> PredictionWorkflowResult:
     """Produce market-implied score recommendations and optional friend EV analysis."""
 
@@ -984,8 +1311,11 @@ def run_prediction_workflow(
     if missing_1x2.any():
         match_ids = aggregated.loc[missing_1x2, "match_id"].astype(str).tolist()
         raise ValueError(f"No complete 1X2 market is available for matches: {match_ids}")
-    odds_with_group = odds.assign(group=odds["group"] if "group" in odds else pd.NA)
-    matches = odds_with_group[["match_id", "date", "stage", "group", "team_a", "team_b"]].drop_duplicates("match_id")
+    odds_with_group = odds.assign(
+        group=odds["group"] if "group" in odds else pd.NA,
+        time=odds["time"] if "time" in odds else "",
+    )
+    matches = odds_with_group[["match_id", "date", "time", "stage", "group", "team_a", "team_b"]].drop_duplicates("match_id")
     market = matches.merge(aggregated, on="match_id", validate="one_to_one")
 
     report_rows: list[dict[str, object]] = []
@@ -1147,25 +1477,71 @@ def run_prediction_workflow(
             qualifier_probabilities,
             config,
         )
-        market_consistent_result = fit_market_consistent_matrix(
-            poisson_matrix,
-            {
-                "a_win": targets.a_win,
-                "draw": targets.draw,
-                "b_win": targets.b_win,
-                "btts_yes": _optional_probability(row, "fair_btts_yes"),
-            },
-            total_goals=match_total_goals,
-            correct_score_matrix=correct_score_matrices.get(match_id),
+        preliminary_ev_gap_to_second = _ev_gap_best_vs_second(recommendation)
+        preliminary_extreme_favourite = (
+            max(targets.a_win, targets.b_win) > EXTREME_FAVOURITE_PROBABILITY_THRESHOLD
+            or poisson_matrix.tail_probability > HIGH_TAIL_MASS_THRESHOLD
         )
-        market_consistent_matrix = market_consistent_result.matrix
-        match_challenger_matrices["market_consistent_matrix"] = market_consistent_matrix
-        market_consistent_recommendation = _optimise_score_matrix(
-            market_consistent_matrix,
-            knockout,
-            qualifier_probabilities,
-            config,
+        run_market_consistent = _should_run_market_consistent_challenger(
+            setting=config.enable_market_consistent_challenger,
+            ev_gap_to_second=preliminary_ev_gap_to_second,
+            extreme_favourite=preliminary_extreme_favourite,
+            warning_flags="",
+            config=config,
         )
+        if run_market_consistent:
+            market_consistent_start = time.perf_counter()
+            market_consistent_result = fit_market_consistent_matrix(
+                poisson_matrix,
+                {
+                    "a_win": targets.a_win,
+                    "draw": targets.draw,
+                    "b_win": targets.b_win,
+                    "btts_yes": _optional_probability(row, "fair_btts_yes"),
+                },
+                total_goals=match_total_goals,
+                correct_score_matrix=correct_score_matrices.get(match_id),
+            )
+            market_consistent_matrix = market_consistent_result.matrix
+            match_challenger_matrices["market_consistent_matrix"] = market_consistent_matrix
+            market_consistent_recommendation = _optimise_score_matrix(
+                market_consistent_matrix,
+                knockout,
+                qualifier_probabilities,
+                config,
+            )
+            if runtime_timings is not None:
+                runtime_timings["market-consistent challenger"] = (
+                    runtime_timings.get("market-consistent challenger", 0.0)
+                    + time.perf_counter()
+                    - market_consistent_start
+                )
+        else:
+            market_consistent_matrix = None
+            market_consistent_recommendation = None
+            skip_note = (
+                "market-consistent skipped: high-confidence default"
+                if config.enable_market_consistent_challenger == "only_if_close"
+                else "market-consistent skipped: disabled"
+            )
+            market_consistent_result = type(
+                "SkippedMarketConsistentResult",
+                (),
+                {
+                    "diagnostics": {
+                        "market_consistent_status": "skipped",
+                        "market_consistent_skip_reason": skip_note,
+                        "market_consistent_optimisation_success": pd.NA,
+                        "market_consistent_optimisation_message": skip_note,
+                        "market_consistent_kl_divergence_vs_prior": pd.NA,
+                        "market_consistent_1x2_fit_error": pd.NA,
+                        "market_consistent_btts_fit_error": pd.NA,
+                        "market_consistent_total_goals_fit_error": pd.NA,
+                        "market_consistent_correct_score_fit_error": pd.NA,
+                        "market_consistent_asian_totals_used": "",
+                    }
+                },
+            )()
         recommended_qualifier = (
             recommendation.best.predicted_qualifier
             if isinstance(recommendation, KnockoutPredictionRecommendation)
@@ -1207,8 +1583,15 @@ def run_prediction_workflow(
         correct_score_blended_recommended_score = correct_score_blended_recommendation.best.predicted_score
         final_live_recommended_score = recommendation.best.predicted_score
         dixon_coles_recommended_score = dixon_coles_recommendation.best.predicted_score
-        market_consistent_recommended_score = market_consistent_recommendation.best.predicted_score
-        market_consistent_differs_from_default = market_consistent_recommended_score != final_live_recommended_score
+        market_consistent_recommended_score = (
+            market_consistent_recommendation.best.predicted_score
+            if market_consistent_recommendation is not None
+            else final_live_recommended_score
+        )
+        market_consistent_differs_from_default = (
+            market_consistent_recommendation is not None
+            and market_consistent_recommended_score != final_live_recommended_score
+        )
         market_consistent_asian_totals_used = str(
             market_consistent_result.diagnostics.get("market_consistent_asian_totals_used", "")
         )
@@ -1233,35 +1616,46 @@ def run_prediction_workflow(
         )
         ev_decomposition_json = json.dumps(ev_decomposition_records)
         top_10_ev_decomposition_json = json.dumps(top_10_ev_decomposition_records)
-        market_consistent_top_10_evaluations = _top_ev_evaluations(
-            market_consistent_matrix,
-            knockout,
-            qualifier_probabilities,
-            config,
-            10,
-        )
-        market_consistent_top_10_ev_decomposition_records = _ev_decomposition_records_from_evaluations(
-            match_id,
-            market_consistent_top_10_evaluations,
-            config,
-        )
-        market_consistent_top_10_ev_decomposition_json = json.dumps(
-            market_consistent_top_10_ev_decomposition_records
-        )
+        if market_consistent_matrix is not None:
+            market_consistent_top_10_evaluations = _top_ev_evaluations(
+                market_consistent_matrix,
+                knockout,
+                qualifier_probabilities,
+                config,
+                10,
+            )
+            market_consistent_top_10_ev_decomposition_records = _ev_decomposition_records_from_evaluations(
+                match_id,
+                market_consistent_top_10_evaluations,
+                config,
+            )
+            market_consistent_top_10_ev_decomposition_json = json.dumps(
+                market_consistent_top_10_ev_decomposition_records
+            )
+            market_consistent_top_10_probability_scorelines = format_top_scorelines(market_consistent_matrix)
+        else:
+            market_consistent_top_10_evaluations = ()
+            market_consistent_top_10_ev_decomposition_records = []
+            market_consistent_top_10_ev_decomposition_json = "[]"
+            market_consistent_top_10_probability_scorelines = ""
         normal_grid_tail_mass = poisson_matrix.tail_probability
         extreme_favourite_audit_triggered = (
             favourite_probability > EXTREME_FAVOURITE_PROBABILITY_THRESHOLD
             or normal_grid_tail_mass > HIGH_TAIL_MASS_THRESHOLD
         )
         favourite_is_team_a = targets.a_win >= targets.b_win
-        market_consistent_high_score_comparison = _market_consistent_high_score_comparison(
-            poisson_matrix=poisson_matrix,
-            market_consistent_matrix=market_consistent_matrix,
-            poisson_recommendation=baseline_recommendation,
-            market_consistent_recommendation=market_consistent_recommendation,
-            qualifier_probabilities=qualifier_probabilities,
-            config=config,
-            favourite_is_team_a=favourite_is_team_a,
+        market_consistent_high_score_comparison = (
+            _market_consistent_high_score_comparison(
+                poisson_matrix=poisson_matrix,
+                market_consistent_matrix=market_consistent_matrix,
+                poisson_recommendation=baseline_recommendation,
+                market_consistent_recommendation=market_consistent_recommendation,
+                qualifier_probabilities=qualifier_probabilities,
+                config=config,
+                favourite_is_team_a=favourite_is_team_a,
+            )
+            if market_consistent_matrix is not None and market_consistent_recommendation is not None
+            else _empty_market_consistent_high_score_comparison()
         )
         if extreme_favourite_audit_triggered:
             extreme_audit = _extreme_favourite_audit(
@@ -1392,6 +1786,7 @@ def run_prediction_workflow(
             {
                 "match_id": match_id,
                 "date": row["date"],
+                "time": row.get("time", ""),
                 "stage": row["stage"],
                 "group": row["group"],
                 "team_a": row["team_a"],
@@ -1473,9 +1868,21 @@ def run_prediction_workflow(
                 "dixon_coles_ev_gap_best_vs_second": _ev_gap_best_vs_second(dixon_coles_recommendation),
                 "dixon_coles_top_5_ev_predictions": _format_top_ev_predictions(dixon_coles_recommendation),
                 "dixon_coles_changes_recommendation": dixon_coles_recommended_score != final_live_recommended_score,
-                "market_consistent_recommended_score": _score_label(market_consistent_recommended_score),
-                "market_consistent_best_expected_points": market_consistent_recommendation.best.expected_points,
-                "market_consistent_ev_gap_best_vs_second": _ev_gap_best_vs_second(market_consistent_recommendation),
+                "market_consistent_recommended_score": (
+                    _score_label(market_consistent_recommended_score)
+                    if market_consistent_recommendation is not None
+                    else ""
+                ),
+                "market_consistent_best_expected_points": (
+                    market_consistent_recommendation.best.expected_points
+                    if market_consistent_recommendation is not None
+                    else pd.NA
+                ),
+                "market_consistent_ev_gap_best_vs_second": (
+                    _ev_gap_best_vs_second(market_consistent_recommendation)
+                    if market_consistent_recommendation is not None
+                    else pd.NA
+                ),
                 "market_consistent_top_10_ev_scorelines": _format_evaluations(
                     market_consistent_top_10_evaluations
                 ),
@@ -1483,9 +1890,15 @@ def run_prediction_workflow(
                     market_consistent_top_10_ev_decomposition_records
                 ),
                 "market_consistent_top_10_ev_decomposition_json": market_consistent_top_10_ev_decomposition_json,
-                "market_consistent_top_10_probability_scorelines": format_top_scorelines(market_consistent_matrix),
+                "market_consistent_top_10_probability_scorelines": market_consistent_top_10_probability_scorelines,
                 **market_consistent_result.diagnostics,
-                "market_consistent_differs_from_default": "yes" if market_consistent_differs_from_default else "no",
+                "market_consistent_differs_from_default": (
+                    "yes"
+                    if market_consistent_differs_from_default
+                    else "no"
+                    if market_consistent_recommendation is not None
+                    else "not_run"
+                ),
                 "market_consistent_asian_totals_shift_recommendation": (
                     "yes" if market_consistent_asian_totals_shift_recommendation else "no"
                 ),
@@ -1533,17 +1946,52 @@ def run_prediction_workflow(
         if predictions is not None
         else pd.DataFrame()
     )
-    margin_method_comparison = (
-        _build_margin_method_comparison(
+    if config.enable_margin_method_comparison:
+        margin_start = time.perf_counter()
+        margin_method_comparison = _build_margin_method_comparison(
             odds=odds,
             config=config,
             default_report=match_report,
             correct_score_odds=correct_score_odds,
             total_goals_odds=total_goals_odds,
         )
-        if config.enable_margin_method_comparison
+        if runtime_timings is not None:
+            runtime_timings["margin-method comparison"] = (
+                runtime_timings.get("margin-method comparison", 0.0) + time.perf_counter() - margin_start
+            )
+    else:
+        margin_method_comparison = pd.DataFrame()
+        if runtime_timings is not None:
+            runtime_timings["margin-method comparison"] = runtime_timings.get("margin-method comparison", 0.0)
+    final_decision_dashboard = (
+        _build_final_decision_dashboard(match_report, margin_method_comparison, config)
+        if config.enable_final_decision_dashboard
         else pd.DataFrame()
     )
+    if not final_decision_dashboard.empty:
+        decision_columns = [
+            "match_id",
+            "final_decision_score",
+            "final_decision_basis",
+            "model_consensus",
+            "confidence_level",
+            "manual_review_flag",
+            "main_alternative_score",
+            "plausible_alternatives",
+            "strategic_alternative_score",
+            "override_candidate",
+            "risk_notes",
+            "decision_note",
+        ]
+        match_report = match_report.drop(
+            columns=[column for column in decision_columns if column in match_report and column != "match_id"],
+            errors="ignore",
+        ).merge(
+            final_decision_dashboard[decision_columns],
+            on="match_id",
+            how="left",
+            validate="one_to_one",
+        )
     return PredictionWorkflowResult(
         bookmaker_probabilities,
         aggregated,
@@ -1559,4 +2007,5 @@ def run_prediction_workflow(
         baseline_matrices,
         challenger_matrices,
         margin_method_comparison,
+        final_decision_dashboard,
     )

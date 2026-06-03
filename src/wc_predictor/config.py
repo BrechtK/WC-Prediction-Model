@@ -54,15 +54,28 @@ class StrategyConfig:
     top_alternatives: int = 5
     plausible_exact_probability_threshold: float = 0.005
     plausible_total_goals_limit: int = 5
+    plausible_alternative_min_exact_probability: float = 0.005
+    plausible_alternative_max_total_goals: int = 5
+    low_confidence_ev_gap_threshold: float = 0.07
+    high_confidence_ev_gap_threshold: float = 0.15
+    high_score_cluster_ev_gap_threshold: float = 0.10
 
     def __post_init__(self) -> None:
         if self.top_alternatives <= 0:
             raise ValueError("top_alternatives must be positive")
-        threshold = float(self.plausible_exact_probability_threshold)
-        if not np.isfinite(threshold) or threshold < 0:
-            raise ValueError("plausible_exact_probability_threshold must be finite and non-negative")
-        if self.plausible_total_goals_limit < 0:
-            raise ValueError("plausible_total_goals_limit must be non-negative")
+        for name in (
+            "plausible_exact_probability_threshold",
+            "plausible_alternative_min_exact_probability",
+            "low_confidence_ev_gap_threshold",
+            "high_confidence_ev_gap_threshold",
+            "high_score_cluster_ev_gap_threshold",
+        ):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        for name in ("plausible_total_goals_limit", "plausible_alternative_max_total_goals"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -131,6 +144,8 @@ class ProjectConfig:
     max_candidate_goals: int = 5
     margin_removal_method: str = "normalised_inverse_odds"
     enable_margin_method_comparison: bool = True
+    enable_final_decision_dashboard: bool = True
+    enable_market_consistent_challenger: bool | str = True
     bookmaker_aggregation_method: str = "mean"
     renormalise_score_matrix: bool = True
     suspicious_overround_low: float = 1.0
@@ -155,6 +170,8 @@ class ProjectConfig:
                 "margin_removal_method must be one of "
                 f"{sorted(IMPLEMENTED_MARGIN_REMOVAL_METHODS)}"
             )
+        if self.enable_market_consistent_challenger not in {True, False, "only_if_close"}:
+            raise ValueError("enable_market_consistent_challenger must be True, False, or 'only_if_close'")
         if not 0 <= self.correct_score_poisson_weight <= 1:
             raise ValueError("correct_score_poisson_weight must lie between zero and one")
         valid_correct_score_aggregation_methods = {

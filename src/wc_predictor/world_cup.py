@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import copyfile
+import time
 
 from wc_predictor.config import ProjectConfig
 from wc_predictor.market_data import load_correct_score_odds, load_odds, load_total_goals_odds
@@ -42,6 +43,7 @@ class WorldCupPredictionSettings:
     csv_output_path: Path = OUTPUT_PREDICTIONS_CSV_PATH
     xlsx_output_path: Path = OUTPUT_PREDICTIONS_XLSX_PATH
     submission_xlsx_output_path: Path = OUTPUT_SUBMISSION_XLSX_PATH
+    write_detailed_excel: bool = True
 
 
 def resolve_world_cup_odds_input(input_path: str | Path | None = None) -> Path:
@@ -76,6 +78,7 @@ def create_world_cup_odds_file(
 def run_world_cup_predictions(
     settings: WorldCupPredictionSettings | None = None,
     config: ProjectConfig | None = None,
+    runtime_timings: dict[str, float] | None = None,
 ) -> PredictionWorkflowResult:
     """Generate and export recommendations for upcoming tournament matches."""
 
@@ -91,19 +94,41 @@ def run_world_cup_predictions(
         if settings.total_goals_input_path is not None
         else None
     )
+    model_start = time.perf_counter()
+    market_consistent_before = (
+        runtime_timings.get("market-consistent challenger", 0.0) if runtime_timings is not None else 0.0
+    )
+    margin_before = runtime_timings.get("margin-method comparison", 0.0) if runtime_timings is not None else 0.0
     workflow = run_prediction_workflow(
         load_odds(input_path),
         config=config,
         correct_score_odds=correct_score_odds,
         total_goals_odds=total_goals_odds,
+        runtime_timings=runtime_timings,
     )
+    if runtime_timings is not None:
+        model_elapsed = time.perf_counter() - model_start
+        diagnostic_elapsed = (
+            runtime_timings.get("market-consistent challenger", 0.0)
+            - market_consistent_before
+            + runtime_timings.get("margin-method comparison", 0.0)
+            - margin_before
+        )
+        runtime_timings["main model run"] = (
+            runtime_timings.get("main model run", 0.0) + max(0.0, model_elapsed - diagnostic_elapsed)
+        )
+    excel_start = time.perf_counter()
     export_dataframe(workflow.match_report, settings.csv_output_path)
-    export_world_cup_recommendations_excel(
-        workflow.match_report,
-        settings.xlsx_output_path,
-        workflow.margin_method_comparison,
-    )
+    if settings.write_detailed_excel:
+        export_world_cup_recommendations_excel(
+            workflow.match_report,
+            settings.xlsx_output_path,
+            workflow.margin_method_comparison,
+            workflow.final_decision_dashboard,
+        )
     export_world_cup_submission_sheet_excel(workflow.match_report, settings.submission_xlsx_output_path)
+    if runtime_timings is not None:
+        runtime_timings["Excel write"] = runtime_timings.get("Excel write", 0.0) + time.perf_counter() - excel_start
     return workflow
 
 
@@ -122,6 +147,7 @@ def run_and_print_world_cup_predictions(
         csv_output_path=settings.csv_output_path,
         xlsx_output_path=settings.xlsx_output_path,
         submission_xlsx_output_path=settings.submission_xlsx_output_path,
+        write_detailed_excel=settings.write_detailed_excel,
     )
     workflow = run_world_cup_predictions(resolved_settings, config)
     print(

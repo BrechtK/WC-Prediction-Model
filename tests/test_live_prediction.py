@@ -4,10 +4,12 @@ import importlib.util
 from pathlib import Path
 import runpy
 import sys
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+from wc_predictor.config import ProjectConfig
 from wc_predictor.live_prediction import (
     LivePredictionError,
     LivePredictionSettings,
@@ -176,6 +178,72 @@ def _load_run_live_module():
     return module
 
 
+def _capture_script_weight_sensitivity(
+    tmp_path: Path,
+    monkeypatch,
+    argv: list[str],
+) -> dict[str, object]:
+    module = _load_run_live_module()
+    schedule_path = tmp_path / "input" / "schedule.txt"
+    schedule_path.parent.mkdir(parents=True, exist_ok=True)
+    schedule_path.write_text("schedule", encoding="utf-8")
+    schedule = pd.DataFrame(
+        [
+            {
+                "match_id": "M001",
+                "date": "2026-06-12",
+                "time": "21:00",
+                "stage": "group",
+                "group": "A",
+                "team_a": "Alpha",
+                "team_b": "Beta",
+            }
+        ]
+    )
+    prepared_schedule = SimpleNamespace(
+        parse_result=None,
+        schedule=schedule,
+        metadata_path=tmp_path / "cache" / "parsed" / "schedule.csv",
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(module, "prepare_schedule_metadata", lambda *args, **kwargs: prepared_schedule)
+    monkeypatch.setattr(
+        module,
+        "_resolve_run_selection",
+        lambda **kwargs: module.ResolvedRunSelection(
+            "all_available",
+            None,
+            None,
+            None,
+            (),
+            None,
+            pd.DataFrame(),
+            pd.DataFrame(),
+        ),
+    )
+    monkeypatch.setattr(module, "_validate_selected_odds_file", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "split_combined_oddsportal_pastes",
+        lambda *args, **kwargs: SimpleNamespace(files_processed=0),
+    )
+
+    def fake_run_live_prediction(settings, config):
+        captured["skip_weight_sensitivity"] = settings.skip_weight_sensitivity
+        captured["enable_margin_method_comparison"] = config.enable_margin_method_comparison
+        captured["enable_market_consistent_challenger"] = config.enable_market_consistent_challenger
+        return SimpleNamespace(runtime_timings={})
+
+    monkeypatch.setattr(module, "run_live_prediction", fake_run_live_prediction)
+    monkeypatch.setattr(module, "format_live_prediction_summary", lambda *args, **kwargs: "summary")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", *argv])
+
+    module.main()
+    return captured
+
+
 def _settings(tmp_path: Path, **overrides) -> LivePredictionSettings:
     raw = tmp_path / "data" / "raw"
     processed = tmp_path / "data" / "processed"
@@ -209,22 +277,71 @@ def test_live_runner_processes_all_pastes_writes_outputs_and_prints_submission(t
     summary = format_live_prediction_summary(result)
 
     assert len(result.workflow.match_report) == 1
-    assert result.weight_comparison is not None
+    assert result.weight_comparison is None
     assert settings.recommendations_xlsx_output_path.exists()
     assert settings.submission_xlsx_output_path.exists()
-    assert settings.weight_comparison_output_path.exists()
+    assert not settings.weight_comparison_output_path.exists()
     assert settings.core_parse_report_path.exists()
     assert settings.correct_score_parse_report_path.exists()
-    assert "Final recommended submission:" in summary
+    assert "Live Prediction Summary" in summary
+    assert "Final recommendations:" in summary
     assert "M001 M001 Alpha vs M001 Beta:" in summary
-    assert "Full Excel outputs:" in summary
-    assert "Margin-removal sensitivity:" in summary
-    assert "- default method: normalised_inverse_odds" in summary
-    assert "- changes recommendation:" in summary
-    assert f"- Recommendations: {settings.recommendations_xlsx_output_path}" in summary
+    assert "Decision dashboard summary:" in summary
+    assert "- manual review:" in summary
+    assert "Outputs:" in summary
+    assert "Weight sensitivity:" not in summary
+    assert "BTTS diagnostics:" not in summary
+    assert "Margin-removal sensitivity:" not in summary
+    assert str(settings.recommendations_xlsx_output_path) in summary
+    assert result.workflow.margin_method_comparison.empty
     assert "Model comparison:" not in summary
     assert "Dixon-Coles challenger:" not in summary
     assert "Market data:" not in summary
+
+
+def test_live_summary_debug_mode_prints_detailed_diagnostics(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, skip_weight_sensitivity=True)
+    _write_metadata(settings.metadata_odds_path)
+    _write_pastes(settings.input_folder)
+
+    result = run_live_prediction(settings)
+    summary = format_live_prediction_summary(result, terminal_verbosity="debug")
+
+    assert "BTTS diagnostics:" in summary
+    assert "EV explanation:" in summary
+    assert "Decision aid:" in summary
+
+
+def test_live_summary_compact_can_show_runtime_summary(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, skip_weight_sensitivity=True)
+    _write_metadata(settings.metadata_odds_path)
+    _write_pastes(settings.input_folder)
+
+    result = run_live_prediction(settings)
+    summary = format_live_prediction_summary(result, show_runtime_summary=True)
+
+    assert "Runtime summary:" in summary
+    assert "- main model run:" in summary
+    assert "- correct-score weight sensitivity:" in summary
+    assert "- other/unmeasured:" in summary
+    assert "- Excel write:" in summary
+
+
+def test_research_style_config_runs_margin_method_comparison(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, skip_weight_sensitivity=True)
+    _write_metadata(settings.metadata_odds_path)
+    _write_pastes(settings.input_folder)
+
+    result = run_live_prediction(
+        settings,
+        ProjectConfig(
+            correct_score_poisson_weight=0.85,
+            enable_margin_method_comparison=True,
+            enable_market_consistent_challenger=True,
+        ),
+    )
+
+    assert not result.workflow.margin_method_comparison.empty
 
 
 def test_live_runner_fails_clearly_without_required_one_x_two_paste(tmp_path: Path) -> None:
@@ -257,7 +374,7 @@ def test_live_runner_warns_and_continues_without_correct_scores(tmp_path: Path) 
 
     assert result.weight_comparison is None
     assert "missing_optional_paste:correct_score" in result.paste_warnings["M001"]
-    assert "weight_sensitivity_skipped:no_correct_score_odds" in result.paste_warnings["M001"]
+    assert "weight_sensitivity_skipped:no_correct_score_odds" not in result.paste_warnings["M001"]
 
 
 def test_live_runner_match_id_filter_only_processes_selected_match(tmp_path: Path) -> None:
@@ -284,6 +401,58 @@ def test_live_runner_skip_weight_sensitivity_does_not_write_comparison(tmp_path:
     assert not settings.weight_comparison_output_path.exists()
 
 
+def test_live_runner_weight_sensitivity_can_be_enabled_without_changing_recommendation(tmp_path: Path) -> None:
+    fast_settings = _settings(tmp_path / "fast")
+    _write_metadata(fast_settings.metadata_odds_path)
+    _write_pastes(fast_settings.input_folder)
+    fast_result = run_live_prediction(fast_settings)
+
+    enabled_settings = _settings(tmp_path / "enabled", skip_weight_sensitivity=False)
+    _write_metadata(enabled_settings.metadata_odds_path)
+    _write_pastes(enabled_settings.input_folder)
+    enabled_result = run_live_prediction(enabled_settings)
+    summary = format_live_prediction_summary(enabled_result, show_runtime_summary=True)
+
+    assert enabled_result.weight_comparison is not None
+    assert enabled_settings.weight_comparison_output_path.exists()
+    assert "- correct-score weight sensitivity:" in summary
+    assert fast_result.workflow.match_report["recommended_score"].tolist() == enabled_result.workflow.match_report[
+        "recommended_score"
+    ].tolist()
+
+
+def test_live_runner_warns_when_weight_sensitivity_enabled_without_correct_scores(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, skip_weight_sensitivity=False)
+    _write_metadata(settings.metadata_odds_path)
+    _write_pastes(settings.input_folder, include_correct_score=False)
+
+    result = run_live_prediction(settings)
+
+    assert "weight_sensitivity_skipped:no_correct_score_odds" in result.paste_warnings["M001"]
+
+
+def test_script_live_profile_disables_weight_sensitivity_by_default(tmp_path: Path, monkeypatch) -> None:
+    captured = _capture_script_weight_sensitivity(tmp_path, monkeypatch, [])
+
+    assert captured["skip_weight_sensitivity"] is True
+    assert captured["enable_margin_method_comparison"] is False
+    assert captured["enable_market_consistent_challenger"] == "only_if_close"
+
+
+def test_script_research_profile_enables_weight_sensitivity_by_default(tmp_path: Path, monkeypatch) -> None:
+    captured = _capture_script_weight_sensitivity(tmp_path, monkeypatch, ["--run-profile", "research"])
+
+    assert captured["skip_weight_sensitivity"] is False
+    assert captured["enable_margin_method_comparison"] is True
+    assert captured["enable_market_consistent_challenger"] is True
+
+
+def test_script_flag_can_enable_weight_sensitivity_in_live_profile(tmp_path: Path, monkeypatch) -> None:
+    captured = _capture_script_weight_sensitivity(tmp_path, monkeypatch, ["--enable-weight-sensitivity"])
+
+    assert captured["skip_weight_sensitivity"] is False
+
+
 def test_live_runner_strict_mode_fails_when_optional_paste_is_missing(tmp_path: Path) -> None:
     settings = _settings(tmp_path, strict=True)
     _write_metadata(settings.metadata_odds_path)
@@ -306,7 +475,7 @@ def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
     runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
     output = capsys.readouterr().out
-    assert "Final recommended submission:" in output
+    assert "Final recommendations:" in output
     assert "M001 M001 Alpha vs M001 Beta:" in output
     assert (tmp_path / "output/predictions.xlsx").exists()
 
@@ -327,7 +496,7 @@ def test_live_runner_script_splits_combined_pastes_before_parsing(
     assert "Combined OddsPortal Paste Split" in output
     assert "- Files processed: 1" in output
     assert "- Files written: 4" in output
-    assert "Final recommended submission:" in output
+    assert "Final recommendations:" in output
     assert (tmp_path / "cache/split_pastes/M001_1x2.txt").exists()
     assert (tmp_path / "output/predictions.xlsx").exists()
 
@@ -565,7 +734,7 @@ def test_live_runner_script_cli_overrides_user_settings_block(
 
     output = capsys.readouterr().out
     assert "- run mode: all_available" in output
-    assert "Final recommended submission:" in output
+    assert "Final recommendations:" in output
     assert (tmp_path / "output/predictions.xlsx").exists()
 
 

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
+import time
 
 import pandas as pd
 
@@ -66,7 +67,7 @@ class LivePredictionSettings:
     match_id: str | None = None
     match_ids: Sequence[str] | None = None
     strict: bool = False
-    skip_weight_sensitivity: bool = False
+    skip_weight_sensitivity: bool = True
     metadata_odds_path: Path | None = DEFAULT_METADATA_ODDS_PATH
     schedule_input_path: Path | None = DEFAULT_SCHEDULE_INPUT_PATH
     schedule_output_path: Path = DEFAULT_SCHEDULE_OUTPUT_PATH
@@ -80,8 +81,10 @@ class LivePredictionSettings:
     recommendations_csv_output_path: Path = OUTPUT_PREDICTIONS_CSV_PATH
     recommendations_xlsx_output_path: Path = OUTPUT_PREDICTIONS_XLSX_PATH
     submission_xlsx_output_path: Path = OUTPUT_SUBMISSION_XLSX_PATH
+    write_detailed_excel: bool = True
     weight_comparison_output_path: Path = DEFAULT_WEIGHT_COMPARISON_OUTPUT_PATH
     weight_sensitivity_weights: Sequence[float] = DEFAULT_CORRECT_SCORE_WEIGHTS
+    initial_runtime_timings: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,7 @@ class LivePredictionResult:
     weight_comparison: CorrectScoreWeightComparison | None
     paste_warnings: dict[str, tuple[str, ...]]
     schedule_metadata: pd.DataFrame
+    runtime_timings: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -233,8 +237,14 @@ def run_live_prediction(
     """Parse live pastes, export recommendations, and optionally compare blend weights."""
 
     settings = settings or LivePredictionSettings()
-    config = config or ProjectConfig(correct_score_poisson_weight=0.85)
-    parsed = parse_live_prediction_inputs(settings)
+    total_start = time.perf_counter()
+    config = config or ProjectConfig(
+        correct_score_poisson_weight=0.85,
+        enable_margin_method_comparison=False,
+        enable_market_consistent_challenger="only_if_close",
+    )
+    runtime_timings = dict(settings.initial_runtime_timings)
+    parsed = parse_live_prediction_inputs(settings, runtime_timings)
     has_total_goals = parsed.has_total_goals
     has_correct_scores = parsed.has_correct_scores
     mutable_warnings = {match_id: list(values) for match_id, values in parsed.paste_warnings.items()}
@@ -246,12 +256,15 @@ def run_live_prediction(
             csv_output_path=settings.recommendations_csv_output_path,
             xlsx_output_path=settings.recommendations_xlsx_output_path,
             submission_xlsx_output_path=settings.submission_xlsx_output_path,
+            write_detailed_excel=settings.write_detailed_excel,
         ),
         config,
+        runtime_timings,
     )
 
     weight_comparison = None
     if has_correct_scores and not settings.skip_weight_sensitivity:
+        weight_start = time.perf_counter()
         weight_comparison = compare_correct_score_weights(
             settings.core_odds_output_path,
             settings.correct_score_output_path,
@@ -260,9 +273,22 @@ def run_live_prediction(
             total_goals_odds_path=settings.total_goals_output_path if has_total_goals else None,
         )
         export_correct_score_weight_comparison(weight_comparison, settings.weight_comparison_output_path)
+        runtime_timings["correct-score weight sensitivity"] = (
+            runtime_timings.get("correct-score weight sensitivity", 0.0)
+            + time.perf_counter()
+            - weight_start
+        )
     elif not has_correct_scores and not settings.skip_weight_sensitivity:
         for selected_match_id in parsed.selected_match_ids:
             _append_warning(mutable_warnings, selected_match_id, "weight_sensitivity_skipped:no_correct_score_odds")
+        runtime_timings["correct-score weight sensitivity"] = runtime_timings.get(
+            "correct-score weight sensitivity", 0.0
+        )
+    else:
+        runtime_timings["correct-score weight sensitivity"] = runtime_timings.get(
+            "correct-score weight sensitivity", 0.0
+        )
+    runtime_timings["total"] = time.perf_counter() - total_start
 
     return LivePredictionResult(
         settings,
@@ -272,15 +298,18 @@ def run_live_prediction(
         weight_comparison,
         {match_id: tuple(values) for match_id, values in mutable_warnings.items()},
         parsed.schedule_metadata,
+        runtime_timings,
     )
 
 
 def parse_live_prediction_inputs(
     settings: LivePredictionSettings | None = None,
+    runtime_timings: dict[str, float] | None = None,
 ) -> ParsedLivePredictionInputs:
     """Parse and validate the live OddsPortal pastes without running recommendations."""
 
     settings = settings or LivePredictionSettings()
+    schedule_start = time.perf_counter()
     prepared_schedule = prepare_schedule_metadata(
         settings.schedule_input_path,
         settings.schedule_output_path,
@@ -288,12 +317,15 @@ def parse_live_prediction_inputs(
         existing_metadata_path=settings.metadata_odds_path,
         skip_parse=settings.skip_schedule_parse,
     )
+    if runtime_timings is not None and "schedule parse" not in runtime_timings:
+        runtime_timings["schedule parse"] = time.perf_counter() - schedule_start
     selected, mutable_warnings = _select_and_validate_pastes(
         settings.input_folder,
         settings.match_id,
         settings.match_ids,
         settings.strict,
     )
+    core_parse_start = time.perf_counter()
     core_parse = parse_oddsportal_core_odds_folder(
         settings.input_folder,
         settings.core_odds_output_path,
@@ -302,12 +334,23 @@ def parse_live_prediction_inputs(
         metadata_odds_path=prepared_schedule.metadata_path,
         match_ids=selected,
     )
+    if runtime_timings is not None:
+        runtime_timings["core odds parse"] = (
+            runtime_timings.get("core odds parse", 0.0) + time.perf_counter() - core_parse_start
+        )
+    correct_score_parse_start = time.perf_counter()
     correct_score_parse = parse_oddsportal_correct_score_folder(
         settings.input_folder,
         settings.correct_score_output_path,
         settings.correct_score_parse_report_path,
         match_ids=selected,
     )
+    if runtime_timings is not None:
+        runtime_timings["correct-score odds parse"] = (
+            runtime_timings.get("correct-score odds parse", 0.0)
+            + time.perf_counter()
+            - correct_score_parse_start
+        )
     _validate_parsed_markets(selected, core_parse, correct_score_parse, settings.strict, mutable_warnings)
     return ParsedLivePredictionInputs(
         settings,
@@ -320,17 +363,62 @@ def parse_live_prediction_inputs(
     )
 
 
-def format_live_prediction_summary(result: LivePredictionResult) -> str:
+def format_live_prediction_summary(
+    result: LivePredictionResult,
+    terminal_verbosity: str = "compact",
+    run_profile: str = "live",
+    show_runtime_summary: bool = False,
+) -> str:
     """Render a concise submission-focused live terminal report."""
+
+    if terminal_verbosity not in {"compact", "normal", "debug"}:
+        raise ValueError("terminal_verbosity must be compact, normal, or debug")
 
     def format_probability(value: object) -> str:
         return f"{float(value):.1%}" if pd.notna(value) else "n/a"
 
+    def runtime_lines() -> list[str]:
+        if not show_runtime_summary:
+            return []
+        timings = result.runtime_timings
+        measured_keys = (
+            "schedule parse",
+            "combined paste split",
+            "core odds parse",
+            "correct-score odds parse",
+            "main model run",
+            "market-consistent challenger",
+            "margin-method comparison",
+            "correct-score weight sensitivity",
+            "Excel write",
+        )
+        total = timings.get("total", sum(float(timings.get(key, 0.0)) for key in measured_keys))
+        measured_total = sum(float(timings.get(key, 0.0)) for key in measured_keys)
+        other = max(0.0, float(total) - measured_total)
+        return [
+            "",
+            "Runtime summary:",
+            f"- schedule parse: {timings.get('schedule parse', 0.0):.2f}s",
+            f"- combined paste split: {timings.get('combined paste split', 0.0):.2f}s",
+            f"- core odds parse: {timings.get('core odds parse', 0.0):.2f}s",
+            f"- correct-score odds parse: {timings.get('correct-score odds parse', 0.0):.2f}s",
+            f"- main model run: {timings.get('main model run', 0.0):.2f}s",
+            f"- market-consistent challenger: {timings.get('market-consistent challenger', 0.0):.2f}s",
+            f"- margin-method comparison: {timings.get('margin-method comparison', 0.0):.2f}s",
+            f"- correct-score weight sensitivity: {timings.get('correct-score weight sensitivity', 0.0):.2f}s",
+            f"- Excel write: {timings.get('Excel write', 0.0):.2f}s",
+            f"- other/unmeasured: {other:.2f}s",
+            f"- total: {float(total):.2f}s",
+        ]
+
     diagnostic_sections: list[str] = []
     final_submissions: list[str] = []
     margin_comparison = result.workflow.margin_method_comparison
+    dashboard = result.workflow.final_decision_dashboard
+    dashboard_by_match = dashboard.set_index("match_id") if not dashboard.empty else pd.DataFrame()
     for _, row in result.workflow.match_report.iterrows():
         match_id = str(row["match_id"])
+        dashboard_row = dashboard_by_match.loc[match_id] if not dashboard_by_match.empty and match_id in dashboard_by_match.index else pd.Series(dtype=object)
         match_margin_comparison = (
             margin_comparison[margin_comparison["match_id"].astype(str) == match_id]
             if not margin_comparison.empty
@@ -360,63 +448,123 @@ def format_live_prediction_summary(result: LivePredictionResult) -> str:
             if pd.notna(row.get("market_fair_btts_yes_probability"))
             else pd.NA
         )
-        diagnostic_sections.append(
-            "\n".join(
-                [
-                    f"{match_id} {row['team_a']} vs {row['team_b']}",
-                    "BTTS diagnostics:",
-                    f"- market BTTS Yes: {format_probability(row.get('market_fair_btts_yes_probability'))}",
-                    f"- model BTTS Yes: {format_probability(row.get('model_implied_btts_yes_probability'))}",
-                    f"- difference: {format_probability(btts_difference)}",
-                    f"- P(no BTTS): {format_probability(row.get('model_probability_no_btts'))}",
-                    "EV explanation:",
-                    f"- {row.get('ev_explanation')}",
-                    "Decision aid:",
-                    f"- confidence: {row.get('recommendation_confidence')}",
-                    f"- plausible alternatives: {row.get('plausible_top_alternatives') or 'none'}",
-                    f"- manual review flag: {row.get('manual_review_flag')}",
-                    f"- decision note: {row.get('decision_note')}",
-                    *margin_lines,
-                    *(
-                        [
-                            "Extreme-favourite audit:",
-                            f"- top clean-sheet scores: {row.get('top_clean_sheet_scores')}",
-                            f"- favourite margins: {row.get('top_favourite_margin_probabilities')}",
-                            f"- favourite score counts: {row.get('top_5_favourite_score_count_probabilities')}",
-                            f"- 3/4/5-nil EV cluster: {row.get('high_score_cluster_scores')}",
-                            f"- current final: {row.get('current_final_recommendation')}",
-                            f"- normal-grid Poisson: {row.get('normal_grid_poisson_recommendation')} "
-                            f"(tail {format_probability(row.get('normal_grid_tail_mass'))})",
-                            f"- larger-grid Poisson: {row.get('larger_grid_poisson_recommendation')} "
-                            f"(tail {format_probability(row.get('larger_grid_tail_mass'))})",
-                            f"- favourite 3-0 EV: normal {row.get('ev_favourite_3_0_normal_grid'):.3f} "
-                            f"larger {row.get('ev_favourite_3_0_larger_grid'):.3f}",
-                            f"- favourite 4-0 EV: normal {row.get('ev_favourite_4_0_normal_grid'):.3f} "
-                            f"larger {row.get('ev_favourite_4_0_larger_grid'):.3f}",
-                            f"- favourite 5-0 EV: normal {row.get('ev_favourite_5_0_normal_grid'):.3f} "
-                            f"larger {row.get('ev_favourite_5_0_larger_grid'):.3f}",
-                        ]
-                        if bool(row.get("extreme_favourite_audit_triggered"))
-                        else []
-                    ),
-                ]
+        if terminal_verbosity == "debug":
+            diagnostic_sections.append(
+                "\n".join(
+                    [
+                        f"{match_id} {row['team_a']} vs {row['team_b']}",
+                        "BTTS diagnostics:",
+                        f"- market BTTS Yes: {format_probability(row.get('market_fair_btts_yes_probability'))}",
+                        f"- model BTTS Yes: {format_probability(row.get('model_implied_btts_yes_probability'))}",
+                        f"- difference: {format_probability(btts_difference)}",
+                        f"- P(no BTTS): {format_probability(row.get('model_probability_no_btts'))}",
+                        "EV explanation:",
+                        f"- {row.get('ev_explanation')}",
+                        "Decision aid:",
+                        f"- confidence: {row.get('recommendation_confidence')}",
+                        f"- plausible alternatives: {row.get('plausible_top_alternatives') or 'none'}",
+                        f"- manual review flag: {row.get('manual_review_flag')}",
+                        f"- decision note: {row.get('decision_note')}",
+                        *margin_lines,
+                        *(
+                            [
+                                "Extreme-favourite audit:",
+                                f"- top clean-sheet scores: {row.get('top_clean_sheet_scores')}",
+                                f"- favourite margins: {row.get('top_favourite_margin_probabilities')}",
+                                f"- favourite score counts: {row.get('top_5_favourite_score_count_probabilities')}",
+                                f"- 3/4/5-nil EV cluster: {row.get('high_score_cluster_scores')}",
+                                f"- current final: {row.get('current_final_recommendation')}",
+                                f"- normal-grid Poisson: {row.get('normal_grid_poisson_recommendation')} "
+                                f"(tail {format_probability(row.get('normal_grid_tail_mass'))})",
+                                f"- larger-grid Poisson: {row.get('larger_grid_poisson_recommendation')} "
+                                f"(tail {format_probability(row.get('larger_grid_tail_mass'))})",
+                                f"- favourite 3-0 EV: normal {row.get('ev_favourite_3_0_normal_grid'):.3f} "
+                                f"larger {row.get('ev_favourite_3_0_larger_grid'):.3f}",
+                                f"- favourite 4-0 EV: normal {row.get('ev_favourite_4_0_normal_grid'):.3f} "
+                                f"larger {row.get('ev_favourite_4_0_larger_grid'):.3f}",
+                                f"- favourite 5-0 EV: normal {row.get('ev_favourite_5_0_normal_grid'):.3f} "
+                                f"larger {row.get('ev_favourite_5_0_larger_grid'):.3f}",
+                            ]
+                            if bool(row.get("extreme_favourite_audit_triggered"))
+                            else []
+                        ),
+                    ]
+                )
             )
-        )
-        final_submissions.append(f"{match_id} {row['team_a']} vs {row['team_b']}: {row['recommended_score']}")
+        confidence = dashboard_row.get("confidence_level", row.get("confidence_level", "unknown"))
+        review = dashboard_row.get("manual_review_flag", row.get("manual_review_flag", "no"))
+        alternative = dashboard_row.get("main_alternative_score", "")
+        final_line = f"{match_id} {row['team_a']} vs {row['team_b']}: {row['recommended_score']} | {confidence} | review {review}"
+        if alternative:
+            final_line += f" | alt {alternative}"
+        final_submissions.append(final_line)
+
+    dashboard_summary: list[str] = []
+    if not dashboard.empty:
+        high_count = int(dashboard["confidence_level"].astype(str).eq("high").sum())
+        medium_count = int(dashboard["confidence_level"].astype(str).eq("medium").sum())
+        manual_rows = dashboard[dashboard["manual_review_flag"].astype(str).str.lower().eq("yes")]
+        dashboard_summary = [
+            "",
+            "Decision dashboard summary:",
+            f"- high confidence: {high_count} matches",
+            f"- medium confidence: {medium_count} matches",
+            f"- manual review: {len(manual_rows)} matches",
+        ]
+        if not manual_rows.empty:
+            dashboard_summary.extend(["", "Manual review:"])
+            for _, review in manual_rows.iterrows():
+                if terminal_verbosity == "compact":
+                    dashboard_summary.append(
+                        f"{review['match_id']}: default {review['default_score']}, "
+                        f"alternative {review.get('main_alternative_score') or 'none'}, "
+                        f"reason: {review.get('risk_notes') or review['decision_note']}"
+                    )
+                    continue
+                dashboard_summary.extend(
+                    [
+                        f"{review['match_id']} {review['team_a']} vs {review['team_b']}",
+                        f"- default: {review['default_score']}",
+                        f"- market-consistent: {review.get('market_consistent_score') or 'n/a'}",
+                        f"- main alternative: {review.get('main_alternative_score') or 'none'}",
+                        f"- confidence: {review['confidence_level']}",
+                        f"- note: {review['decision_note']}",
+                    ]
+                )
+
+    normal_extra: list[str] = []
+    if terminal_verbosity == "normal" and not dashboard.empty:
+        disagreements = dashboard[
+            dashboard[["market_consistent_differs", "dixon_coles_differs", "public_strategy_differs"]]
+            .astype(str)
+            .eq("yes")
+            .any(axis=1)
+        ]
+        clusters = dashboard[dashboard["high_score_cluster"].astype(str).eq("yes")]
+        normal_extra = [
+            "",
+            "Model disagreement summary:",
+            f"- matches with challenger disagreement: {len(disagreements)}",
+            "High-score cluster summary:",
+            f"- matches with high-score cluster: {len(clusters)}",
+        ]
 
     sections = [
-        *diagnostic_sections,
+        *(diagnostic_sections if terminal_verbosity == "debug" else []),
+        "Live Prediction Summary",
+        f"- run profile: {run_profile}",
+        f"- verbosity: {terminal_verbosity}",
+        f"- matches processed: {len(result.workflow.match_report)}",
         "",
-        "Final recommended submission:",
+        "Final recommendations:",
         *final_submissions,
+        *normal_extra,
+        *dashboard_summary,
+        *runtime_lines(),
         "",
-        "Full Excel outputs:",
-        f"- Recommendations: {result.settings.recommendations_xlsx_output_path}",
-        f"- Submission sheet: {result.settings.submission_xlsx_output_path}",
-        (
-            f"- Weight sensitivity: {result.settings.weight_comparison_output_path}"
-            if result.weight_comparison is not None
-            else "- Weight sensitivity: not written"
-        ),
+        "Outputs:",
+        f"- {result.settings.submission_xlsx_output_path}",
+        *([f"- {result.settings.recommendations_xlsx_output_path}"] if result.settings.write_detailed_excel else []),
+        *([f"- Weight sensitivity: {result.settings.weight_comparison_output_path}"] if result.weight_comparison is not None else []),
     ]
     return "\n".join(sections)

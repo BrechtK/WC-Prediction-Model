@@ -177,6 +177,22 @@ the pure-EV score. Other modes are diagnostics for contest strategy review.
 They must be validated against realised leaderboard outcomes before replacing
 the default live submission.
 
+## Final Decision Dashboard
+
+The final decision dashboard is not a new probability model. It is a reporting
+layer over existing quantities:
+
+```text
+recommended_score = argmax_s EV(s)
+final_decision_score = recommended_score
+```
+
+It then classifies model consensus, EV-gap confidence, challenger disagreement,
+margin-method sensitivity, public-strategy alternatives, high-score clusters,
+and warning flags. Manual-review and override-candidate labels are decision
+support only; they do not alter calibration, score probabilities, or EV
+optimisation.
+
 ## Expected Pool Points
 
 For a group-stage score prediction `(a,b)`:
