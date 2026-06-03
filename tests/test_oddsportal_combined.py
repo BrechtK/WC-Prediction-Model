@@ -50,6 +50,18 @@ def test_complete_combined_paste_is_split_into_four_existing_parser_inputs(tmp_p
     assert (output_folder / "M001_correct_score.txt").read_text(encoding="utf-8") == "correct scores\n"
 
 
+def test_clean_combined_paste_filename_is_supported(tmp_path: Path) -> None:
+    input_folder = tmp_path / "input" / "odds"
+    output_folder = tmp_path / "cache" / "split_pastes"
+    _write_combined(input_folder / "M001.txt", [("1X2", "one x two")])
+
+    result = split_combined_oddsportal_pastes(input_folder, output_folder)
+
+    assert infer_match_id_from_combined_filename("M001.txt") == "M001"
+    assert result.files_processed == 1
+    assert (output_folder / "M001_1x2.txt").exists()
+
+
 def test_missing_optional_section_warns_but_succeeds(tmp_path: Path) -> None:
     input_folder = tmp_path / "combined"
     output_folder = tmp_path / "pastes"

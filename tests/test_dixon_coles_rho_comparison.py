@@ -127,9 +127,8 @@ def test_rho_comparison_script_uses_live_pastes_and_writes_default_workbook(
     monkeypatch,
     capsys,
 ) -> None:
-    raw = tmp_path / "data" / "raw"
-    _write_metadata(raw / "world_cup_odds.xlsx")
-    _write_core_pastes(raw / "oddsportal_pastes")
+    _write_metadata(tmp_path / "input/prepared/world_cup_odds.xlsx")
+    _write_core_pastes(tmp_path / "cache/split_pastes")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["compare_dixon_coles_rho.py"])
 
@@ -138,4 +137,4 @@ def test_rho_comparison_script_uses_live_pastes_and_writes_default_workbook(
     output = capsys.readouterr().out
     assert "Dixon-Coles challenger rho sensitivity" in output
     assert "Matches compared: 1" in output
-    assert (tmp_path / "data/processed/dixon_coles_rho_comparison.xlsx").exists()
+    assert (tmp_path / "output/dixon_coles_rho_comparison.xlsx").exists()

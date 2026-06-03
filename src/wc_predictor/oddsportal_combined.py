@@ -8,8 +8,10 @@ import re
 
 import pandas as pd
 
-DEFAULT_COMBINED_INPUT_FOLDER = Path("data/raw/oddsportal_combined_pastes")
-DEFAULT_SPLIT_OUTPUT_FOLDER = Path("data/raw/oddsportal_pastes")
+from wc_predictor.paths import CACHE_SPLIT_PASTES_DIR, INPUT_ODDS_DIR
+
+DEFAULT_COMBINED_INPUT_FOLDER = INPUT_ODDS_DIR
+DEFAULT_SPLIT_OUTPUT_FOLDER = CACHE_SPLIT_PASTES_DIR
 
 SECTION_FILENAMES = {
     "1x2": "1x2",
@@ -18,7 +20,7 @@ SECTION_FILENAMES = {
     "correct_score": "correct_score",
 }
 OPTIONAL_SECTIONS = ("over_under", "btts", "correct_score")
-_FILENAME_PATTERN = re.compile(r"^(?P<match_id>.+)_all_odds\.txt$", re.IGNORECASE)
+_FILENAME_PATTERN = re.compile(r"^(?P<match_id>.+?)(?:_all_odds)?\.txt$", re.IGNORECASE)
 _SECTION_PATTERN = re.compile(r"^\s*###\s*(?P<header>.*?)\s*$")
 _SECTION_ALIASES = {
     "1X2": "1x2",
@@ -77,14 +79,24 @@ class CombinedOddsPortalSplitResult:
 
 
 def infer_match_id_from_combined_filename(filename: str) -> str:
-    """Return the match ID prefix from one *_all_odds.txt filename."""
+    """Return the match ID from a clean or legacy combined-paste filename."""
 
     match = _FILENAME_PATTERN.fullmatch(Path(filename).name)
     if not match:
         raise CombinedOddsPortalPasteError(
-            f"Combined OddsPortal paste filename must end with _all_odds.txt: {filename}"
+            f"Combined OddsPortal paste filename must be M001.txt or end with _all_odds.txt: {filename}"
         )
     return match.group("match_id")
+
+
+def _iter_combined_paste_paths(input_folder: str | Path) -> list[Path]:
+    """Return clean M001.txt and legacy M001_all_odds.txt combined pastes."""
+
+    return [
+        path
+        for path in sorted(Path(input_folder).glob("*.txt"))
+        if _FILENAME_PATTERN.fullmatch(path.name)
+    ]
 
 
 def _normalise_section_header(header: str) -> str:
@@ -124,7 +136,7 @@ def validate_combined_pastes_against_schedule(
         for team in pd.concat([schedule["team_a"], schedule["team_b"]]).dropna().unique()
     }
     warnings: list[str] = []
-    for path in sorted(Path(input_folder).glob("*_all_odds.txt")):
+    for path in _iter_combined_paste_paths(input_folder):
         match_id = infer_match_id_from_combined_filename(path.name)
         if match_id not in fixtures.index:
             raise CombinedOddsPortalPasteError(
@@ -212,11 +224,7 @@ def split_combined_oddsportal_pastes(
     """Split every recognised combined paste in a folder."""
 
     input_folder = Path(input_folder)
-    files = (
-        tuple(sorted(input_folder.glob("*_all_odds.txt")))
-        if input_folder.exists()
-        else ()
-    )
+    files = tuple(_iter_combined_paste_paths(input_folder)) if input_folder.exists() else ()
     validation_warnings = (
         validate_combined_pastes_against_schedule(input_folder, schedule)
         if schedule is not None and not schedule.empty

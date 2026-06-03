@@ -11,13 +11,20 @@ import numpy as np
 import pandas as pd
 
 from wc_predictor.market_data import load_tabular_data
+from wc_predictor.paths import (
+    CACHE_CORE_ODDS_PATH,
+    CACHE_SPLIT_PASTES_DIR,
+    CACHE_TOTAL_GOALS_ODDS_PATH,
+    INPUT_PREPARED_WORLD_CUP_ODDS_XLSX_PATH,
+    OUTPUT_CORE_PARSE_REPORT_PATH,
+)
 from wc_predictor.utils import ensure_parent_directory
 
-DEFAULT_INPUT_FOLDER = Path("data/raw/oddsportal_pastes")
-DEFAULT_OUTPUT_PATH = Path("data/raw/world_cup_odds_from_pastes.csv")
-DEFAULT_TOTAL_GOALS_OUTPUT_PATH = Path("data/raw/world_cup_total_goals_odds_from_pastes.csv")
-DEFAULT_REPORT_PATH = Path("data/processed/oddsportal_core_odds_parse_report.csv")
-DEFAULT_METADATA_ODDS_PATH = Path("data/raw/world_cup_odds.xlsx")
+DEFAULT_INPUT_FOLDER = CACHE_SPLIT_PASTES_DIR
+DEFAULT_OUTPUT_PATH = CACHE_CORE_ODDS_PATH
+DEFAULT_TOTAL_GOALS_OUTPUT_PATH = CACHE_TOTAL_GOALS_ODDS_PATH
+DEFAULT_REPORT_PATH = OUTPUT_CORE_PARSE_REPORT_PATH
+DEFAULT_METADATA_ODDS_PATH = INPUT_PREPARED_WORLD_CUP_ODDS_XLSX_PATH
 
 OUTPUT_COLUMNS = [
     "match_id",

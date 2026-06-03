@@ -16,19 +16,19 @@ def main() -> None:
         "--detailed-output",
         "--output",
         dest="detailed_output",
-        default="data/processed/backtest_results_by_file.csv",
+        default="output/research/backtest_results_by_file.csv",
     )
     parser.add_argument(
         "--aggregate-output",
-        default="data/processed/backtest_results_aggregate.csv",
+        default="output/research/backtest_results_aggregate.csv",
     )
     parser.add_argument(
         "--skipped-output",
-        default="data/processed/backtest_skipped_by_file.csv",
+        default="output/research/backtest_skipped_by_file.csv",
     )
     parser.add_argument(
         "--favourite-strength-output",
-        default="data/processed/backtest_favourite_strength.csv",
+        default="output/research/backtest_favourite_strength.csv",
     )
     parser.add_argument(
         "--verbose",

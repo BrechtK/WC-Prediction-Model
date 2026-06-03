@@ -6,6 +6,11 @@ import argparse
 from pathlib import Path
 
 from wc_predictor.config import ProjectConfig
+from wc_predictor.paths import (
+    OUTPUT_PREDICTIONS_CSV_PATH,
+    OUTPUT_PREDICTIONS_XLSX_PATH,
+    OUTPUT_SUBMISSION_XLSX_PATH,
+)
 from wc_predictor.world_cup import (
     WORLD_CUP_ODDS_MISSING_MESSAGE,
     WorldCupPredictionSettings,
@@ -23,9 +28,9 @@ def main() -> None:
     parser.add_argument("--correct-score-poisson-weight", type=float, default=1.0)
     parser.add_argument("--correct-score-aggregation-method", default="auto")
     parser.add_argument("--dixon-coles-rho", type=float, default=0.0)
-    parser.add_argument("--csv-output", default="data/processed/world_cup_recommendations.csv")
-    parser.add_argument("--xlsx-output", default="data/processed/world_cup_recommendations.xlsx")
-    parser.add_argument("--submission-xlsx-output", default="data/processed/world_cup_submission_sheet.xlsx")
+    parser.add_argument("--csv-output", default=str(OUTPUT_PREDICTIONS_CSV_PATH))
+    parser.add_argument("--xlsx-output", default=str(OUTPUT_PREDICTIONS_XLSX_PATH))
+    parser.add_argument("--submission-xlsx-output", default=str(OUTPUT_SUBMISSION_XLSX_PATH))
     args = parser.parse_args()
 
     try:

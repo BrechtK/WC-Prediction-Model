@@ -11,6 +11,7 @@ from openpyxl.utils import get_column_letter
 
 from wc_predictor.config import ProjectConfig
 from wc_predictor.market_data import load_correct_score_odds, load_odds
+from wc_predictor.paths import CACHE_CORRECT_SCORE_ODDS_PATH, OUTPUT_CORRECT_SCORE_AGGREGATION_XLSX_PATH
 from wc_predictor.utils import ensure_parent_directory
 from wc_predictor.workflow import run_prediction_workflow
 from wc_predictor.world_cup import resolve_world_cup_odds_input
@@ -23,8 +24,8 @@ CORRECT_SCORE_AGGREGATION_METHODS = (
     "reliability_weighted_mean",
     "auto",
 )
-DEFAULT_CORRECT_SCORE_ODDS_PATH = Path("data/raw/world_cup_correct_score_odds.csv")
-DEFAULT_OUTPUT_PATH = Path("data/processed/correct_score_aggregation_comparison.xlsx")
+DEFAULT_CORRECT_SCORE_ODDS_PATH = CACHE_CORRECT_SCORE_ODDS_PATH
+DEFAULT_OUTPUT_PATH = OUTPUT_CORRECT_SCORE_AGGREGATION_XLSX_PATH
 
 DETAIL_COLUMNS = [
     "match_id",

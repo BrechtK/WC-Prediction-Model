@@ -8,6 +8,13 @@ from shutil import copyfile
 
 from wc_predictor.config import ProjectConfig
 from wc_predictor.market_data import load_correct_score_odds, load_odds, load_total_goals_odds
+from wc_predictor.paths import (
+    INPUT_PREPARED_WORLD_CUP_ODDS_CSV_PATH,
+    INPUT_PREPARED_WORLD_CUP_ODDS_XLSX_PATH,
+    OUTPUT_PREDICTIONS_CSV_PATH,
+    OUTPUT_PREDICTIONS_XLSX_PATH,
+    OUTPUT_SUBMISSION_XLSX_PATH,
+)
 from wc_predictor.reporting import (
     export_dataframe,
     export_world_cup_recommendations_excel,
@@ -16,12 +23,12 @@ from wc_predictor.reporting import (
 )
 from wc_predictor.workflow import PredictionWorkflowResult, run_prediction_workflow
 
-DEFAULT_WORLD_CUP_XLSX_INPUT_PATH = Path("data/raw/world_cup_odds.xlsx")
-DEFAULT_WORLD_CUP_CSV_INPUT_PATH = Path("data/raw/world_cup_odds.csv")
+DEFAULT_WORLD_CUP_XLSX_INPUT_PATH = INPUT_PREPARED_WORLD_CUP_ODDS_XLSX_PATH
+DEFAULT_WORLD_CUP_CSV_INPUT_PATH = INPUT_PREPARED_WORLD_CUP_ODDS_CSV_PATH
 DEFAULT_WORLD_CUP_TEMPLATE_PATH = Path("data/templates/world_cup_odds_template.xlsx")
 WORLD_CUP_ODDS_MISSING_MESSAGE = (
     "No World Cup odds file found. Run scripts/create_world_cup_odds_file.py first, "
-    "fill in data/raw/world_cup_odds.xlsx, then rerun predictions."
+    "fill in input/prepared/world_cup_odds.xlsx, then rerun predictions."
 )
 
 
@@ -32,9 +39,9 @@ class WorldCupPredictionSettings:
     input_path: Path | None = None
     correct_score_input_path: Path | None = None
     total_goals_input_path: Path | None = None
-    csv_output_path: Path = Path("data/processed/world_cup_recommendations.csv")
-    xlsx_output_path: Path = Path("data/processed/world_cup_recommendations.xlsx")
-    submission_xlsx_output_path: Path = Path("data/processed/world_cup_submission_sheet.xlsx")
+    csv_output_path: Path = OUTPUT_PREDICTIONS_CSV_PATH
+    xlsx_output_path: Path = OUTPUT_PREDICTIONS_XLSX_PATH
+    submission_xlsx_output_path: Path = OUTPUT_SUBMISSION_XLSX_PATH
 
 
 def resolve_world_cup_odds_input(input_path: str | Path | None = None) -> Path:

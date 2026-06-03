@@ -184,7 +184,7 @@ class FootballDataCSVLoader:
 class BacktestSettings:
     """Settings for the first group-stage historical backtest."""
 
-    output_path: Path = Path("data/processed/backtest_results.csv")
+    output_path: Path = Path("output/research/backtest_results.csv")
 
 
 @dataclass(frozen=True)
@@ -208,10 +208,10 @@ class BacktestReport:
 class BatchBacktestSettings:
     """Output paths for single-file or folder-level historical backtests."""
 
-    detailed_output_path: Path = Path("data/processed/backtest_results_by_file.csv")
-    aggregate_output_path: Path = Path("data/processed/backtest_results_aggregate.csv")
-    skipped_output_path: Path = Path("data/processed/backtest_skipped_by_file.csv")
-    favourite_strength_output_path: Path = Path("data/processed/backtest_favourite_strength.csv")
+    detailed_output_path: Path = Path("output/research/backtest_results_by_file.csv")
+    aggregate_output_path: Path = Path("output/research/backtest_results_aggregate.csv")
+    skipped_output_path: Path = Path("output/research/backtest_skipped_by_file.csv")
+    favourite_strength_output_path: Path = Path("output/research/backtest_favourite_strength.csv")
 
 
 @dataclass(frozen=True)

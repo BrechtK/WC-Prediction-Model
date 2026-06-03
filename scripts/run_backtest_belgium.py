@@ -15,11 +15,11 @@ def main() -> None:
     args = parser.parse_args()
 
     run_and_print_backtest(
-        input_path="data/raw/Belgium",
-        detailed_output_path="data/processed/backtest_belgium_by_file.csv",
-        aggregate_output_path="data/processed/backtest_belgium_aggregate.csv",
-        skipped_output_path="data/processed/backtest_belgium_skipped.csv",
-        favourite_strength_output_path="data/processed/backtest_belgium_favourite_strength.csv",
+        input_path="input/historical/Belgium",
+        detailed_output_path="output/research/backtest_belgium_by_file.csv",
+        aggregate_output_path="output/research/backtest_belgium_aggregate.csv",
+        skipped_output_path="output/research/backtest_belgium_skipped.csv",
+        favourite_strength_output_path="output/research/backtest_belgium_favourite_strength.csv",
         fast=args.fast,
         max_files=args.max_files,
         max_matches=args.max_matches,

@@ -246,15 +246,15 @@ checks and backtests.
 Use this workflow for every tournament match:
 
 1. Open the comparison page or bookmaker pages for the match.
-2. Enter individually identified bookmaker rows for 1X2, over/under 2.5, and
-   BTTS into `data/raw/world_cup_odds.xlsx`.
-3. For knockout matches, enter qualification odds where available.
-4. Record `odds_timestamp`, `odds_source_url`, `source_quality`, and any
-   relevant `notes`.
+2. Paste the schedule once into `input/schedule.txt`.
+3. Paste 1X2, over/under, BTTS, and available correct-score sections into
+   `input/odds/M001.txt`, using the match ID assigned by schedule order.
+4. For knockout matches, collect qualification odds where available for the
+   prepared-file advanced workflow.
 5. Prefer three to five coherent bookmaker rows. Use fewer only when coverage
    is genuinely limited.
 6. Refresh prices near the submission deadline when practical.
-7. Run the existing World Cup prediction workflow with the Poisson baseline.
+7. Run `python scripts/run_live_prediction.py`.
 8. Review warnings, favourite strength, EV gaps, and the strongest-favourite
    diagnostics before submission.
 
@@ -346,12 +346,23 @@ apparently precise weight.
 
 ## 9. Recommended Templates
 
-### Existing Core Workbook
+### Preferred Combined Paste
 
-Continue using:
+For the one-click live workflow use:
 
 ```text
-data/raw/world_cup_odds.xlsx
+input/schedule.txt
+input/odds/M001.txt
+```
+
+The live runner splits and parses the market sections automatically.
+
+### Advanced Prepared Workbook
+
+The prepared-file advanced workflow can still use:
+
+```text
+input/prepared/world_cup_odds.xlsx
 ```
 
 Its current template already includes core odds, source metadata, and notes.
@@ -361,7 +372,7 @@ Its current template already includes core odds, source metadata, and notes.
 Create a user-friendly Excel companion in a later implementation step:
 
 ```text
-data/raw/world_cup_correct_score_odds.xlsx
+input/prepared/world_cup_correct_score_odds.xlsx
 ```
 
 Recommended columns:

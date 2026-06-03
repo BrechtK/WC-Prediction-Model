@@ -42,7 +42,7 @@ class BacktestingConfig:
     """Project-level defaults for historical evaluation outputs."""
 
     enabled: bool = False
-    output_path: Path = Path("data/processed/backtest_results.csv")
+    output_path: Path = Path("output/research/backtest_results.csv")
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ class ProjectConfig:
     correct_score_outlier_z_threshold: float = 3.0
     min_scorelines_for_blend: int = 10
     dixon_coles_rho: float = 0.0
-    output_dir: Path = Path("data/processed")
+    output_dir: Path = Path("output/research")
     calibration_weights: CalibrationWeights = field(default_factory=CalibrationWeights)
     knockout_scoring: KnockoutScoringConfig = field(default_factory=KnockoutScoringConfig)
     backtesting: BacktestingConfig = field(default_factory=BacktestingConfig)

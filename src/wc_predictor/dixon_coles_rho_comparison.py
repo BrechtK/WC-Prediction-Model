@@ -14,11 +14,12 @@ from openpyxl.utils import get_column_letter
 from wc_predictor.config import ProjectConfig
 from wc_predictor.live_prediction import LivePredictionSettings, parse_live_prediction_inputs
 from wc_predictor.market_data import load_correct_score_odds, load_odds, load_total_goals_odds
+from wc_predictor.paths import OUTPUT_DIXON_COLES_SENSITIVITY_XLSX_PATH
 from wc_predictor.utils import ensure_parent_directory
 from wc_predictor.workflow import run_prediction_workflow
 
 DEFAULT_DIXON_COLES_RHOS = (-0.20, -0.15, -0.10, -0.05, 0.00, 0.05, 0.10, 0.15, 0.20)
-DEFAULT_OUTPUT_PATH = Path("data/processed/dixon_coles_rho_comparison.xlsx")
+DEFAULT_OUTPUT_PATH = OUTPUT_DIXON_COLES_SENSITIVITY_XLSX_PATH
 
 DETAIL_COLUMNS = [
     "match_id",

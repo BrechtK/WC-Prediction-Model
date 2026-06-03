@@ -13,12 +13,17 @@ from openpyxl.utils import get_column_letter
 
 from wc_predictor.config import ProjectConfig
 from wc_predictor.market_data import load_correct_score_odds, load_odds, load_total_goals_odds
+from wc_predictor.paths import (
+    CACHE_CORE_ODDS_PATH,
+    CACHE_CORRECT_SCORE_ODDS_PATH,
+    OUTPUT_WEIGHT_SENSITIVITY_XLSX_PATH,
+)
 from wc_predictor.utils import ensure_parent_directory
 from wc_predictor.workflow import run_prediction_workflow
 
-DEFAULT_WORLD_CUP_ODDS_PATH = Path("data/raw/world_cup_odds.xlsx")
-DEFAULT_CORRECT_SCORE_ODDS_PATH = Path("data/raw/world_cup_correct_score_odds.csv")
-DEFAULT_OUTPUT_PATH = Path("data/processed/correct_score_weight_comparison.xlsx")
+DEFAULT_WORLD_CUP_ODDS_PATH = CACHE_CORE_ODDS_PATH
+DEFAULT_CORRECT_SCORE_ODDS_PATH = CACHE_CORRECT_SCORE_ODDS_PATH
+DEFAULT_OUTPUT_PATH = OUTPUT_WEIGHT_SENSITIVITY_XLSX_PATH
 DEFAULT_CORRECT_SCORE_WEIGHTS = tuple(round(value / 100, 2) for value in range(100, -1, -5))
 SUMMARY_WEIGHTS = (1.00, 0.85, 0.75, 0.50, 0.00)
 

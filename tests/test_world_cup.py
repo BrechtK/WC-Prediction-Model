@@ -395,13 +395,13 @@ def test_model_risk_documentation_exists() -> None:
 
 
 def test_default_world_cup_input_prefers_xlsx_when_both_exist(tmp_path: Path, monkeypatch) -> None:
-    raw = tmp_path / "data" / "raw"
-    raw.mkdir(parents=True)
-    (raw / "world_cup_odds.csv").touch()
-    (raw / "world_cup_odds.xlsx").touch()
+    prepared = tmp_path / "input" / "prepared"
+    prepared.mkdir(parents=True)
+    (prepared / "world_cup_odds.csv").touch()
+    (prepared / "world_cup_odds.xlsx").touch()
     monkeypatch.chdir(tmp_path)
 
-    assert resolve_world_cup_odds_input() == Path("data/raw/world_cup_odds.xlsx")
+    assert resolve_world_cup_odds_input() == Path("input/prepared/world_cup_odds.xlsx")
 
 
 def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: Path) -> None:

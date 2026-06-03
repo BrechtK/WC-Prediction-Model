@@ -22,7 +22,7 @@ def main() -> None:
     """Parse the current live pastes, export rho sensitivity, and print a summary."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input-folder", default=str(DEFAULT_INPUT_FOLDER))
+    parser.add_argument("--input-folder")
     parser.add_argument("--metadata-odds", default=str(DEFAULT_METADATA_ODDS_PATH))
     parser.add_argument("--match-id")
     parser.add_argument("--rhos", help="Comma-separated rho values, for example: -0.20,-0.10,0,0.10,0.20")
@@ -33,10 +33,11 @@ def main() -> None:
     args = parser.parse_args()
 
     rhos = parse_rho_grid(args.rhos) if args.rhos else DEFAULT_DIXON_COLES_RHOS
+    input_folder = Path(args.input_folder) if args.input_folder else DEFAULT_INPUT_FOLDER
     try:
         comparison = compare_live_dixon_coles_rhos(
             LivePredictionSettings(
-                input_folder=Path(args.input_folder),
+                input_folder=input_folder,
                 metadata_odds_path=Path(args.metadata_odds) if args.metadata_odds else None,
                 match_id=args.match_id,
                 strict=args.strict,

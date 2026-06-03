@@ -10,12 +10,18 @@ import re
 import pandas as pd
 
 from wc_predictor.market_data import load_tabular_data
+from wc_predictor.paths import (
+    CACHE_SCHEDULE_PATH,
+    INPUT_SCHEDULE_PATH,
+    INPUT_PREPARED_WORLD_CUP_ODDS_XLSX_PATH,
+    OUTPUT_SCHEDULE_PARSE_REPORT_PATH,
+)
 from wc_predictor.utils import ensure_parent_directory
 
-DEFAULT_SCHEDULE_INPUT_PATH = Path("data/raw/oddsportal_schedule.txt")
-DEFAULT_SCHEDULE_OUTPUT_PATH = Path("data/raw/world_cup_schedule_from_paste.csv")
-DEFAULT_SCHEDULE_REPORT_PATH = Path("data/processed/oddsportal_schedule_parse_report.csv")
-DEFAULT_EXISTING_METADATA_PATH = Path("data/raw/world_cup_odds.xlsx")
+DEFAULT_SCHEDULE_INPUT_PATH = INPUT_SCHEDULE_PATH
+DEFAULT_SCHEDULE_OUTPUT_PATH = CACHE_SCHEDULE_PATH
+DEFAULT_SCHEDULE_REPORT_PATH = OUTPUT_SCHEDULE_PARSE_REPORT_PATH
+DEFAULT_EXISTING_METADATA_PATH = INPUT_PREPARED_WORLD_CUP_ODDS_XLSX_PATH
 
 SCHEDULE_COLUMNS = [
     "match_id",

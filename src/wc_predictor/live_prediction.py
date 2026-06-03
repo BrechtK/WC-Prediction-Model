@@ -40,6 +40,11 @@ from wc_predictor.oddsportal_schedule import (
     OddsPortalScheduleParseResult,
     prepare_schedule_metadata,
 )
+from wc_predictor.paths import (
+    OUTPUT_PREDICTIONS_CSV_PATH,
+    OUTPUT_PREDICTIONS_XLSX_PATH,
+    OUTPUT_SUBMISSION_XLSX_PATH,
+)
 from wc_predictor.world_cup import WorldCupPredictionSettings, run_world_cup_predictions
 from wc_predictor.workflow import PredictionWorkflowResult
 
@@ -72,9 +77,9 @@ class LivePredictionSettings:
     core_parse_report_path: Path = DEFAULT_CORE_REPORT_PATH
     correct_score_output_path: Path = DEFAULT_CORRECT_SCORE_OUTPUT_PATH
     correct_score_parse_report_path: Path = DEFAULT_CORRECT_SCORE_REPORT_PATH
-    recommendations_csv_output_path: Path = Path("data/processed/world_cup_recommendations.csv")
-    recommendations_xlsx_output_path: Path = Path("data/processed/world_cup_recommendations.xlsx")
-    submission_xlsx_output_path: Path = Path("data/processed/world_cup_submission_sheet.xlsx")
+    recommendations_csv_output_path: Path = OUTPUT_PREDICTIONS_CSV_PATH
+    recommendations_xlsx_output_path: Path = OUTPUT_PREDICTIONS_XLSX_PATH
+    submission_xlsx_output_path: Path = OUTPUT_SUBMISSION_XLSX_PATH
     weight_comparison_output_path: Path = DEFAULT_WEIGHT_COMPARISON_OUTPUT_PATH
     weight_sensitivity_weights: Sequence[float] = DEFAULT_CORRECT_SCORE_WEIGHTS
 

@@ -1,123 +1,149 @@
 # Repository Cleanup Report
 
-## Summary
+## Result
 
-This cleanup pass keeps the one-click live workflow as the primary user path:
+The normal live workflow exposes only:
 
 ```text
-data/raw/oddsportal_schedule.txt
-    -> scripts/run_live_prediction.py
-    -> data/raw/world_cup_schedule_from_paste.csv
-    -> fixture metadata and match-ID validation
-
-data/raw/oddsportal_combined_pastes/*_all_odds.txt
-    -> scripts/run_live_prediction.py
-    -> split into:
-       data/raw/oddsportal_pastes/*_1x2.txt
-       data/raw/oddsportal_pastes/*_over_under.txt
-       data/raw/oddsportal_pastes/*_btts.txt
-       data/raw/oddsportal_pastes/*_correct_score.txt
-    -> existing parsers and prediction workflow
-    -> terminal recommendation and Excel reports
+input/schedule.txt
+input/odds/M001.txt
+scripts/run_live_prediction.py
+output/
 ```
 
-The four split files remain supported as direct advanced inputs.
+Generated parser intermediates live below `cache/`. The obsolete visible raw
+and processed trees were removed. No scoring, calibration, odds parsing,
+correct-score aggregation, EV optimisation, or Dixon-Coles logic changed.
 
-No model logic, scoring rules, calibration logic, correct-score aggregation,
-or EV optimisation behavior was changed.
+## Audit
 
-## File Classification
+The cleanup inspected `git ls-files`, `git status --ignored`, the full
+repository tree, imports, and path references.
 
-### Core Library Code
+`git ls-files` found only two tracked files in the obsolete generated trees:
 
-All files under `src/wc_predictor/` are retained. They contain parser,
-probability, calibration, optimisation, reporting, live orchestration, and
-backtesting code.
+```text
+data/raw/.gitkeep
+data/processed/.gitkeep
+```
 
-### Primary Live-Use Script
+Those placeholders were removed. No generated CSV, XLSX, or TXT artifact was
+tracked, so no `git rm --cached` operation was needed.
 
-| Script | Purpose |
-| --- | --- |
-| `scripts/run_live_prediction.py` | Normal one-click OddsPortal paste-to-submission workflow |
+## Retained Tracked Data
 
-### Advanced Live-Use Scripts
+`data/` now contains only:
 
-These remain useful for debugging, manual inspection, or running one stage
-independently:
+```text
+data/examples/
+data/templates/
+```
 
-| Script | Purpose |
-| --- | --- |
-| `scripts/parse_oddsportal_schedule.py` | Parse schedule metadata and sequential live match IDs |
-| `scripts/split_oddsportal_combined_pastes.py` | Split preferred combined per-match pastes into existing parser inputs |
-| `scripts/parse_oddsportal_core_odds.py` | Parse 1X2, BTTS, and total-goals ladder pastes |
-| `scripts/parse_oddsportal_correct_scores.py` | Parse correct-score pastes |
-| `scripts/run_world_cup_predictions.py` | Run recommendations from prepared CSV or Excel inputs |
-| `scripts/compare_correct_score_weights.py` | Inspect live blend-weight sensitivity |
-| `scripts/compare_correct_score_aggregation_methods.py` | Inspect live aggregation-method sensitivity |
-| `scripts/create_world_cup_odds_file.py` | Create the manual workbook fallback |
+These remain tracked because tests, example scripts, and the advanced prepared
+workbook command use them. Parser regression fixtures remain under
+`tests/fixtures/`.
 
-### Research And Backtesting Scripts
+## Generated Paths
 
-These are intentionally retained:
+The normal workflow creates only ignored paths:
 
-| Script | Purpose |
-| --- | --- |
-| `scripts/run_backtest.py` | Generic historical backtest CLI |
-| `scripts/run_backtest_all.py` | Run historical CSVs below `data/raw/` |
-| `scripts/run_backtest_belgium.py` | Belgium historical folder runner |
-| `scripts/run_backtest_england.py` | England historical folder runner |
-| `scripts/run_correct_score_backtest.py` | Historical blend-weight evaluation |
-| `scripts/inspect_synthetic_mismatches.py` | Extreme-favourite stress testing |
+```text
+output/
+cache/
+```
 
-### Retained Generic Utilities
+Optional local advanced inputs use ignored paths:
 
-These are not required by the one-click live workflow, but remain useful for
-examples, friend comparisons, realised standings, and manual analysis:
+```text
+input/prepared/
+input/historical/
+```
 
-| Script | Purpose |
-| --- | --- |
-| `scripts/run_predictions.py` | Generic recommendation and friend-EV export |
-| `scripts/inspect_predictions.py` | Compact generic model inspection |
-| `scripts/update_standings.py` | Score submitted predictions and export standings |
-| `scripts/generate_report.py` | Generate recommendation and standings bundles |
+The `.gitignore` file also ignores obsolete `data/raw/` and `data/processed/`
+paths so stale folders cannot accidentally be committed if recreated locally.
 
-No scripts were deleted or moved. Moving scripts into subfolders would add
-path churn without improving the VS Code workflow.
+## Cleanup Command
 
-## Tracked Assets Kept Intentionally
+Run:
 
-- `data/templates/`: CSV and Excel input templates.
-- `data/examples/`: dummy inputs for examples and automated tests.
-- `tests/fixtures/`: parser regression fixtures.
-- `docs/`: methodology, caveats, roadmap, and workflow documentation.
-- `notebooks/exploratory_analysis.ipynb`: exploratory analysis placeholder.
-- `prompts/initial_codex_prompt.md`: original project specification.
-- `data/raw/.gitkeep` and `data/processed/.gitkeep`: directory placeholders.
+```powershell
+python scripts/clean_generated_outputs.py
+```
 
-## Local And Generated Files
+The script has an explicit allowlist and removes only:
 
-The following are local or generated and are ignored by Git:
+```text
+output/
+cache/
+data/processed/
+.pytest_cache/
+common project Python cache directories
+```
 
-- `data/raw/oddsportal_pastes/`
-- `data/raw/world_cup_odds.xlsx`
-- `data/raw/world_cup_odds_from_pastes.csv`
-- `data/raw/world_cup_total_goals_odds_from_pastes.csv`
-- `data/raw/world_cup_correct_score_odds.csv`
-- downloaded historical league CSVs below `data/raw/`
-- all generated CSV and Excel reports below `data/processed/`
-- virtual environments, Python caches, test caches, lint caches, package
-  metadata, and temporary Excel lock files
+It never removes source files, test files, documentation, or `input/`.
+If retired OddsPortal paste files are found below `data/raw/`, it warns before
+cleanup starts and preserves them for manual review.
 
-`git ls-files` was inspected during cleanup. No raw live odds, downloaded
-historical data, parsed odds outputs, or generated reports were tracked, so no
-`git rm --cached` operation was needed.
+## Script Classification
 
-## Remaining Cleanup TODOs
+Primary live entry point:
 
-- Consider consolidating `docs/model_roadmap.md` and
-  `docs/future_model_roadmap.md` after reviewing whether they serve distinct
-  audiences.
-- Revisit generic example scripts only if the friend-submission or standings
-  workflow is retired.
-- Keep the individual parser scripts because they are valuable when debugging
-  live paste quality.
+```text
+scripts/run_live_prediction.py
+```
+
+Advanced parser and sensitivity tools:
+
+```text
+scripts/parse_oddsportal_schedule.py
+scripts/split_oddsportal_combined_pastes.py
+scripts/parse_oddsportal_core_odds.py
+scripts/parse_oddsportal_correct_scores.py
+scripts/compare_correct_score_weights.py
+scripts/compare_correct_score_aggregation_methods.py
+scripts/compare_dixon_coles_rho.py
+scripts/run_world_cup_predictions.py
+```
+
+Research and backtesting tools remain available and now write below
+`output/research/`.
+
+## Path Centralisation
+
+`src/wc_predictor/paths.py` owns the live structure:
+
+```text
+INPUT_SCHEDULE_PATH
+INPUT_ODDS_DIR
+INPUT_PREPARED_DIR
+INPUT_HISTORICAL_DIR
+OUTPUT_DIR
+OUTPUT_RESEARCH_DIR
+OUTPUT_PARSE_REPORTS_DIR
+CACHE_PARSED_DIR
+CACHE_SPLIT_PASTES_DIR
+```
+
+## Final Structure
+
+```text
+input/
+    .gitkeep
+    odds/
+        .gitkeep
+data/
+    examples/
+    templates/
+docs/
+prompts/
+scripts/
+src/
+tests/
+notebooks/
+README.md
+pyproject.toml
+.gitignore
+```
+
+`output/` and `cache/` appear only after generated work and can be removed with
+the cleanup command.

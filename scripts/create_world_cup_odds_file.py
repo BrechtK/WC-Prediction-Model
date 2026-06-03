@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import argparse
 
-from wc_predictor.world_cup import create_world_cup_odds_file
+from wc_predictor.world_cup import (
+    DEFAULT_WORLD_CUP_TEMPLATE_PATH,
+    DEFAULT_WORLD_CUP_XLSX_INPUT_PATH,
+    create_world_cup_odds_file,
+)
 
 
 def main() -> None:
     """Create the raw-data workbook while preserving existing manual entries."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="data/raw/world_cup_odds.xlsx")
-    parser.add_argument("--template", default="data/templates/world_cup_odds_template.xlsx")
+    parser.add_argument("--output", default=str(DEFAULT_WORLD_CUP_XLSX_INPUT_PATH))
+    parser.add_argument("--template", default=str(DEFAULT_WORLD_CUP_TEMPLATE_PATH))
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
