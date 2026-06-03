@@ -53,6 +53,64 @@ class StrategyConfig:
 
 
 @dataclass(frozen=True)
+class PublicStrategyConfig:
+    """Diagnostic settings for public-field ranking strategy."""
+
+    mode: str = "ev"
+    alpha: float = 0.20
+    beta: float = 0.15
+    gamma: float = 1.0
+    max_public_strategy_ev_loss: float | None = None
+    min_exact_score_probability: float = 0.025
+    min_result_probability: float = 0.20
+    friend_sample_weight: float = 0.15
+    team_popularity_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "Belgium": 1.00,
+            "France": 0.85,
+            "Netherlands": 0.85,
+            "England": 0.85,
+            "Brazil": 0.85,
+            "Argentina": 0.85,
+            "Germany": 0.85,
+            "Spain": 0.85,
+            "Portugal": 0.85,
+            "Mexico": 0.55,
+            "USA": 0.55,
+            "Canada": 0.45,
+            "Switzerland": 0.45,
+        }
+    )
+
+    def __post_init__(self) -> None:
+        valid_modes = {"ev", "balanced", "public-ranking", "aggressive-public-ranking"}
+        if self.mode not in valid_modes:
+            raise ValueError(f"strategy mode must be one of {sorted(valid_modes)}")
+        for name in ("alpha", "beta", "gamma", "min_exact_score_probability", "min_result_probability"):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if self.max_public_strategy_ev_loss is not None:
+            value = float(self.max_public_strategy_ev_loss)
+            if not np.isfinite(value) or value < 0:
+                raise ValueError("max_public_strategy_ev_loss must be finite and non-negative")
+
+    @property
+    def effective_max_ev_loss(self) -> float:
+        """Return the mode-specific EV loss cap."""
+
+        if self.max_public_strategy_ev_loss is not None:
+            return self.max_public_strategy_ev_loss
+        if self.mode == "balanced":
+            return 0.15
+        if self.mode == "public-ranking":
+            return 0.15
+        if self.mode == "aggressive-public-ranking":
+            return 0.30
+        return 0.0
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     """Defaults used by scripts; library functions remain individually configurable."""
 
@@ -74,6 +132,7 @@ class ProjectConfig:
     knockout_scoring: KnockoutScoringConfig = field(default_factory=KnockoutScoringConfig)
     backtesting: BacktestingConfig = field(default_factory=BacktestingConfig)
     strategies: StrategyConfig = field(default_factory=StrategyConfig)
+    public_strategy: PublicStrategyConfig = field(default_factory=PublicStrategyConfig)
 
     def __post_init__(self) -> None:
         if not 0 <= self.correct_score_poisson_weight <= 1:

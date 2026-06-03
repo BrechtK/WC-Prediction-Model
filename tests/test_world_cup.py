@@ -116,6 +116,15 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "dixon_coles_ev_gap_best_vs_second",
         "dixon_coles_top_5_ev_predictions",
         "dixon_coles_changes_recommendation",
+        "estimated_most_crowded_public_score",
+        "estimated_most_crowded_public_pick_share",
+        "public_strategy_score",
+        "public_strategy_ev_cost",
+        "public_strategy_public_pick_share",
+        "public_strategy_leverage_score",
+        "public_strategy_mode",
+        "public_strategy_reason",
+        "friend_strategy_score",
         "warning_flags",
     }.issubset(workflow.match_report.columns)
     assert workflow.match_report["recommended_score"].equals(workflow.match_report["final_live_recommended_score"])
@@ -223,7 +232,10 @@ def test_world_cup_excel_export_is_formatted_for_manual_review(tmp_path: Path) -
     assert worksheet.cell(2, column["lambda_a"]).number_format == "0.0000"
     assert worksheet.cell(2, column["calibration_loss"]).number_format == "0.0000"
     assert worksheet.cell(2, column["best_expected_points"]).number_format == "0.000"
+    assert worksheet.cell(2, column["estimated_most_crowded_public_pick_share"]).number_format == "0.00%"
+    assert worksheet.cell(2, column["public_strategy_ev_cost"]).number_format == "0.000"
     assert worksheet.cell(2, column["top_5_ev_predictions"]).alignment.wrap_text
+    assert worksheet.cell(2, column["public_strategy_reason"]).alignment.wrap_text
     assert worksheet.cell(2, column["warnings"]).alignment.wrap_text
     assert worksheet.column_dimensions["A"].width >= len("match_id")
 
@@ -424,6 +436,9 @@ def test_world_cup_console_summary_contains_manual_inspection_fields(tmp_path: P
     assert "Modal scoreline:" in summary
     assert "EV-optimal scoreline:" in summary
     assert "Top 5 EV scorelines:" in summary
+    assert "Public-ranking strategy:" in summary
+    assert "Estimated most crowded public score:" in summary
+    assert "Public strategy score:" in summary
     assert "CSV recommendations:" in summary
     assert "Excel recommendations:" in summary
     assert "Submission sheet:" in summary

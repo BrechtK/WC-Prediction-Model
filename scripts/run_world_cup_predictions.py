@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from wc_predictor.config import ProjectConfig
+from wc_predictor.config import ProjectConfig, PublicStrategyConfig
 from wc_predictor.paths import (
     OUTPUT_PREDICTIONS_CSV_PATH,
     OUTPUT_PREDICTIONS_XLSX_PATH,
@@ -28,6 +28,11 @@ def main() -> None:
     parser.add_argument("--correct-score-poisson-weight", type=float, default=1.0)
     parser.add_argument("--correct-score-aggregation-method", default="auto")
     parser.add_argument("--dixon-coles-rho", type=float, default=0.0)
+    parser.add_argument(
+        "--strategy-mode",
+        choices=("ev", "balanced", "public-ranking", "aggressive-public-ranking"),
+        default="ev",
+    )
     parser.add_argument("--csv-output", default=str(OUTPUT_PREDICTIONS_CSV_PATH))
     parser.add_argument("--xlsx-output", default=str(OUTPUT_PREDICTIONS_XLSX_PATH))
     parser.add_argument("--submission-xlsx-output", default=str(OUTPUT_SUBMISSION_XLSX_PATH))
@@ -47,6 +52,7 @@ def main() -> None:
                 correct_score_poisson_weight=args.correct_score_poisson_weight,
                 correct_score_aggregation_method=args.correct_score_aggregation_method,
                 dixon_coles_rho=args.dixon_coles_rho,
+                public_strategy=PublicStrategyConfig(mode=args.strategy_mode),
             ),
         )
     except FileNotFoundError:

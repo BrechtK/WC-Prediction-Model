@@ -372,6 +372,14 @@ def format_world_cup_console_summary(
                     f"recommended={row['dixon_coles_recommended_score']} "
                     f"changes_final={'yes' if row['dixon_coles_changes_recommendation'] else 'no'}",
                     f"  Dixon-Coles top 5 EV scorelines: {row['dixon_coles_top_5_ev_predictions']}",
+                    f"  Public-ranking strategy: mode={row['public_strategy_mode']} "
+                    f"score={row['public_strategy_score']} "
+                    f"EV_cost={row['public_strategy_ev_cost']:.3f}",
+                    f"  Estimated most crowded public score: {row['estimated_most_crowded_public_score']} "
+                    f"({row['estimated_most_crowded_public_pick_share']:.2%})",
+                    f"  Public strategy score: {row['public_strategy_score']} "
+                    f"public_share={row['public_strategy_public_pick_share']:.2%} "
+                    f"leverage={row['public_strategy_leverage_score']:.3f}",
                     *correct_score_diagnostics,
                 ]
             )
@@ -506,6 +514,16 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "dixon_coles_ev_gap_best_vs_second",
         "dixon_coles_top_5_ev_predictions",
         "dixon_coles_changes_recommendation",
+        "estimated_most_crowded_public_score",
+        "estimated_most_crowded_public_pick_share",
+        "public_strategy_mode",
+        "public_strategy_score",
+        "public_strategy_ev_cost",
+        "public_strategy_public_pick_share",
+        "public_strategy_leverage_score",
+        "public_strategy_reason",
+        "friend_strategy_score",
+        "friend_strategy_reason",
         "warnings",
         "number_of_bookmakers",
         "has_over_under",
@@ -568,6 +586,10 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "correct_goal_difference_probability",
         "correct_result_probability",
         "tail_probability_before_renormalisation",
+        "estimated_most_crowded_public_pick_share",
+        "public_strategy_public_pick_share",
+        "public_strategy_exact_score_probability",
+        "public_strategy_result_probability",
     }
     decimal_columns = {
         "lambda_a",
@@ -580,6 +602,8 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "average_correct_score_overround",
         "max_correct_score_overround",
         "dixon_coles_rho",
+        "public_strategy_leverage_score",
+        "public_strategy_public_ranking_score",
     }
     ev_columns = {
         "best_expected_points",
@@ -590,6 +614,7 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "final_live_ev_gap_best_vs_second",
         "dixon_coles_ev_gap_best_vs_second",
         "dixon_coles_best_expected_points",
+        "public_strategy_ev_cost",
     }
     wrapped_columns = {
         "top_5_ev_predictions",
@@ -611,6 +636,8 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "total_goals_line_diagnostics",
         "model_disagreement_warning",
         "dixon_coles_top_5_ev_predictions",
+        "public_strategy_reason",
+        "friend_strategy_reason",
     }
     from openpyxl import load_workbook
 

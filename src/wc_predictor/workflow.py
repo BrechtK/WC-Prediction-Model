@@ -35,6 +35,7 @@ from wc_predictor.optimiser import (
     optimise_knockout_prediction,
 )
 from wc_predictor.probabilities import ScoreProbabilityMatrix
+from wc_predictor.public_strategy import build_public_strategy
 from wc_predictor.score_models import DixonColesScoreModel, Match, build_challenger_score_matrices
 from wc_predictor.utils import favourite_strength_bucket, is_knockout_stage
 
@@ -536,6 +537,27 @@ def run_prediction_workflow(
             correct_score_blend_suppressed=correct_score_blend_suppressed,
             challenger_models_disagree=not model_recommendations_agree,
         )
+        public_strategy = build_public_strategy(
+            match_row=pd.Series(
+                {
+                    "team_a": row["team_a"],
+                    "team_b": row["team_b"],
+                    "favourite_probability": favourite_probability,
+                    "warning_flags": warning_flags,
+                    "correct_score_market_top_10": correct_score_market_top_10,
+                }
+            ),
+            matrix=score_matrix,
+            recommendation=recommendation,
+            config=config,
+            qualifier_probabilities=qualification.get(match_id),
+            correct_score_market_matrix=correct_score_matrices.get(match_id),
+            friend_predictions=(
+                predictions[predictions["match_id"].astype(str) == match_id]
+                if predictions is not None and not predictions.empty
+                else None
+            ),
+        )
         report_rows.append(
             {
                 "match_id": match_id,
@@ -625,6 +647,20 @@ def run_prediction_workflow(
                 "tail_probability_before_renormalisation": poisson_matrix.tail_probability,
                 "warnings": "; ".join(filter(None, [str(row.get("warnings", "")), *notes])),
                 "warning_flags": warning_flags,
+                "estimated_most_crowded_public_score": public_strategy.estimated_most_crowded_public_score,
+                "estimated_most_crowded_public_pick_share": public_strategy.estimated_most_crowded_public_pick_share,
+                "public_strategy_score": public_strategy.public_strategy_score,
+                "public_strategy_reason": public_strategy.public_strategy_reason,
+                "public_strategy_ev_cost": public_strategy.public_strategy_ev_cost,
+                "public_strategy_public_pick_share": public_strategy.public_strategy_public_pick_share,
+                "public_strategy_leverage_score": public_strategy.public_strategy_leverage_score,
+                "public_strategy_mode": public_strategy.public_strategy_mode,
+                "public_strategy_public_ranking_score": public_strategy.public_strategy_public_ranking_score,
+                "public_strategy_exact_score_probability": public_strategy.public_strategy_exact_score_probability,
+                "public_strategy_result_probability": public_strategy.public_strategy_result_probability,
+                "public_strategy_candidate_count": public_strategy.public_strategy_candidate_count,
+                "friend_strategy_score": public_strategy.friend_strategy_score,
+                "friend_strategy_reason": public_strategy.friend_strategy_reason,
             }
         )
     match_report = pd.DataFrame(report_rows)

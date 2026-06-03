@@ -7,8 +7,10 @@ for a private World Cup pool. It removes bookmaker margin, calibrates an
 independent-Poisson baseline, optionally blends coherent correct-score odds,
 and selects the scoreline with the highest expected pool points.
 
-The live recommendation remains the established model. Dixon-Coles is an
-optional diagnostic challenger and does not change the submitted score.
+The live recommendation remains the established pure-EV model. Dixon-Coles and
+public-field strategy outputs are diagnostic challengers and do not change the
+submitted score unless you deliberately choose to use them outside the default
+workflow.
 
 ## Quick Start: Live World Cup Prediction
 
@@ -90,10 +92,21 @@ python scripts/run_live_prediction.py --match-id M001
 python scripts/run_live_prediction.py --strict
 python scripts/run_live_prediction.py --skip-weight-sensitivity
 python scripts/run_live_prediction.py --dixon-coles-rho -0.08
+python scripts/run_live_prediction.py --strategy-mode public-ranking
 ```
 
 `--dixon-coles-rho` changes only the diagnostic challenger. It never promotes
 Dixon-Coles to the final live recommendation.
+
+`--strategy-mode` controls the diagnostic public-field strategy layer:
+
+- `ev` keeps pure expected-points optimisation and is the default;
+- `balanced` and `public-ranking` allow small-EV-cost contrarian suggestions;
+- `aggressive-public-ranking` allows a wider diagnostic EV-loss band.
+
+The `Final recommended submission` block still uses `recommended_score`, the
+pure-EV live recommendation. Public-ranking columns are for contest strategy
+review, not automatic replacement.
 
 Clean `input/odds/*.txt` files refresh their generated `cache/split_pastes/`
 files automatically.
@@ -141,6 +154,8 @@ For each match, the live runner prints:
 - final EV-optimal live score and alternatives;
 - baseline Poisson, correct-score blend, and final-live comparison;
 - Dixon-Coles rho, top-five challenger EV predictions, and disagreement flag;
+- estimated crowded public score, public-ranking diagnostic score, EV cost,
+  public pick share, leverage score, and explanation;
 - parse, calibration, sparse-market, and model-disagreement warnings.
 
 The `Final recommended submission` block is the entry-ready answer. Challenger
@@ -160,6 +175,7 @@ debugging or research:
 | `scripts/compare_correct_score_weights.py` | Compare correct-score blend weights |
 | `scripts/compare_correct_score_aggregation_methods.py` | Compare aggregation methods |
 | `scripts/compare_dixon_coles_rho.py` | Run Dixon-Coles rho sensitivity |
+| `scripts/simulate_public_contest.py` | Simulate pure EV vs public-ranking entries against a heuristic public field |
 | `scripts/run_world_cup_predictions.py` | Run from prepared tabular odds files |
 
 ### Dixon-Coles Challenger Sensitivity
@@ -179,6 +195,40 @@ output/dixon_coles_rho_comparison.xlsx
 
 The script reports recommendation changes across rho values without selecting
 an optimal rho and without changing the live recommendation.
+
+### Public-Field Strategy Diagnostics
+
+Large public prediction contests can reward entries that are still high-EV but
+less crowded than obvious public scorelines. The project now reports a
+diagnostic public-ranking layer with:
+
+- estimated most crowded public score;
+- public-ranking score suggestion;
+- EV cost versus the pure-EV recommendation;
+- estimated public pick share and leverage score;
+- optional friend-crowding diagnostic when friend predictions are available.
+
+Run the live workflow with:
+
+```powershell
+python scripts/run_live_prediction.py --strategy-mode public-ranking
+```
+
+For a simulation-style stress test after a live run has prepared `cache/`:
+
+```powershell
+python scripts/simulate_public_contest.py
+```
+
+This writes:
+
+```text
+output/public_contest_simulation.xlsx
+```
+
+The simulation is a heuristic leaderboard diagnostic. It does not choose an
+optimal strategy mode, alter the scoring rules, or change the default live
+submission.
 
 ## Cleaning Generated Files
 
