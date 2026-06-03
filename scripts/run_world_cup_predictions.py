@@ -27,6 +27,11 @@ def main() -> None:
     parser.add_argument("--total-goals-odds")
     parser.add_argument("--correct-score-poisson-weight", type=float, default=1.0)
     parser.add_argument("--correct-score-aggregation-method", default="auto")
+    parser.add_argument(
+        "--margin-removal-method",
+        choices=("normalised_inverse_odds", "power", "additive", "shin"),
+        default="normalised_inverse_odds",
+    )
     parser.add_argument("--dixon-coles-rho", type=float, default=0.0)
     parser.add_argument(
         "--strategy-mode",
@@ -51,6 +56,7 @@ def main() -> None:
             ProjectConfig(
                 correct_score_poisson_weight=args.correct_score_poisson_weight,
                 correct_score_aggregation_method=args.correct_score_aggregation_method,
+                margin_removal_method=args.margin_removal_method,
                 dixon_coles_rho=args.dixon_coles_rho,
                 public_strategy=PublicStrategyConfig(mode=args.strategy_mode),
             ),

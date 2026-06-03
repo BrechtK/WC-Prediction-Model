@@ -352,6 +352,37 @@ def test_live_warning_flags_reach_dashboard_and_compact_summary(tmp_path: Path) 
     assert "stale_odds_file" in summary
 
 
+def test_market_consistent_debug_details_are_hidden_in_compact_output(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, skip_weight_sensitivity=True)
+    _write_metadata(settings.metadata_odds_path)
+    _write_pastes(settings.input_folder)
+
+    result = run_live_prediction(settings)
+    report = result.workflow.match_report
+    report.loc[0, "market_consistent_status"] = "failed_severe"
+    report.loc[0, "market_consistent_optimisation_classification"] = "optimisation_failed_severe"
+    report.loc[0, "market_consistent_optimisation_success"] = False
+    report.loc[0, "market_consistent_optimisation_status_code"] = 1
+    report.loc[0, "market_consistent_optimisation_message"] = "iteration limit reached"
+    report.loc[0, "market_consistent_optimisation_iterations"] = 500
+    report.loc[0, "market_consistent_final_objective_value"] = 1.25
+    report.loc[0, "market_consistent_gradient_norm"] = 0.02
+    report.loc[0, "market_consistent_max_constraint_error"] = 0.40
+    report.loc[0, "market_consistent_constraint_count"] = 8
+    report.loc[0, "market_consistent_1x2_constraint_count"] = 3
+    report.loc[0, "market_consistent_btts_constraint_count"] = 1
+    report.loc[0, "market_consistent_total_goals_constraint_count"] = 1
+    report.loc[0, "market_consistent_correct_score_constraint_count"] = 3
+
+    compact = format_live_prediction_summary(result)
+    debug = format_live_prediction_summary(result, terminal_verbosity="debug")
+
+    assert "Market-consistent optimiser:" not in compact
+    assert "Market-consistent optimiser:" in debug
+    assert "iteration limit reached" in debug
+    assert "gradient inf-norm" in debug
+
+
 def test_research_style_config_runs_margin_method_comparison(tmp_path: Path) -> None:
     settings = _settings(tmp_path, skip_weight_sensitivity=True)
     _write_metadata(settings.metadata_odds_path)
@@ -561,6 +592,39 @@ def test_live_runner_script_warns_when_selected_odds_file_is_stale(
         "Check that odds are fresh."
     ) in output
     assert "Final recommendations:" in output
+    report = pd.read_csv(tmp_path / "output" / "predictions.csv")
+    assert "stale_odds_file" in report.loc[0, "warning_flags"]
+
+
+def test_live_runner_script_can_keep_stale_odds_out_of_manual_review_flags(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_schedule(tmp_path / "input/schedule.txt", [("11 Jun 2026", "Schedule Alpha", "Schedule Beta")])
+    _write_combined_paste(tmp_path / "input/odds", clean_filename=True)
+    stale_path = tmp_path / "input" / "odds" / "M001.txt"
+    stale_mtime = time.time() - 25 * 60 * 60
+    os.utime(stale_path, (stale_mtime, stale_mtime))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_live_prediction.py",
+            "--run-mode",
+            "all_available",
+            "--skip-weight-sensitivity",
+            "--no-stale-odds-affects-manual-review",
+        ],
+    )
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    assert "Check that odds are fresh." in output
+    report = pd.read_csv(tmp_path / "output" / "predictions.csv")
+    assert "stale_odds_file" not in str(report.loc[0, "warning_flags"])
 
 
 def test_live_runner_compact_prints_split_summary_when_warnings_exist(

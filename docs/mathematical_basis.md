@@ -42,8 +42,17 @@ p_i = q_i - (R - 1) / n
 
 where `n` is the number of outcomes. If this produces a non-positive
 probability, the method is flagged as invalid for that market rather than being
-silently trusted. Shin-style and odds-ratio methods are not promoted until they
-are implemented and tested with clear numerical safeguards.
+silently trusted. Odds-ratio methods are not promoted until they are
+implemented and tested with clear numerical safeguards.
+
+Shin margin removal is implemented as an optional research method. It models
+bookmaker overround as partly arising from insider-informed betting and solves
+for a market-level parameter `z`. Larger `z` implies a stronger Shin correction.
+The implementation returns `shin_z` diagnostics and rejects markets where a
+valid positive probability vector cannot be found. Shin can be useful for
+favourite-longshot bias diagnostics, but it remains a challenger rather than a
+live default. It is especially uncertain for sparse correct-score markets,
+where the listed scorelines may not represent a complete bookmaker market.
 
 The `margin_methods` diagnostics compare calibrated lambdas, fit errors, EV
 recommendations, and warning flags across implemented methods. Disagreement
@@ -143,8 +152,13 @@ The finite matrix is normalised before EV optimisation. The configurable
 parameter defaults to `rho=0.0`, which exactly reproduces independent Poisson.
 The live workflow reports Dixon-Coles rho, its recommended scoreline, its EV
 gap, its top five EV predictions, and whether it changes the final live
-recommendation. Dixon-Coles remains diagnostic-only: it must be validated out
-of sample before it can become a default recommendation model.
+recommendation. When correct-score market probabilities contain the low-score
+cells `0-0`, `1-0`, `0-1`, and `1-1`, the workflow estimates rho over a bounded
+grid and reports `dixon_coles_rho_used`, `dixon_coles_rho_source`, and
+`dixon_coles_rho_fit_error`. Missing or sparse correct-score data falls back to
+the configured rho and emits a warning. Dixon-Coles remains diagnostic-only:
+it must be validated out of sample before it can become a default
+recommendation model.
 
 ## Public-Field Strategy Challenger
 
@@ -235,7 +249,11 @@ EV(a,b,q)
 ```
 
 Knockout score timing remains configurable because the competition app's exact
-interpretation must be confirmed. Before relying on knockout EV, verify the
+interpretation must be confirmed. The default knockout scoring mode is
+`unverified`, which preserves the existing additive calculation while warning
+that the Sporza rule has not been confirmed. `additive` explicitly stacks score
+components, while `hierarchical` lets an exact score supersede the
+goal-difference score component. Before relying on knockout EV, verify the
 actual Sporza knockout rules, especially score timing, qualifier treatment, and
 whether score and qualifier points are additive.
 

@@ -419,6 +419,43 @@ def format_live_prediction_summary(
             f"- total: {float(total):.2f}s",
         ]
 
+    def format_float(value: object, precision: int = 6) -> str:
+        return f"{float(value):.{precision}f}" if pd.notna(value) else "n/a"
+
+    def market_consistent_diagnostic_lines(row: pd.Series) -> list[str]:
+        status = str(row.get("market_consistent_status", ""))
+        classification = str(row.get("market_consistent_optimisation_classification", ""))
+        if status in {"", "ok", "skipped"} and classification in {"", "success", "skipped"}:
+            return []
+        return [
+            "Market-consistent optimiser:",
+            f"- status: {status or 'n/a'}",
+            f"- classification: {classification or 'n/a'}",
+            f"- scipy success: {row.get('market_consistent_optimisation_success')}",
+            f"- scipy status: {row.get('market_consistent_optimisation_status_code')}",
+            f"- message: {row.get('market_consistent_optimisation_message')}",
+            f"- iterations: {row.get('market_consistent_optimisation_iterations')}",
+            f"- objective: {format_float(row.get('market_consistent_final_objective_value'))}",
+            f"- gradient inf-norm: {format_float(row.get('market_consistent_gradient_norm'))}",
+            f"- max constraint error: {format_float(row.get('market_consistent_max_constraint_error'))}",
+            (
+                "- fit rmse: "
+                f"1x2={format_float(row.get('market_consistent_1x2_fit_error'))}, "
+                f"btts={format_float(row.get('market_consistent_btts_fit_error'))}, "
+                f"totals={format_float(row.get('market_consistent_total_goals_fit_error'))}, "
+                f"correct-score={format_float(row.get('market_consistent_correct_score_fit_error'))}"
+            ),
+            f"- KL vs prior: {format_float(row.get('market_consistent_kl_divergence_vs_prior'))}",
+            (
+                "- constraints: "
+                f"total={row.get('market_consistent_constraint_count', 'n/a')}, "
+                f"1x2={row.get('market_consistent_1x2_constraint_count', 'n/a')}, "
+                f"btts={row.get('market_consistent_btts_constraint_count', 'n/a')}, "
+                f"totals={row.get('market_consistent_total_goals_constraint_count', 'n/a')}, "
+                f"correct-score={row.get('market_consistent_correct_score_constraint_count', 'n/a')}"
+            ),
+        ]
+
     diagnostic_sections: list[str] = []
     final_submissions: list[str] = []
     margin_comparison = result.workflow.margin_method_comparison
@@ -473,6 +510,7 @@ def format_live_prediction_summary(
                         f"- plausible alternatives: {row.get('plausible_top_alternatives') or 'none'}",
                         f"- manual review flag: {row.get('manual_review_flag')}",
                         f"- decision note: {row.get('decision_note')}",
+                        *market_consistent_diagnostic_lines(row),
                         *margin_lines,
                         *(
                             [
@@ -556,6 +594,12 @@ def format_live_prediction_summary(
             warning_lines.append(f"{match_id}: {', '.join(warnings)}")
 
     normal_extra: list[str] = []
+    market_consistent_warning_extra: list[str] = []
+    if terminal_verbosity == "normal" or (run_profile == "research" and terminal_verbosity != "debug"):
+        for _, row in result.workflow.match_report.iterrows():
+            lines = market_consistent_diagnostic_lines(row)
+            if lines:
+                market_consistent_warning_extra.extend(["", f"{row['match_id']} {row['team_a']} vs {row['team_b']}:", *lines])
     if terminal_verbosity == "normal" and not dashboard.empty:
         disagreements = dashboard[
             dashboard[["market_consistent_differs", "dixon_coles_differs", "public_strategy_differs"]]
@@ -581,6 +625,7 @@ def format_live_prediction_summary(
         "Final recommendations:",
         *final_submissions,
         *normal_extra,
+        *market_consistent_warning_extra,
         *warning_lines,
         *manual_review_lines,
         *dashboard_summary,

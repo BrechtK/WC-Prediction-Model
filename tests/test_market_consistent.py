@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import wc_predictor.market_consistent as market_consistent_module
 from wc_predictor.asian_totals import asian_total_profit_vector
 from wc_predictor.market_consistent import MarketConsistentWeights, _build_constraints, fit_market_consistent_matrix
-from wc_predictor.probabilities import poisson_score_matrix
+from wc_predictor.probabilities import ScoreProbabilityMatrix, poisson_score_matrix
 
 
 def _market() -> dict[str, float]:
@@ -42,6 +45,15 @@ def test_market_consistent_matrix_sums_to_one_and_remains_positive() -> None:
     assert result.matrix.probabilities.sum() == pytest.approx(1.0)
     assert np.all(result.matrix.probabilities > 0)
     assert result.diagnostics["market_consistent_asian_totals_used"] == "2.25 quarter_asian"
+    assert result.diagnostics["market_consistent_status"] == "ok"
+    assert result.diagnostics["market_consistent_optimisation_iterations"] >= 0
+    assert result.diagnostics["market_consistent_final_objective_value"] >= 0
+    assert result.diagnostics["market_consistent_gradient_norm"] >= 0
+    assert result.diagnostics["market_consistent_max_constraint_error"] >= 0
+    assert result.diagnostics["market_consistent_constraint_count"] == 5
+    assert result.diagnostics["market_consistent_1x2_constraint_count"] == 3
+    assert result.diagnostics["market_consistent_btts_constraint_count"] == 1
+    assert result.diagnostics["market_consistent_total_goals_constraint_count"] == 1
 
 
 def test_zero_penalty_weights_preserve_prior_approximately() -> None:
@@ -149,3 +161,44 @@ def test_integer_and_quarter_asian_under_constraints_are_redundant(
     )
 
     assert [constraint.name for constraint in constraints] == [f"total_over_{line:g}"]
+
+
+def test_non_converged_but_acceptable_fit_is_classified_as_non_severe(monkeypatch) -> None:
+    prior = poisson_score_matrix(1.2, 1.0, max_goals=5)
+    outcomes = prior.outcome_probabilities()
+    market = {
+        "a_win": outcomes["a_win"],
+        "draw": outcomes["draw"],
+        "b_win": outcomes["b_win"],
+        "btts_yes": prior.btts_yes_probability(),
+    }
+
+    def fake_minimize(fun, x0, jac, method, options):
+        return SimpleNamespace(x=x0, success=False, status=1, message="iteration limit reached", nit=1)
+
+    monkeypatch.setattr(market_consistent_module, "minimize", fake_minimize)
+
+    result = fit_market_consistent_matrix(prior, market)
+
+    assert result.diagnostics["market_consistent_status"] == "not_fully_converged_fit_acceptable"
+    assert (
+        result.diagnostics["market_consistent_optimisation_classification"]
+        == "optimisation_not_fully_converged_but_fit_acceptable"
+    )
+    assert result.diagnostics["market_consistent_max_constraint_error"] < 0.05
+
+
+def test_inconsistent_constraints_surface_poor_fit_warning() -> None:
+    prior = poisson_score_matrix(1.0, 1.0, max_goals=5)
+    market = {"a_win": 0.90, "draw": 0.05, "b_win": 0.05, "btts_yes": 0.10}
+    correct_score = np.zeros_like(prior.probabilities)
+    correct_score[0, 0] = 1.0
+    result = fit_market_consistent_matrix(
+        prior,
+        market,
+        correct_score_matrix=ScoreProbabilityMatrix(correct_score),
+        weights=MarketConsistentWeights(one_x_two=500.0, liquid_total_goals=0.0, btts=250.0, correct_score=500.0),
+    )
+
+    assert result.diagnostics["market_consistent_max_constraint_error"] > 0.20
+    assert result.diagnostics["market_consistent_status"] in {"poor_fit", "failed_severe"}

@@ -128,6 +128,9 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "model_recommendations_agree",
         "model_disagreement_warning",
         "dixon_coles_rho",
+        "dixon_coles_rho_used",
+        "dixon_coles_rho_source",
+        "dixon_coles_rho_fit_error",
         "dixon_coles_recommended_score",
         "dixon_coles_ev_gap_best_vs_second",
         "dixon_coles_top_5_ev_predictions",
@@ -206,7 +209,7 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
     assert workflow.match_report["top_5_ev_predictions"].str.len().gt(0).all()
     assert workflow.match_report["plausible_top_alternatives"].str.len().gt(0).all()
     assert not workflow.margin_method_comparison.empty
-    assert {"normalised_inverse_odds", "power", "additive"}.issubset(
+    assert {"normalised_inverse_odds", "power", "additive", "shin"}.issubset(
         set(workflow.margin_method_comparison["method"])
     )
     assert workflow.match_report["baseline_poisson_recommended_score"].equals(
@@ -489,10 +492,20 @@ def test_market_consistent_failure_warning_propagates_to_report_and_dashboard(mo
             {
                 "matrix": prior,
                 "diagnostics": {
-                    "market_consistent_status": "failed",
+                    "market_consistent_status": "failed_severe",
+                    "market_consistent_optimisation_classification": "optimisation_failed_severe",
                     "market_consistent_optimisation_success": False,
                     "market_consistent_optimisation_status_code": 1,
                     "market_consistent_optimisation_message": "iteration limit reached",
+                    "market_consistent_optimisation_iterations": 1,
+                    "market_consistent_final_objective_value": 1.0,
+                    "market_consistent_gradient_norm": 0.5,
+                    "market_consistent_max_constraint_error": 0.5,
+                    "market_consistent_constraint_count": 3,
+                    "market_consistent_1x2_constraint_count": 3,
+                    "market_consistent_btts_constraint_count": 0,
+                    "market_consistent_total_goals_constraint_count": 0,
+                    "market_consistent_correct_score_constraint_count": 0,
                     "market_consistent_kl_divergence_vs_prior": 0.0,
                     "market_consistent_1x2_fit_error": 0.0,
                     "market_consistent_btts_fit_error": pd.NA,
@@ -513,10 +526,42 @@ def test_market_consistent_failure_warning_propagates_to_report_and_dashboard(mo
     dashboard = workflow.final_decision_dashboard.iloc[0]
 
     assert "market_consistent_optimisation_failed" in report["warning_flags"]
-    assert report["market_consistent_status"] == "failed"
+    assert "market_consistent_optimisation_failed_severe" in report["warning_flags"]
+    assert report["market_consistent_status"] == "failed_severe"
     assert "Market-consistent optimiser did not converge" in report["warnings"]
     assert "market_consistent_optimisation_failed" in dashboard["warning_flags"]
     assert "market_consistent_optimisation_failed" in dashboard["risk_notes"]
+
+
+def test_unverified_knockout_scoring_mode_adds_workflow_warning() -> None:
+    odds = pd.DataFrame(
+        [
+            {
+                "match_id": "K001",
+                "date": "2026-07-01",
+                "stage": "round of 16",
+                "group": "",
+                "team_a": "Alpha",
+                "team_b": "Beta",
+                "bookmaker": "Book",
+                "odds_a_win": 2.0,
+                "odds_draw": 3.2,
+                "odds_b_win": 4.0,
+                "odds_a_qualifies": 1.70,
+                "odds_b_qualifies": 2.20,
+            }
+        ]
+    )
+
+    workflow = run_prediction_workflow(
+        odds,
+        config=ProjectConfig(enable_margin_method_comparison=False, enable_market_consistent_challenger=False),
+    )
+    report = workflow.match_report.iloc[0]
+
+    assert report["knockout_scoring_mode"] == "unverified"
+    assert "knockout_scoring_unverified" in report["warning_flags"]
+    assert "Knockout scoring mode is unverified" in report["warnings"]
 
 
 def test_final_decision_dashboard_marks_margin_method_not_run_when_disabled() -> None:
@@ -614,7 +659,11 @@ def test_top_ten_ev_decomposition_is_written_to_excel(tmp_path: Path) -> None:
     dashboard_headers = [cell.value for cell in workbook["final_decision_dashboard"][1]]
     assert "market_consistent_top_10_ev_scorelines" in recommendation_headers
     assert "market_consistent_status" in market_consistent_headers
+    assert "market_consistent_optimisation_classification" in market_consistent_headers
     assert "market_consistent_optimisation_message" in market_consistent_headers
+    assert "market_consistent_gradient_norm" in market_consistent_headers
+    assert "market_consistent_max_constraint_error" in market_consistent_headers
+    assert "market_consistent_constraint_count" in market_consistent_headers
     assert "warning_flags" in market_consistent_headers
     assert "market_consistent_top_10_probability_scorelines" in market_consistent_headers
     assert "final_decision_score" in recommendation_headers
@@ -646,6 +695,16 @@ def test_configured_margin_method_changes_active_workflow_probabilities(tmp_path
 
     assert not default["market_a_win"].equals(power["market_a_win"])
     assert power["margin_removal_method"].eq("power").all()
+
+
+def test_configured_shin_margin_method_is_used_by_active_workflow(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(
+        _settings(tmp_path),
+        ProjectConfig(margin_removal_method="shin", enable_margin_method_comparison=False),
+    ).match_report
+
+    assert report["margin_removal_method"].eq("shin").all()
+    assert report["recommended_score"].equals(report["final_live_recommended_score"])
 
 
 def test_extreme_favourite_audit_and_larger_grid_sensitivity_trigger(tmp_path: Path) -> None:
@@ -767,6 +826,8 @@ def test_world_cup_workflow_optionally_uses_correct_score_blend(tmp_path: Path) 
     assert report["outlier_count"].eq(0).all()
     assert report["scoreline_coverage_warning"].str.contains("missing_common_scorelines").all()
     assert report["correct_score_bookmaker_diagnostics"].str.contains("overround=").all()
+    assert report["dixon_coles_rho_source"].eq("market_estimated").all()
+    assert report["dixon_coles_rho_used"].between(-0.20, 0.20).all()
 
 
 def test_world_cup_workflow_optionally_loads_total_goals_ladder(tmp_path: Path) -> None:

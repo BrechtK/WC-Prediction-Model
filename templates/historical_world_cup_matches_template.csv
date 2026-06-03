@@ -1,0 +1,2 @@
+match_id,date,tournament,stage,group,team_a,team_b,actual_score_a,actual_score_b,bookmaker,odds_a_win,odds_draw,odds_b_win,odds_btts_yes,odds_btts_no,odds_over_2_5,odds_under_2_5,correct_score_odds_ref,notes
+WC2022_001,2022-11-20,World Cup 2022,group stage,A,Team A,Team B,0,0,Historical,2.10,3.30,3.60,1.95,1.85,2.00,1.80,,Replace with legally safe historical odds collected locally.

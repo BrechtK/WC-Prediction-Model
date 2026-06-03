@@ -98,6 +98,85 @@ class DixonColesScoreModel(ChallengerScoreModel):
         )
 
 
+@dataclass(frozen=True)
+class DixonColesRhoEstimate:
+    """Estimated Dixon-Coles rho and diagnostics."""
+
+    rho: float
+    source: str
+    fit_error: float
+    warning: str = ""
+
+
+LOW_SCORE_CELLS = ((0, 0), (1, 0), (0, 1), (1, 1))
+
+
+def estimate_dixon_coles_rho_from_market(
+    *,
+    lambda_a: float,
+    lambda_b: float,
+    market_matrix: ScoreProbabilityMatrix | None,
+    max_goals: int,
+    fallback_rho: float = 0.0,
+    rho_min: float = -0.20,
+    rho_max: float = 0.20,
+    grid_size: int = 81,
+    renormalise: bool = True,
+) -> DixonColesRhoEstimate:
+    """Estimate rho by fitting Dixon-Coles low-score cells to market score odds."""
+
+    if market_matrix is None:
+        return DixonColesRhoEstimate(
+            fallback_rho,
+            "fallback",
+            float("nan"),
+            "Dixon-Coles rho not estimated: insufficient correct-score market data.",
+        )
+    if grid_size < 2:
+        raise ValueError("grid_size must be at least two")
+    if rho_min >= rho_max:
+        raise ValueError("rho_min must be below rho_max")
+    if min(market_matrix.probabilities.shape) < 2:
+        return DixonColesRhoEstimate(
+            fallback_rho,
+            "fallback",
+            float("nan"),
+            "Dixon-Coles rho not estimated: insufficient correct-score market data.",
+        )
+    targets = np.array([float(market_matrix.probabilities[cell]) for cell in LOW_SCORE_CELLS], dtype=float)
+    if not np.all(np.isfinite(targets)) or np.any(targets <= 0):
+        return DixonColesRhoEstimate(
+            fallback_rho,
+            "fallback",
+            float("nan"),
+            "Dixon-Coles rho not estimated: insufficient correct-score market data.",
+        )
+
+    best_rho = float(fallback_rho)
+    best_error = float("inf")
+    for rho in np.linspace(rho_min, rho_max, int(grid_size)):
+        try:
+            matrix = DixonColesScoreModel(lambda_a, lambda_b, float(rho), renormalise).predict_score_matrix(
+                Match("_rho_estimation", "diagnostic", "A", "B"),
+                max_goals,
+            )
+        except ValueError:
+            continue
+        values = np.array([float(matrix.probabilities[cell]) for cell in LOW_SCORE_CELLS], dtype=float)
+        error = float(np.mean((values - targets) ** 2))
+        if error < best_error:
+            best_error = error
+            best_rho = float(rho)
+    if not np.isfinite(best_error):
+        return DixonColesRhoEstimate(
+            fallback_rho,
+            "fallback",
+            float("nan"),
+            "Dixon-Coles rho not estimated: no valid rho candidate.",
+        )
+    return DixonColesRhoEstimate(best_rho, "market_estimated", best_error)
+
+
 def build_challenger_score_matrices(
     match: Match,
     max_goals: int,

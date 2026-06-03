@@ -25,6 +25,7 @@ class KnockoutScoringConfig:
     """Configurable interpretation of knockout-stage scoring."""
 
     score_basis: str = "final_before_penalties"
+    knockout_scoring_mode: str = "unverified"
     exact_score_points: int = 6
     goal_difference_points: int = 4
     qualifier_points: int = 10
@@ -32,8 +33,11 @@ class KnockoutScoringConfig:
     additive: bool = True
 
     def __post_init__(self) -> None:
-        if not self.additive:
-            raise ValueError("Non-additive knockout scoring is not implemented. Use additive=True.")
+        valid_modes = {"additive", "hierarchical", "unverified"}
+        if self.knockout_scoring_mode not in valid_modes:
+            raise ValueError(f"knockout_scoring_mode must be one of {sorted(valid_modes)}")
+        if not self.additive and self.knockout_scoring_mode == "additive":
+            raise ValueError("additive=False conflicts with knockout_scoring_mode='additive'")
         valid_bases = {"90min", "120min_if_extra_time", "final_before_penalties"}
         if self.score_basis not in valid_bases:
             raise ValueError(f"score_basis must be one of {sorted(valid_bases)}")
@@ -160,6 +164,10 @@ class ProjectConfig:
     correct_score_outlier_z_threshold: float = 3.0
     min_scorelines_for_blend: int = 10
     dixon_coles_rho: float = 0.0
+    enable_dixon_coles_rho_estimation: bool = True
+    dixon_coles_rho_min: float = -0.20
+    dixon_coles_rho_max: float = 0.20
+    dixon_coles_rho_grid_size: int = 81
     output_dir: Path = Path("output/research")
     calibration_weights: CalibrationWeights = field(default_factory=CalibrationWeights)
     knockout_scoring: KnockoutScoringConfig = field(default_factory=KnockoutScoringConfig)
@@ -199,3 +207,9 @@ class ProjectConfig:
             raise ValueError("min_scorelines_for_blend must be a positive integer")
         if not np.isfinite(self.dixon_coles_rho):
             raise ValueError("dixon_coles_rho must be finite")
+        if not np.isfinite(self.dixon_coles_rho_min) or not np.isfinite(self.dixon_coles_rho_max):
+            raise ValueError("Dixon-Coles rho bounds must be finite")
+        if self.dixon_coles_rho_min >= self.dixon_coles_rho_max:
+            raise ValueError("dixon_coles_rho_min must be below dixon_coles_rho_max")
+        if self.dixon_coles_rho_grid_size < 2:
+            raise ValueError("dixon_coles_rho_grid_size must be at least two")

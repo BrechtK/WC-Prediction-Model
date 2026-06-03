@@ -12,10 +12,10 @@ The live workflow now implements diagnostic comparison for:
 - normalised inverse-odds proportional normalisation;
 - additive removal;
 - power method;
+- Shin method where numerically valid;
 
 Still to evaluate or implement:
 
-- Shin method where feasible;
 - favourite-longshot-bias-adjusted methods where justified.
 
 The comparison sheet reports whether recommendations change across implemented
@@ -59,9 +59,35 @@ matter most when translating strong favourites into scoreline predictions.
 ## Priority 4: Low-Score Correction / Dixon-Coles
 
 The optional Dixon-Coles low-score adjustment for `0-0`, `1-0`, `0-1`, and
-`1-1` is implemented as a diagnostic challenger. Evaluate it against the
-independent-Poisson baseline using realised pool points before considering any
-promotion to the default recommendation.
+`1-1` is implemented as a diagnostic challenger. When correct-score market
+data contains those cells, rho is estimated from market low-score probabilities
+over a bounded grid; otherwise the configured rho is used with a warning.
+Evaluate it against the independent-Poisson baseline using realised pool
+points before considering any promotion to the default recommendation.
+
+## Historical World Cup Backtesting
+
+Use `scripts/run_historical_world_cup_backtest.py` with a local CSV based on
+`templates/historical_world_cup_matches_template.csv` to evaluate 2022 or other
+World Cup data. The harness compares margin-removal methods, the existing
+simple baselines, and EV strategies, and records skipped diagnostics when
+optional correct-score odds are unavailable. Do not commit proprietary or
+scraped odds data; keep real historical datasets local unless they are legally
+safe examples.
+
+Backtesting should answer:
+
+- whether blend weights below `w=1.0` improve realised points;
+- whether Shin or power margin removal changes recommendations usefully;
+- whether market-consistent or Dixon-Coles challenger recommendations add value;
+- whether decision-dashboard manual-review flags identify fragile matches.
+
+## Knockout Scoring Verification
+
+Knockout scoring currently defaults to `unverified`, preserving the existing
+additive calculation while warning that Sporza rules must be confirmed. Use
+`docs/knockout_scoring_verification.md` to compare additive and hierarchical
+examples before changing the config for knockout EV.
 
 ## Priority 5: Strategic Prediction Layer
 

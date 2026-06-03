@@ -12,6 +12,8 @@ from wc_predictor.backtesting import (
     BacktestRunner,
     BacktestSettings,
     FootballDataCSVLoader,
+    HistoricalWorldCupCSVLoader,
+    WorldCupResearchBacktestRunner,
 )
 from wc_predictor.calibration import SINGLE_START_CALIBRATION_POINTS
 from wc_predictor.strategies import PredictionStrategy
@@ -298,3 +300,55 @@ def test_favourite_strength_bucket_summary_aggregates_strategy_points() -> None:
 
 def test_strategy_interface_exists() -> None:
     assert PredictionStrategy.__doc__
+
+
+def test_historical_world_cup_loader_and_research_backtest_run_on_synthetic_data(tmp_path: Path) -> None:
+    history = tmp_path / "world_cup_matches.csv"
+    pd.DataFrame(
+        [
+            {
+                "match_id": "WC1",
+                "date": "2022-11-20",
+                "tournament": "World Cup 2022",
+                "stage": "group stage",
+                "group": "A",
+                "team_a": "Alpha",
+                "team_b": "Beta",
+                "actual_score_a": 2,
+                "actual_score_b": 0,
+                "bookmaker": "Historical",
+                "odds_a_win": 1.80,
+                "odds_draw": 3.60,
+                "odds_b_win": 5.00,
+                "odds_btts_yes": 2.05,
+                "odds_btts_no": 1.75,
+                "odds_over_2_5": 1.95,
+                "odds_under_2_5": 1.85,
+            },
+            {
+                "match_id": "WC2",
+                "date": "2022-11-21",
+                "tournament": "World Cup 2022",
+                "stage": "group stage",
+                "group": "B",
+                "team_a": "Gamma",
+                "team_b": "Delta",
+                "actual_score_a": 1,
+                "actual_score_b": 1,
+                "bookmaker": "Historical",
+                "odds_a_win": 2.40,
+                "odds_draw": 3.10,
+                "odds_b_win": 3.20,
+            },
+        ]
+    ).to_csv(history, index=False)
+
+    loaded = HistoricalWorldCupCSVLoader(history).load()
+    assert loaded.results.loc[0, "team_a_goals_90"] == 2
+
+    report = WorldCupResearchBacktestRunner(HistoricalWorldCupCSVLoader(history)).run(export=False)
+
+    assert not report.summary.empty
+    assert "rank_by_average_points" in report.summary
+    assert not report.predictions.empty
+    assert report.skipped["reason"].astype(str).str.contains("blend-weight validation skipped").any()

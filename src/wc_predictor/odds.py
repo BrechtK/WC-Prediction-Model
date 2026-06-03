@@ -51,6 +51,7 @@ TOTAL_GOALS_OUTPUT_COLUMNS = [
     "fair_over",
     "fair_under",
     "total_goals_overround",
+    "shin_z",
     "line_kind",
     "used_for_calibration",
     "warnings",
@@ -115,6 +116,8 @@ def process_bookmaker_odds(
             output.update(zip(RAW_COLUMNS[market_name], result.raw_probabilities, strict=True))
             output.update(zip(FAIR_COLUMNS[market_name], result.fair_probabilities, strict=True))
             output[f"overround_{market_name}"] = result.overround
+            if result.diagnostics and "shin_z" in result.diagnostics:
+                output[f"{market_name}_shin_z"] = result.diagnostics["shin_z"]
             output["warnings"].extend(result.warnings)
         output["warnings"] = "; ".join(output["warnings"])
         rows.append(output)
@@ -196,6 +199,7 @@ def process_correct_score_odds(
         processed["fair_score_probability"] = fair.fair_probabilities
         processed["market_overround"] = fair.overround
         processed["correct_score_overround"] = fair.overround
+        processed["shin_z"] = (fair.diagnostics or {}).get("shin_z", pd.NA)
         processed["number_of_scorelines"] = len(scorelines)
         processed["common_scoreline_coverage"] = len(scorelines & COMMON_CORRECT_SCORELINES) / len(COMMON_CORRECT_SCORELINES)
         processed["has_other_bucket"] = bool(has_other_bucket)
@@ -210,6 +214,7 @@ def process_correct_score_odds(
                 "fair_score_probability",
                 "market_overround",
                 "correct_score_overround",
+                "shin_z",
                 "number_of_scorelines",
                 "common_scoreline_coverage",
                 "has_other_bucket",
@@ -264,6 +269,7 @@ def process_total_goals_odds(
                 "fair_over": float(fair.fair_probabilities[0]),
                 "fair_under": float(fair.fair_probabilities[1]),
                 "total_goals_overround": fair.overround,
+                "shin_z": (fair.diagnostics or {}).get("shin_z", pd.NA),
                 "line_kind": kind,
                 "used_for_calibration": kind == "half_goal",
                 "warnings": "; ".join(fair.warnings),

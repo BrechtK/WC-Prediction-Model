@@ -132,12 +132,32 @@ Research mode enables margin-method comparison, market-consistent challenger
 diagnostics, and correct-score weight sensitivity. These are for investigation;
 they do not change the default live recommendation by themselves.
 
+Additional research diagnostics include optional Shin margin removal,
+market-estimated Dixon-Coles rho from low correct-score cells, and a historical
+World Cup backtest harness. To run the historical harness, create a legally safe
+local CSV from:
+
+```text
+templates/historical_world_cup_matches_template.csv
+```
+
+Then run:
+
+```powershell
+python scripts/run_historical_world_cup_backtest.py --input input/historical/2022/world_cup_matches.csv
+```
+
+No real historical odds are tracked in the repository. Historical odds quality,
+timing, and coverage matter, so treat results as validation evidence rather
+than proof that a challenger should become the live default.
+
 Longer technical notes live in:
 
 - [docs/mathematical_basis.md](docs/mathematical_basis.md)
 - [docs/model_roadmap.md](docs/model_roadmap.md)
 - [docs/odds_collection_strategy.md](docs/odds_collection_strategy.md)
 - [docs/backtesting.md](docs/backtesting.md)
+- [docs/knockout_scoring_verification.md](docs/knockout_scoring_verification.md)
 
 ## Project Structure
 

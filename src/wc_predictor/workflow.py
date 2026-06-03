@@ -43,7 +43,12 @@ from wc_predictor.optimiser import (
 )
 from wc_predictor.probabilities import ScoreProbabilityMatrix
 from wc_predictor.public_strategy import build_public_strategy
-from wc_predictor.score_models import DixonColesScoreModel, Match, build_challenger_score_matrices
+from wc_predictor.score_models import (
+    DixonColesScoreModel,
+    Match,
+    build_challenger_score_matrices,
+    estimate_dixon_coles_rho_from_market,
+)
 from wc_predictor.utils import favourite_strength_bucket, is_knockout_stage
 
 HIGH_TAIL_MASS_THRESHOLD = 0.01
@@ -956,6 +961,8 @@ def _dashboard_risk_notes(
             or "larger_grid_sensitivity" in flag
             or "stale_odds" in flag
             or "market_consistent_optimisation_failed" in flag
+            or "market_consistent_constraint_fit_poor" in flag
+            or "knockout_scoring_unverified" in flag
         )
     ]
     if severe_flags:
@@ -1431,6 +1438,29 @@ def run_prediction_workflow(
             correct_score_kl_divergence = pd.NA
             has_correct_score_market = False
         matrices[match_id] = score_matrix
+        if config.enable_dixon_coles_rho_estimation:
+            dixon_coles_rho_estimate = estimate_dixon_coles_rho_from_market(
+                lambda_a=calibration.lambda_a,
+                lambda_b=calibration.lambda_b,
+                market_matrix=correct_score_matrices.get(match_id),
+                max_goals=config.max_goals_score_matrix,
+                fallback_rho=config.dixon_coles_rho,
+                rho_min=config.dixon_coles_rho_min,
+                rho_max=config.dixon_coles_rho_max,
+                grid_size=config.dixon_coles_rho_grid_size,
+                renormalise=config.renormalise_score_matrix,
+            )
+        else:
+            dixon_coles_rho_estimate = type(
+                "ConfiguredDixonColesRho",
+                (),
+                {
+                    "rho": config.dixon_coles_rho,
+                    "source": "configured",
+                    "fit_error": pd.NA,
+                    "warning": "",
+                },
+            )()
         match_challenger_matrices = build_challenger_score_matrices(
             Match(match_id, str(row["stage"]), str(row["team_a"]), str(row["team_b"])),
             config.max_goals_score_matrix,
@@ -1438,7 +1468,7 @@ def run_prediction_workflow(
                 DixonColesScoreModel(
                     calibration.lambda_a,
                     calibration.lambda_b,
-                    config.dixon_coles_rho,
+                    float(dixon_coles_rho_estimate.rho),
                     config.renormalise_score_matrix,
                 ),
             ),
@@ -1446,6 +1476,8 @@ def run_prediction_workflow(
         challenger_matrices[match_id] = match_challenger_matrices
         dixon_coles_matrix = match_challenger_matrices["dixon_coles"]
         notes = list(calibration.warnings)
+        if str(getattr(dixon_coles_rho_estimate, "warning", "")):
+            notes.append(str(dixon_coles_rho_estimate.warning))
         if not skipped_total_goals.empty:
             notes.append(
                 "Stored but skipped from default Poisson calibration; used by market-consistent diagnostics: "
@@ -1458,6 +1490,8 @@ def run_prediction_workflow(
         has_btts = pd.notna(row.get("fair_btts_yes"))
         has_qualification_odds = pd.notna(row.get("fair_a_qualifies")) and pd.notna(row.get("fair_b_qualifies"))
         if knockout:
+            if config.knockout_scoring.knockout_scoring_mode == "unverified":
+                notes.append("Knockout scoring mode is unverified; confirm Sporza rules before relying on knockout EV")
             if pd.notna(row.get("fair_a_qualifies")) and pd.notna(row.get("fair_b_qualifies")):
                 qualifier_probabilities = {
                     str(row["team_a"]): float(row["fair_a_qualifies"]),
@@ -1535,9 +1569,19 @@ def run_prediction_workflow(
                     "diagnostics": {
                         "market_consistent_status": "skipped",
                         "market_consistent_skip_reason": skip_note,
+                        "market_consistent_optimisation_classification": "skipped",
                         "market_consistent_optimisation_success": pd.NA,
                         "market_consistent_optimisation_status_code": pd.NA,
                         "market_consistent_optimisation_message": skip_note,
+                        "market_consistent_optimisation_iterations": pd.NA,
+                        "market_consistent_final_objective_value": pd.NA,
+                        "market_consistent_gradient_norm": pd.NA,
+                        "market_consistent_max_constraint_error": pd.NA,
+                        "market_consistent_constraint_count": 0,
+                        "market_consistent_1x2_constraint_count": 0,
+                        "market_consistent_btts_constraint_count": 0,
+                        "market_consistent_total_goals_constraint_count": 0,
+                        "market_consistent_correct_score_constraint_count": 0,
                         "market_consistent_kl_divergence_vs_prior": pd.NA,
                         "market_consistent_1x2_fit_error": pd.NA,
                         "market_consistent_btts_fit_error": pd.NA,
@@ -1646,12 +1690,20 @@ def run_prediction_workflow(
         market_consistent_status = str(
             market_consistent_result.diagnostics.get("market_consistent_status", "")
         )
-        market_consistent_success = market_consistent_result.diagnostics.get(
-            "market_consistent_optimisation_success"
+        market_consistent_classification = str(
+            market_consistent_result.diagnostics.get("market_consistent_optimisation_classification", "")
         )
         market_consistent_warning_flags = []
-        if market_consistent_status not in {"", "ok", "skipped"} or market_consistent_success is False:
-            market_consistent_warning_flags.append("market_consistent_optimisation_failed")
+        if market_consistent_classification == "optimisation_failed_severe":
+            market_consistent_warning_flags.extend(
+                ["market_consistent_optimisation_failed", "market_consistent_optimisation_failed_severe"]
+            )
+        elif market_consistent_classification == "optimisation_not_fully_converged_but_fit_acceptable":
+            market_consistent_warning_flags.append(
+                "market_consistent_optimisation_not_fully_converged_but_fit_acceptable"
+            )
+        elif market_consistent_classification == "constraint_fit_poor" or market_consistent_status == "poor_fit":
+            market_consistent_warning_flags.append("market_consistent_constraint_fit_poor")
         normal_grid_tail_mass = poisson_matrix.tail_probability
         extreme_favourite_audit_triggered = (
             favourite_probability > EXTREME_FAVOURITE_PROBABILITY_THRESHOLD
@@ -1761,6 +1813,12 @@ def run_prediction_workflow(
             high_score_warning_flags.append("larger_grid_changes_recommendation")
         if larger_grid_sensitivity["larger_grid_differs_from_live_recommendation"] is True:
             high_score_warning_flags.append("larger_grid_sensitivity")
+        knockout_warning_flags = []
+        if knockout and config.knockout_scoring.knockout_scoring_mode == "unverified":
+            knockout_warning_flags.append("knockout_scoring_unverified")
+        dixon_coles_warning_flags = []
+        if str(getattr(dixon_coles_rho_estimate, "warning", "")):
+            dixon_coles_warning_flags.append("dixon_coles_rho_not_estimated")
         extra_warning_flags = [
             str(flag).strip()
             for flag in extra_warning_flags_by_match.get(match_id, ())
@@ -1773,16 +1831,28 @@ def run_prediction_workflow(
                     warning_flags,
                     *btts_warning_flags,
                     *high_score_warning_flags,
+                    *knockout_warning_flags,
                     *market_consistent_warning_flags,
+                    *dixon_coles_warning_flags,
                     *extra_warning_flags,
                 ],
             )
         )
         if market_consistent_warning_flags:
-            notes.append(
-                "Market-consistent optimiser did not converge: "
-                + str(market_consistent_result.diagnostics.get("market_consistent_optimisation_message", ""))
-            )
+            if "market_consistent_optimisation_not_fully_converged_but_fit_acceptable" in market_consistent_warning_flags:
+                notes.append(
+                    "Market-consistent optimiser did not fully converge, but constraint fit is acceptable: "
+                    + str(market_consistent_result.diagnostics.get("market_consistent_optimisation_message", ""))
+                )
+            elif "market_consistent_constraint_fit_poor" in market_consistent_warning_flags:
+                notes.append(
+                    "Market-consistent optimiser converged with poor constraint fit; inspect market consistency diagnostics"
+                )
+            else:
+                notes.append(
+                    "Market-consistent optimiser did not converge: "
+                    + str(market_consistent_result.diagnostics.get("market_consistent_optimisation_message", ""))
+                )
         plausible_decision_layer = _plausible_alternative_decision_layer(
             top_10_ev_decomposition_records,
             config=config,
@@ -1857,6 +1927,7 @@ def run_prediction_workflow(
                 "market_fair_btts_no_probability": market_btts_no,
                 "btts_fit_error": btts_fit_error,
                 "has_qualification_odds": has_qualification_odds,
+                "knockout_scoring_mode": config.knockout_scoring.knockout_scoring_mode,
                 "has_correct_score_market": has_correct_score_market,
                 "correct_score_poisson_weight": config.correct_score_poisson_weight,
                 "selected_blend_weight": config.correct_score_poisson_weight,
@@ -1897,7 +1968,10 @@ def run_prediction_workflow(
                 "final_live_ev_gap_best_vs_second": ev_gap_best_vs_second,
                 "model_recommendations_agree": model_recommendations_agree,
                 "model_disagreement_warning": model_disagreement_warning,
-                "dixon_coles_rho": config.dixon_coles_rho,
+                "dixon_coles_rho": float(dixon_coles_rho_estimate.rho),
+                "dixon_coles_rho_used": float(dixon_coles_rho_estimate.rho),
+                "dixon_coles_rho_source": str(dixon_coles_rho_estimate.source),
+                "dixon_coles_rho_fit_error": dixon_coles_rho_estimate.fit_error,
                 "dixon_coles_recommended_score": f"{dixon_coles_recommended_score[0]}-{dixon_coles_recommended_score[1]}",
                 "dixon_coles_best_expected_points": dixon_coles_recommendation.best.expected_points,
                 "dixon_coles_ev_gap_best_vs_second": _ev_gap_best_vs_second(dixon_coles_recommendation),

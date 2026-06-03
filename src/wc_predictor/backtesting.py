@@ -9,7 +9,7 @@ and the private-pool group scoring rule.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import monotonic
 from typing import Protocol
@@ -181,6 +181,56 @@ class FootballDataCSVLoader:
 
 
 @dataclass(frozen=True)
+class HistoricalWorldCupCSVLoader:
+    """Load clean historical World Cup rows from the project template format."""
+
+    path: str | Path
+
+    def load(self) -> HistoricalBacktestData:
+        source = load_tabular_data(self.path)
+        required = {
+            "match_id",
+            "date",
+            "stage",
+            "team_a",
+            "team_b",
+            "actual_score_a",
+            "actual_score_b",
+            "odds_a_win",
+            "odds_draw",
+            "odds_b_win",
+        }
+        missing = required - set(source.columns)
+        if missing:
+            raise NonFootballDataCSVError(f"Historical World Cup data is missing required columns: {sorted(missing)}")
+        optional_columns = [column for column in ("group", "tournament", "correct_score_odds_ref") if column in source]
+        matches = source[
+            ["match_id", "date", "stage", *optional_columns, "team_a", "team_b"]
+        ].copy()
+        if "group" not in matches:
+            matches["group"] = ""
+        results = source[["match_id", "actual_score_a", "actual_score_b"]].rename(
+            columns={"actual_score_a": "team_a_goals_90", "actual_score_b": "team_b_goals_90"}
+        )
+        odds_rows: list[dict[str, object]] = []
+        for _, row in source.iterrows():
+            odds_rows.append(
+                {
+                    "match_id": row["match_id"],
+                    "bookmaker": row.get("bookmaker", "Historical"),
+                    "odds_a_win": row["odds_a_win"],
+                    "odds_draw": row["odds_draw"],
+                    "odds_b_win": row["odds_b_win"],
+                    "odds_over_2_5": row.get("odds_over_2_5", np.nan),
+                    "odds_under_2_5": row.get("odds_under_2_5", np.nan),
+                    "odds_btts_yes": row.get("odds_btts_yes", np.nan),
+                    "odds_btts_no": row.get("odds_btts_no", np.nan),
+                }
+            )
+        return HistoricalBacktestData(matches, pd.DataFrame(odds_rows), results)
+
+
+@dataclass(frozen=True)
 class BacktestSettings:
     """Settings for the first group-stage historical backtest."""
 
@@ -202,6 +252,111 @@ class BacktestReport:
         path = Path(path)
         ensure_parent_directory(path)
         self.summary.to_csv(path, index=False)
+
+
+@dataclass(frozen=True)
+class WorldCupResearchBacktestSettings:
+    """Output paths and diagnostic grids for historical World Cup backtests."""
+
+    summary_output_path: Path = Path("output/research/world_cup_backtest_summary.csv")
+    predictions_output_path: Path = Path("output/research/world_cup_backtest_predictions.csv")
+    skipped_output_path: Path = Path("output/research/world_cup_backtest_skipped.csv")
+    excel_output_path: Path = Path("output/research/world_cup_backtest.xlsx")
+    blend_weights: tuple[float, ...] = (0.0, 0.25, 0.50, 0.75, 0.85, 1.0)
+    margin_methods: tuple[str, ...] = ("normalised_inverse_odds", "power", "shin")
+
+
+@dataclass(frozen=True)
+class WorldCupResearchBacktestReport:
+    """World Cup research backtest outputs with strategy ranks and skip diagnostics."""
+
+    summary: pd.DataFrame
+    predictions: pd.DataFrame
+    skipped: pd.DataFrame
+
+    def export(self, settings: WorldCupResearchBacktestSettings) -> None:
+        for path in (
+            settings.summary_output_path,
+            settings.predictions_output_path,
+            settings.skipped_output_path,
+            settings.excel_output_path,
+        ):
+            ensure_parent_directory(path)
+        self.summary.to_csv(settings.summary_output_path, index=False)
+        self.predictions.to_csv(settings.predictions_output_path, index=False)
+        self.skipped.to_csv(settings.skipped_output_path, index=False)
+        with pd.ExcelWriter(settings.excel_output_path) as writer:
+            self.summary.to_excel(writer, index=False, sheet_name="summary")
+            self.predictions.to_excel(writer, index=False, sheet_name="predictions")
+            self.skipped.to_excel(writer, index=False, sheet_name="skipped")
+
+
+class WorldCupResearchBacktestRunner:
+    """Compare diagnostic historical World Cup strategies without requiring real local data."""
+
+    def __init__(
+        self,
+        loader: HistoricalOddsLoader,
+        config: ProjectConfig | None = None,
+        settings: WorldCupResearchBacktestSettings | None = None,
+        fast: bool = True,
+    ) -> None:
+        self.loader = loader
+        self.config = config or ProjectConfig(enable_margin_method_comparison=False)
+        self.settings = settings or WorldCupResearchBacktestSettings()
+        self.fast = fast
+
+    def run(self, export: bool = True) -> WorldCupResearchBacktestReport:
+        summary_frames: list[pd.DataFrame] = []
+        prediction_frames: list[pd.DataFrame] = []
+        skipped_frames: list[pd.DataFrame] = []
+        for method in self.settings.margin_methods:
+            method_config = replace(self.config, margin_removal_method=method)
+            try:
+                report = BacktestRunner(self.loader, config=method_config, fast=self.fast).run(export=False)
+            except ValueError as error:
+                skipped_frames.append(
+                    pd.DataFrame([{"config_name": f"margin_{method}", "strategy": "all", "reason": str(error)}])
+                )
+                continue
+            summary = report.summary.copy()
+            summary["config_name"] = f"margin_{method}"
+            summary["margin_removal_method"] = method
+            summary_frames.append(summary)
+            predictions = report.predictions.copy()
+            predictions["config_name"] = f"margin_{method}"
+            prediction_frames.append(predictions)
+            if not report.skipped.empty:
+                skipped = report.skipped.copy()
+                skipped["config_name"] = f"margin_{method}"
+                skipped_frames.append(skipped)
+
+        loaded = self.loader.load()
+        has_correct_score_refs = "correct_score_odds_ref" in loaded.matches and loaded.matches["correct_score_odds_ref"].notna().any()
+        if not has_correct_score_refs:
+            skipped_frames.append(
+                pd.DataFrame(
+                    [
+                        {
+                            "config_name": f"correct_score_blend_w={weight:g}",
+                            "strategy": "correct_score_blend",
+                            "reason": "missing optional correct-score odds; blend-weight validation skipped",
+                        }
+                        for weight in self.settings.blend_weights
+                    ]
+                )
+            )
+        summary_all = pd.concat(summary_frames, ignore_index=True) if summary_frames else pd.DataFrame()
+        if not summary_all.empty:
+            summary_all["rank_by_average_points"] = (
+                summary_all["average_realised_points"].rank(method="min", ascending=False).astype("Int64")
+            )
+        predictions_all = pd.concat(prediction_frames, ignore_index=True) if prediction_frames else pd.DataFrame()
+        skipped_all = pd.concat(skipped_frames, ignore_index=True) if skipped_frames else pd.DataFrame()
+        report = WorldCupResearchBacktestReport(summary_all, predictions_all, skipped_all)
+        if export:
+            report.export(self.settings)
+        return report
 
 
 @dataclass(frozen=True)

@@ -52,7 +52,7 @@ RUN_MODE = "all_available"
 # "all_available"  -> run every odds file currently in input/odds/.
 
 # DATE accepts 14-6, 14/6, 14-06, or 2026-06-14.
-DATE = "14-6"
+DATE = "14/6"
 # GAME_NUMBER comes from RUN_MODE = "list_date". It is 1 for the first listed game.
 GAME_NUMBER = 3
 # MATCH_ID is optional. Set it only if you already know the ID, for example "M008".
@@ -96,6 +96,7 @@ DIXON_COLES_RHO = 0.0
 
 STRICT_INPUT_VALIDATION = False
 STALE_ODDS_WARNING_HOURS = 24
+STALE_ODDS_AFFECTS_MANUAL_REVIEW = True
 
 ODDS_TEMPLATE_PATH = Path("templates/odds_input_template.txt")
 DEPRECATED_INPUT_FOLDERS = (
@@ -118,7 +119,7 @@ NO_ODDS_INPUT_MESSAGE = (
 )
 VALID_RUN_MODES = {"all_available", "date", "single_match", "list_date"}
 VALID_STRATEGY_MODES = ("ev", "balanced", "public-ranking", "aggressive-public-ranking")
-VALID_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive")
+VALID_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive", "shin")
 VALID_RUN_PROFILES = ("live", "research")
 VALID_TERMINAL_VERBOSITIES = ("compact", "normal", "debug")
 
@@ -436,6 +437,8 @@ def main() -> None:
     parser.add_argument("--skip-schedule-parse", action="store_true")
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--stale-odds-warning-hours", type=float)
+    parser.add_argument("--stale-odds-affects-manual-review", action="store_true")
+    parser.add_argument("--no-stale-odds-affects-manual-review", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -491,6 +494,11 @@ def main() -> None:
             if args.stale_odds_warning_hours is not None
             else STALE_ODDS_WARNING_HOURS
         )
+        stale_odds_affects_manual_review = STALE_ODDS_AFFECTS_MANUAL_REVIEW
+        if args.stale_odds_affects_manual_review:
+            stale_odds_affects_manual_review = True
+        if args.no_stale_odds_affects_manual_review:
+            stale_odds_affects_manual_review = False
 
         schedule_path = Path(args.schedule) if args.schedule else INPUT_SCHEDULE_PATH
         combined_input_folder = (
@@ -612,7 +620,7 @@ def main() -> None:
                 skip_schedule_parse=True,
                 write_detailed_excel=WRITE_DETAILED_EXCEL,
                 initial_runtime_timings=initial_runtime_timings,
-                extra_warning_flags_by_match=stale_warning_flags,
+                extra_warning_flags_by_match=stale_warning_flags if stale_odds_affects_manual_review else {},
             ),
             ProjectConfig(
                 correct_score_poisson_weight=correct_score_poisson_weight,
