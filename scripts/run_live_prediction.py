@@ -38,7 +38,7 @@ from wc_predictor.paths import (
 # USER SETTINGS
 # ============================================================
 
-RUN_MODE = "date"
+RUN_MODE = "all_available"
 # Options:
 # "all_available"  -> process all odds files in input/odds/
 # "date"           -> process every match on DATE

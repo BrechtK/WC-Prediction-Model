@@ -119,6 +119,19 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "dixon_coles_ev_gap_best_vs_second",
         "dixon_coles_top_5_ev_predictions",
         "dixon_coles_changes_recommendation",
+        "market_consistent_recommended_score",
+        "market_consistent_best_expected_points",
+        "market_consistent_ev_gap_best_vs_second",
+        "market_consistent_top_10_ev_scorelines",
+        "market_consistent_top_10_probability_scorelines",
+        "market_consistent_kl_divergence_vs_prior",
+        "market_consistent_1x2_fit_error",
+        "market_consistent_btts_fit_error",
+        "market_consistent_total_goals_fit_error",
+        "market_consistent_correct_score_fit_error",
+        "market_consistent_asian_totals_used",
+        "market_consistent_differs_from_default",
+        "market_consistent_asian_totals_shift_recommendation",
         "estimated_most_crowded_public_score",
         "estimated_most_crowded_public_pick_share",
         "public_strategy_score",
@@ -176,6 +189,7 @@ def test_world_cup_workflow_exports_real_tournament_recommendations(tmp_path: Pa
         "ev_favourite_5_0_larger_grid",
     }.issubset(workflow.match_report.columns)
     assert workflow.match_report["recommended_score"].equals(workflow.match_report["final_live_recommended_score"])
+    assert "market_consistent_matrix" in workflow.challenger_score_matrices["WC001"]
     assert workflow.match_report["baseline_poisson_recommended_score"].equals(
         workflow.match_report["dixon_coles_recommended_score"]
     )
@@ -310,8 +324,12 @@ def test_top_ten_ev_decomposition_is_written_to_excel(tmp_path: Path) -> None:
     assert "manual_review_flag" in recommendation_headers
     assert "decision_note" in recommendation_headers
     assert "ev_decomposition" in workbook.sheetnames
+    assert "market_consistent" in workbook.sheetnames
     assert "predicted_score" in diagnostics_headers
     assert "exact_score_component" in diagnostics_headers
+    market_consistent_headers = [cell.value for cell in workbook["market_consistent"][1]]
+    assert "market_consistent_top_10_ev_scorelines" in recommendation_headers
+    assert "market_consistent_top_10_probability_scorelines" in market_consistent_headers
     assert workbook["ev_decomposition"].max_row == 21
 
 

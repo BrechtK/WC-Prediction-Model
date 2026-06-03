@@ -20,6 +20,7 @@ from wc_predictor.correct_scores import (
     summarise_correct_score_coverage,
 )
 from wc_predictor.friends import analyse_friend_predictions
+from wc_predictor.market_consistent import fit_market_consistent_matrix
 from wc_predictor.odds import (
     aggregate_bookmaker_probabilities,
     aggregate_total_goals_probabilities,
@@ -534,6 +535,36 @@ def _extreme_favourite_audit(
     }
 
 
+def _market_consistent_high_score_comparison(
+    *,
+    poisson_matrix: ScoreProbabilityMatrix,
+    market_consistent_matrix: ScoreProbabilityMatrix,
+    poisson_recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    market_consistent_recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    qualifier_probabilities: dict[str, float] | None,
+    config: ProjectConfig,
+    favourite_is_team_a: bool,
+) -> dict[str, object]:
+    watched_scores = ((3, 0), (4, 0), (5, 0)) if favourite_is_team_a else ((0, 3), (0, 4), (0, 5))
+    comparison: dict[str, object] = {}
+    for favourite_goals, score in zip((3, 4, 5), watched_scores, strict=True):
+        comparison[f"market_consistent_poisson_ev_favourite_{favourite_goals}_0"] = _candidate_ev(
+            poisson_matrix,
+            score,
+            poisson_recommendation,
+            qualifier_probabilities,
+            config,
+        )
+        comparison[f"market_consistent_matrix_ev_favourite_{favourite_goals}_0"] = _candidate_ev(
+            market_consistent_matrix,
+            score,
+            market_consistent_recommendation,
+            qualifier_probabilities,
+            config,
+        )
+    return comparison
+
+
 def _optimise_score_matrix(
     matrix: ScoreProbabilityMatrix,
     knockout: bool,
@@ -871,7 +902,7 @@ def run_prediction_workflow(
         notes = list(calibration.warnings)
         if not skipped_total_goals.empty:
             notes.append(
-                "Stored but skipped Asian total-goals calibration lines pending push/half-stake settlement support: "
+                "Stored but skipped from default Poisson calibration; used by market-consistent diagnostics: "
                 + _format_total_goals_lines(skipped_total_goals)
             )
         if correct_score_blend_note:
@@ -900,6 +931,25 @@ def run_prediction_workflow(
         correct_score_blended_recommendation = recommendation
         dixon_coles_recommendation = _optimise_score_matrix(
             dixon_coles_matrix,
+            knockout,
+            qualifier_probabilities,
+            config,
+        )
+        market_consistent_result = fit_market_consistent_matrix(
+            poisson_matrix,
+            {
+                "a_win": targets.a_win,
+                "draw": targets.draw,
+                "b_win": targets.b_win,
+                "btts_yes": _optional_probability(row, "fair_btts_yes"),
+            },
+            total_goals=match_total_goals,
+            correct_score_matrix=correct_score_matrices.get(match_id),
+        )
+        market_consistent_matrix = market_consistent_result.matrix
+        match_challenger_matrices["market_consistent_matrix"] = market_consistent_matrix
+        market_consistent_recommendation = _optimise_score_matrix(
+            market_consistent_matrix,
             knockout,
             qualifier_probabilities,
             config,
@@ -945,6 +995,15 @@ def run_prediction_workflow(
         correct_score_blended_recommended_score = correct_score_blended_recommendation.best.predicted_score
         final_live_recommended_score = recommendation.best.predicted_score
         dixon_coles_recommended_score = dixon_coles_recommendation.best.predicted_score
+        market_consistent_recommended_score = market_consistent_recommendation.best.predicted_score
+        market_consistent_differs_from_default = market_consistent_recommended_score != final_live_recommended_score
+        market_consistent_asian_totals_used = str(
+            market_consistent_result.diagnostics.get("market_consistent_asian_totals_used", "")
+        )
+        market_consistent_asian_totals_shift_recommendation = (
+            bool(market_consistent_asian_totals_used)
+            and market_consistent_recommended_score != baseline_poisson_recommended_score
+        )
         score_audit = _score_matrix_audit(score_matrix)
         market_btts_yes = row.get("fair_btts_yes", pd.NA)
         market_btts_no = row.get("fair_btts_no", pd.NA)
@@ -962,12 +1021,36 @@ def run_prediction_workflow(
         )
         ev_decomposition_json = json.dumps(ev_decomposition_records)
         top_10_ev_decomposition_json = json.dumps(top_10_ev_decomposition_records)
+        market_consistent_top_10_evaluations = _top_ev_evaluations(
+            market_consistent_matrix,
+            knockout,
+            qualifier_probabilities,
+            config,
+            10,
+        )
+        market_consistent_top_10_ev_decomposition_records = _ev_decomposition_records_from_evaluations(
+            match_id,
+            market_consistent_top_10_evaluations,
+            config,
+        )
+        market_consistent_top_10_ev_decomposition_json = json.dumps(
+            market_consistent_top_10_ev_decomposition_records
+        )
         normal_grid_tail_mass = poisson_matrix.tail_probability
         extreme_favourite_audit_triggered = (
             favourite_probability > EXTREME_FAVOURITE_PROBABILITY_THRESHOLD
             or normal_grid_tail_mass > HIGH_TAIL_MASS_THRESHOLD
         )
         favourite_is_team_a = targets.a_win >= targets.b_win
+        market_consistent_high_score_comparison = _market_consistent_high_score_comparison(
+            poisson_matrix=poisson_matrix,
+            market_consistent_matrix=market_consistent_matrix,
+            poisson_recommendation=baseline_recommendation,
+            market_consistent_recommendation=market_consistent_recommendation,
+            qualifier_probabilities=qualifier_probabilities,
+            config=config,
+            favourite_is_team_a=favourite_is_team_a,
+        )
         if extreme_favourite_audit_triggered:
             extreme_audit = _extreme_favourite_audit(
                 matrix=score_matrix,
@@ -1169,6 +1252,23 @@ def run_prediction_workflow(
                 "dixon_coles_ev_gap_best_vs_second": _ev_gap_best_vs_second(dixon_coles_recommendation),
                 "dixon_coles_top_5_ev_predictions": _format_top_ev_predictions(dixon_coles_recommendation),
                 "dixon_coles_changes_recommendation": dixon_coles_recommended_score != final_live_recommended_score,
+                "market_consistent_recommended_score": _score_label(market_consistent_recommended_score),
+                "market_consistent_best_expected_points": market_consistent_recommendation.best.expected_points,
+                "market_consistent_ev_gap_best_vs_second": _ev_gap_best_vs_second(market_consistent_recommendation),
+                "market_consistent_top_10_ev_scorelines": _format_evaluations(
+                    market_consistent_top_10_evaluations
+                ),
+                "market_consistent_top_10_ev_decomposition": _format_ev_decomposition(
+                    market_consistent_top_10_ev_decomposition_records
+                ),
+                "market_consistent_top_10_ev_decomposition_json": market_consistent_top_10_ev_decomposition_json,
+                "market_consistent_top_10_probability_scorelines": format_top_scorelines(market_consistent_matrix),
+                **market_consistent_result.diagnostics,
+                "market_consistent_differs_from_default": "yes" if market_consistent_differs_from_default else "no",
+                "market_consistent_asian_totals_shift_recommendation": (
+                    "yes" if market_consistent_asian_totals_shift_recommendation else "no"
+                ),
+                **market_consistent_high_score_comparison,
                 "exact_score_probability": recommendation.best.exact_score_probability,
                 "correct_goal_difference_probability": recommendation.best.correct_goal_difference_probability,
                 "correct_result_probability": getattr(recommendation.best, "correct_result_probability", pd.NA),

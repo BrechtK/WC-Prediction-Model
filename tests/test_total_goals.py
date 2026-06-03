@@ -101,7 +101,7 @@ def test_world_cup_workflow_uses_all_half_goal_lines_and_reports_skipped_asian_l
     assert "3.5: market_over=" in report["total_goals_line_diagnostics"]
     assert "model_over=" in report["total_goals_line_diagnostics"]
     assert "error=" in report["total_goals_line_diagnostics"]
-    assert "pending push/half-stake settlement support" in report["warnings"]
+    assert "skipped from default Poisson calibration" in report["warnings"]
 
 
 def test_world_cup_workflow_preserves_legacy_two_point_five_only_path() -> None:

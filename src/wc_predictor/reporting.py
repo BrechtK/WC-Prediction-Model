@@ -523,6 +523,38 @@ def _high_score_diagnostics_sheet(frame: pd.DataFrame) -> pd.DataFrame:
     return diagnostics[[column for column in columns if column in diagnostics]]
 
 
+def _market_consistent_diagnostics_sheet(frame: pd.DataFrame) -> pd.DataFrame:
+    if "market_consistent_recommended_score" not in frame:
+        return pd.DataFrame()
+    columns = [
+        "match_id",
+        "team_a",
+        "team_b",
+        "recommended_score",
+        "market_consistent_recommended_score",
+        "market_consistent_differs_from_default",
+        "market_consistent_best_expected_points",
+        "market_consistent_ev_gap_best_vs_second",
+        "market_consistent_kl_divergence_vs_prior",
+        "market_consistent_1x2_fit_error",
+        "market_consistent_btts_fit_error",
+        "market_consistent_total_goals_fit_error",
+        "market_consistent_correct_score_fit_error",
+        "market_consistent_asian_totals_used",
+        "market_consistent_asian_totals_shift_recommendation",
+        "market_consistent_top_10_ev_scorelines",
+        "market_consistent_top_10_ev_decomposition",
+        "market_consistent_top_10_probability_scorelines",
+        "market_consistent_poisson_ev_favourite_3_0",
+        "market_consistent_poisson_ev_favourite_4_0",
+        "market_consistent_poisson_ev_favourite_5_0",
+        "market_consistent_matrix_ev_favourite_3_0",
+        "market_consistent_matrix_ev_favourite_4_0",
+        "market_consistent_matrix_ev_favourite_5_0",
+    ]
+    return frame[[column for column in columns if column in frame]].copy()
+
+
 def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path) -> None:
     """Export readable real-tournament recommendations with Excel formatting."""
 
@@ -648,6 +680,26 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "dixon_coles_ev_gap_best_vs_second",
         "dixon_coles_top_5_ev_predictions",
         "dixon_coles_changes_recommendation",
+        "market_consistent_recommended_score",
+        "market_consistent_best_expected_points",
+        "market_consistent_ev_gap_best_vs_second",
+        "market_consistent_differs_from_default",
+        "market_consistent_kl_divergence_vs_prior",
+        "market_consistent_1x2_fit_error",
+        "market_consistent_btts_fit_error",
+        "market_consistent_total_goals_fit_error",
+        "market_consistent_correct_score_fit_error",
+        "market_consistent_asian_totals_used",
+        "market_consistent_asian_totals_shift_recommendation",
+        "market_consistent_top_10_ev_scorelines",
+        "market_consistent_top_10_ev_decomposition",
+        "market_consistent_top_10_probability_scorelines",
+        "market_consistent_poisson_ev_favourite_3_0",
+        "market_consistent_poisson_ev_favourite_4_0",
+        "market_consistent_poisson_ev_favourite_5_0",
+        "market_consistent_matrix_ev_favourite_3_0",
+        "market_consistent_matrix_ev_favourite_4_0",
+        "market_consistent_matrix_ev_favourite_5_0",
         "estimated_most_crowded_public_score",
         "estimated_most_crowded_public_pick_share",
         "public_strategy_mode",
@@ -708,12 +760,15 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
     display_frame = frame[ordered_columns].rename(columns=aliases)
     ev_decomposition = _ev_decomposition_sheet(frame)
     high_score_diagnostics = _high_score_diagnostics_sheet(frame)
+    market_consistent_diagnostics = _market_consistent_diagnostics_sheet(frame)
     with pd.ExcelWriter(path) as writer:
         display_frame.to_excel(writer, index=False, sheet_name="recommendations")
         if not ev_decomposition.empty:
             ev_decomposition.to_excel(writer, index=False, sheet_name="ev_decomposition")
         if not high_score_diagnostics.empty:
             high_score_diagnostics.to_excel(writer, index=False, sheet_name="high_score_diagnostics")
+        if not market_consistent_diagnostics.empty:
+            market_consistent_diagnostics.to_excel(writer, index=False, sheet_name="market_consistent")
 
     probability_columns = {
         "market_a",
@@ -801,6 +856,17 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "ev_favourite_3_0_larger_grid",
         "ev_favourite_4_0_larger_grid",
         "ev_favourite_5_0_larger_grid",
+        "market_consistent_kl_divergence_vs_prior",
+        "market_consistent_1x2_fit_error",
+        "market_consistent_btts_fit_error",
+        "market_consistent_total_goals_fit_error",
+        "market_consistent_correct_score_fit_error",
+        "market_consistent_poisson_ev_favourite_3_0",
+        "market_consistent_poisson_ev_favourite_4_0",
+        "market_consistent_poisson_ev_favourite_5_0",
+        "market_consistent_matrix_ev_favourite_3_0",
+        "market_consistent_matrix_ev_favourite_4_0",
+        "market_consistent_matrix_ev_favourite_5_0",
     }
     ev_columns = {
         "best_expected_points",
@@ -813,6 +879,8 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "final_live_ev_gap_best_vs_second",
         "dixon_coles_ev_gap_best_vs_second",
         "dixon_coles_best_expected_points",
+        "market_consistent_best_expected_points",
+        "market_consistent_ev_gap_best_vs_second",
         "public_strategy_ev_cost",
     }
     wrapped_columns = {
@@ -844,6 +912,10 @@ def export_world_cup_recommendations_excel(frame: pd.DataFrame, path: str | Path
         "total_goals_line_diagnostics",
         "model_disagreement_warning",
         "dixon_coles_top_5_ev_predictions",
+        "market_consistent_asian_totals_used",
+        "market_consistent_top_10_ev_scorelines",
+        "market_consistent_top_10_ev_decomposition",
+        "market_consistent_top_10_probability_scorelines",
         "public_strategy_reason",
         "friend_strategy_reason",
     }

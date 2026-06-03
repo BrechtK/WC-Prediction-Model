@@ -223,8 +223,6 @@ def process_correct_score_odds(
 def total_goals_line_kind(line: float) -> str:
     """Classify totals lines without silently applying Asian settlement rules."""
 
-    # TODO: add explicit push and quarter-line half-stake settlement formulas
-    # before integer or quarter Asian totals become calibration constraints.
     remainder = float(line) % 1
     if np.isclose(remainder, 0.5):
         return "half_goal"
