@@ -14,7 +14,6 @@ from wc_predictor.correct_score_weight_comparison import (
     DEFAULT_CORRECT_SCORE_WEIGHTS,
     DEFAULT_OUTPUT_PATH as DEFAULT_WEIGHT_COMPARISON_OUTPUT_PATH,
     CorrectScoreWeightComparison,
-    _weight_column,
     compare_correct_score_weights,
     export_correct_score_weight_comparison,
 )
@@ -309,158 +308,25 @@ def parse_live_prediction_inputs(
     )
 
 
-def _format_value(value: object, digits: int = 4) -> str:
-    return f"{float(value):.{digits}f}" if pd.notna(value) else "n/a"
-
-
-def _top_scorelines(value: object, limit: int = 5) -> str:
-    if pd.isna(value) or not str(value).strip():
-        return "none"
-    return "; ".join(str(value).split("; ")[:limit])
-
-
-def _btts_bookmakers(workflow: PredictionWorkflowResult, match_id: str) -> str:
-    rows = workflow.bookmaker_probabilities
-    if "fair_btts_yes" not in rows:
-        return "none"
-    rows = rows[(rows["match_id"].astype(str) == match_id) & rows["fair_btts_yes"].notna()]
-    bookmakers = sorted(set(rows["bookmaker"].astype(str)))
-    return "; ".join(bookmakers) if bookmakers else "none"
-
-
-def _sensitivity_lines(comparison: CorrectScoreWeightComparison | None, match_id: str) -> list[str]:
-    if comparison is None:
-        return ["  Weight sensitivity: not run"]
-    rows = comparison.sensitivity[comparison.sensitivity["match_id"].astype(str) == match_id]
-    if rows.empty:
-        return ["  Weight sensitivity: no correct-score market rows"]
-    row = rows.iloc[0]
-    return [
-        "  Weight sensitivity:",
-        f"    w=1.00: {row[_weight_column(1.00)]}",
-        f"    w=0.85: {row[_weight_column(0.85)]}",
-        f"    w=0.75: {row[_weight_column(0.75)]}",
-        f"    w=0.50: {row[_weight_column(0.50)]}",
-        f"    w=0.00: {row[_weight_column(0.00)]}",
-        f"    stable range around w=0.85: {row['stable_weight_range_around_0_85']}",
-        f"    changes across weights: {row['recommendation_changes']}",
-    ]
-
-
 def format_live_prediction_summary(result: LivePredictionResult) -> str:
     """Render a concise submission-focused live terminal report."""
 
-    sections = ["# Live Prediction Summary"]
-    if not result.schedule_metadata.empty:
-        selected = set(result.workflow.match_report["match_id"].astype(str))
-        schedule = result.schedule_metadata[result.schedule_metadata["match_id"].astype(str).isin(selected)]
-        sections.extend(
-            [
-                "Schedule mapping:",
-                *(f"  {row['match_id']} | {row['team_a']} vs {row['team_b']}" for _, row in schedule.iterrows()),
-            ]
-        )
     final_submissions: list[str] = []
     for _, row in result.workflow.match_report.iterrows():
         match_id = str(row["match_id"])
-        group = str(row["group"]) if pd.notna(row["group"]) and str(row["group"]).strip() else "n/a"
-        qualifier = (
-            str(row["recommended_qualifier"])
-            if pd.notna(row["recommended_qualifier"]) and str(row["recommended_qualifier"]).strip()
-            else "n/a"
-        )
-        warnings = list(result.paste_warnings.get(match_id, ()))
-        warnings.extend(str(row["warning_flags"]).split("; ") if str(row["warning_flags"]).strip() else [])
-        if str(row["correct_score_sparse_warning"]).strip():
-            warnings.append(str(row["correct_score_sparse_warning"]))
-        warnings = list(dict.fromkeys(filter(None, warnings)))
-        sections.append(
-            "\n".join(
-                [
-                    "",
-                    f"Match: {match_id} | {row['team_a']} vs {row['team_b']}",
-                    f"  Date / stage / group: {row['date']} / {row['stage']} / {group}",
-                    "Market data:",
-                    f"  1X2 bookmakers: {row['bookmakers_used'] or 'none'}",
-                    f"  BTTS bookmakers: {_btts_bookmakers(result.workflow, match_id)}",
-                    f"  Total-goals lines available: {row['total_goals_lines_available'] or 'none'}",
-                    f"  Total-goals lines used for calibration: {row['total_goals_lines_used_for_calibration'] or 'none'}",
-                    f"  Correct-score bookmakers used: {row['correct_score_bookmakers_count']}",
-                    f"  Correct-score scorelines: {row['correct_score_scorelines_count']}",
-                    f"  Correct-score aggregation: {row['correct_score_aggregation_method'] or 'none'}",
-                    f"  Average correct-score overround: {_format_value(row['average_correct_score_overround'])}",
-                    f"  Correct-score outliers: {row['outlier_count']}",
-                    "Fair probabilities:",
-                    f"  {row['team_a']} win: {row['market_a_win']:.2%}",
-                    f"  Draw: {row['market_draw']:.2%}",
-                    f"  {row['team_b']} win: {row['market_b_win']:.2%}",
-                    f"  Favourite: {row['favourite_probability']:.2%} ({row['favourite_bucket']})",
-                    "Model fit:",
-                    f"  Lambdas: {row['lambda_a']:.4f} / {row['lambda_b']:.4f}",
-                    f"  Calibration error: {row['calibration_loss']:.6f}",
-                    f"  Total-goals line fit error: {_format_value(row['total_goals_line_fit_error'], 6)}",
-                    f"  Score-matrix tail mass: {row['tail_probability_before_renormalisation']:.4%}",
-                    "Recommendation:",
-                    f"  Recommended score: {row['recommended_score']}",
-                    f"  Recommended qualifier: {qualifier}",
-                    f"  Best expected points: {row['best_expected_points']:.3f}",
-                    f"  Most likely scoreline: {row['most_likely_scoreline']}",
-                    f"  EV-optimal differs from modal: {'yes' if row['ev_optimal_differs_from_most_likely'] else 'no'}",
-                    f"  Top 5 EV scorelines: {row['top_5_ev_predictions']}",
-                    f"  EV gap best vs second-best: {_format_value(row['ev_gap_best_vs_second'], 3)}",
-                    "Model comparison:",
-                    f"  Baseline Poisson score: {row['baseline_poisson_recommended_score']}",
-                    f"  Baseline Poisson EV gap: {_format_value(row['baseline_poisson_ev_gap_best_vs_second'], 3)}",
-                    f"  Correct-score blended score: {row['correct_score_blended_recommended_score']}",
-                    f"  Correct-score blended EV gap: {_format_value(row['correct_score_blended_ev_gap_best_vs_second'], 3)}",
-                    f"  Final live score: {row['final_live_recommended_score']}",
-                    f"  Final live EV gap: {_format_value(row['final_live_ev_gap_best_vs_second'], 3)}",
-                    f"  Recommendations agree: {'yes' if row['model_recommendations_agree'] else 'no'}",
-                    f"  Disagreement warning: {row['model_disagreement_warning'] or 'none'}",
-                    "Dixon-Coles challenger:",
-                    f"  Rho: {row['dixon_coles_rho']:.4f}",
-                    f"  Recommended score: {row['dixon_coles_recommended_score']}",
-                    f"  EV gap best vs second-best: {_format_value(row['dixon_coles_ev_gap_best_vs_second'], 3)}",
-                    f"  Top 5 EV scorelines: {row['dixon_coles_top_5_ev_predictions']}",
-                    f"  Changes final live recommendation: {'yes' if row['dixon_coles_changes_recommendation'] else 'no'}",
-                    "Public-ranking strategy:",
-                    f"  Estimated most crowded public score: {row['estimated_most_crowded_public_score']} "
-                    f"({_format_value(row['estimated_most_crowded_public_pick_share'], 3)})",
-                    f"  Pure EV score: {row['recommended_score']}",
-                    f"  Public strategy score: {row['public_strategy_score']}",
-                    f"  EV cost: {_format_value(row['public_strategy_ev_cost'], 3)}",
-                    f"  Estimated public pick share: {_format_value(row['public_strategy_public_pick_share'], 3)}",
-                    f"  Leverage score: {_format_value(row['public_strategy_leverage_score'], 3)}",
-                    f"  Mode: {row['public_strategy_mode']}",
-                    f"  Reason: {row['public_strategy_reason']}",
-                    f"  Friend strategy score: {row['friend_strategy_score'] or 'n/a'}",
-                    "Correct-score market diagnostics:",
-                    f"  Top 5 market-implied scores: {_top_scorelines(row['correct_score_market_top_10'])}",
-                    f"  Top 5 blended scores: {_top_scorelines(row['correct_score_blended_top_10'])}",
-                    f"  KL divergence market vs Poisson: {_format_value(row['correct_score_kl_divergence'], 6)}",
-                    *_sensitivity_lines(result.weight_comparison, match_id),
-                    "Warnings:",
-                    *(f"  - {warning}" for warning in warnings),
-                    *(["  - none"] if not warnings else []),
-                ]
-            )
-        )
         final_submissions.append(f"{match_id} {row['team_a']} vs {row['team_b']}: {row['recommended_score']}")
 
-    sections.extend(
-        [
-            "",
-            "Final recommended submission:",
-            *final_submissions,
-            "",
-            "Full Excel outputs:",
-            f"- Recommendations: {result.settings.recommendations_xlsx_output_path}",
-            f"- Submission sheet: {result.settings.submission_xlsx_output_path}",
-            (
-                f"- Weight sensitivity: {result.settings.weight_comparison_output_path}"
-                if result.weight_comparison is not None
-                else "- Weight sensitivity: not written"
-            ),
-        ]
-    )
+    sections = [
+        "Final recommended submission:",
+        *final_submissions,
+        "",
+        "Full Excel outputs:",
+        f"- Recommendations: {result.settings.recommendations_xlsx_output_path}",
+        f"- Submission sheet: {result.settings.submission_xlsx_output_path}",
+        (
+            f"- Weight sensitivity: {result.settings.weight_comparison_output_path}"
+            if result.weight_comparison is not None
+            else "- Weight sensitivity: not written"
+        ),
+    ]
     return "\n".join(sections)

@@ -178,16 +178,13 @@ def test_live_runner_processes_all_pastes_writes_outputs_and_prints_submission(t
     assert settings.weight_comparison_output_path.exists()
     assert settings.core_parse_report_path.exists()
     assert settings.correct_score_parse_report_path.exists()
-    assert "# Live Prediction Summary" in summary
-    assert "Model comparison:" in summary
-    assert "Baseline Poisson score:" in summary
-    assert "Correct-score blended score:" in summary
-    assert "Final live score:" in summary
-    assert "Dixon-Coles challenger:" in summary
-    assert "Rho: 0.0000" in summary
-    assert "Top 5 EV scorelines:" in summary
     assert "Final recommended submission:" in summary
     assert "M001 M001 Alpha vs M001 Beta:" in summary
+    assert "Full Excel outputs:" in summary
+    assert f"- Recommendations: {settings.recommendations_xlsx_output_path}" in summary
+    assert "Model comparison:" not in summary
+    assert "Dixon-Coles challenger:" not in summary
+    assert "Market data:" not in summary
 
 
 def test_live_runner_fails_clearly_without_required_one_x_two_paste(tmp_path: Path) -> None:
@@ -208,7 +205,7 @@ def test_live_runner_warns_and_continues_without_btts(tmp_path: Path) -> None:
 
     assert "missing_optional_paste:btts" in result.paste_warnings["M001"]
     assert "no_btts_rows_parsed" in result.paste_warnings["M001"]
-    assert "BTTS bookmakers: none" in format_live_prediction_summary(result)
+    assert "BTTS bookmakers:" not in format_live_prediction_summary(result)
 
 
 def test_live_runner_warns_and_continues_without_correct_scores(tmp_path: Path) -> None:
@@ -349,8 +346,8 @@ def test_live_runner_script_uses_schedule_mapping_for_combined_paste(
     output = capsys.readouterr().out
     parsed_odds = pd.read_csv(tmp_path / "cache/parsed/core_odds.csv")
     assert "Schedule Paste Parse" in output
-    assert "Schedule mapping:" in output
-    assert "M001 | Schedule Alpha vs Schedule Beta" in output
+    assert "Schedule mapping:" not in output
+    assert "M001 Schedule Alpha vs Schedule Beta:" in output
     assert parsed_odds["team_a"].eq("Schedule Alpha").all()
     assert parsed_odds["team_b"].eq("Schedule Beta").all()
 
@@ -389,7 +386,7 @@ def test_live_runner_script_uses_clean_input_output_and_cache_structure(
     runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
     output = capsys.readouterr().out
-    assert "M001 | Schedule Alpha vs Schedule Beta" in output
+    assert "M001 Schedule Alpha vs Schedule Beta:" in output
     assert (tmp_path / "cache/split_pastes/M001_1x2.txt").exists()
     assert stale_split.read_text(encoding="utf-8") != "stale cache"
     assert (tmp_path / "cache/parsed/core_odds.csv").exists()
