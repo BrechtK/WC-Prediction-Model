@@ -10,6 +10,8 @@ logic, and writes a submission sheet plus a detailed diagnostics workbook.
 The default live recommendation remains the existing pure-EV model. Research
 diagnostics can challenge or explain a pick, but they do not silently change the
 default submitted score.
+The live margin-removal default is `normalised_inverse_odds`; Shin remains
+available as an explicit research diagnostic.
 
 ## Quick Start / Matchday Use
 
@@ -73,7 +75,10 @@ Live schedule and odds files are ignored by Git. Keep real tournament inputs in
 Asian handicap is optional. When supplied, it is used by the
 market-consistent challenger and diagnostics to improve goal-difference and
 blowout-tail information; it does not override the default EV recommendation
-automatically. The market roles are:
+automatically. The full ladder is parsed for diagnostics, while only a stable
+near-money subset is used as market-consistent constraints. Orientation
+warnings are diagnostic checks against reversed pasted team order. The market
+roles are:
 
 | Market | Main scoring information |
 | --- | --- |
@@ -171,6 +176,9 @@ python scripts/run_historical_world_cup_backtest.py --input input/historical/202
 No real historical odds are tracked in the repository. Historical odds quality,
 timing, and coverage matter, so treat results as validation evidence rather
 than proof that a challenger should become the live default.
+Shin can fail on sparse, low-overround, or unusually high-overround markets;
+live processing falls back to `normalised_inverse_odds` for that market and
+records a warning rather than trusting invalid probabilities.
 
 Longer technical notes live in:
 

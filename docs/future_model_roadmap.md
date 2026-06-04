@@ -1,10 +1,17 @@
 # Future Model Roadmap
 
+This is the compact long-horizon roadmap. The active detailed roadmap is
+`docs/model_roadmap.md`; keep both files consistent when modelling assumptions
+change.
+
 ## Version 1
 
 Use margin-adjusted bookmaker odds, aggregate bookmakers, calibrate an
 independent-Poisson score distribution, optimise private-pool expected points,
-and track friend submissions and standings.
+and track friend submissions and standings. Live margin removal defaults to
+`normalised_inverse_odds`; Shin is optional research diagnostics with safe
+fallback warnings. Group-stage scoring assumes the central `10/7/5/1` config
+unless confirmed rules differ.
 
 ## Version 1.5
 
@@ -20,7 +27,9 @@ interface.
 ## Version 2.5
 
 Evaluate market/model blending at the probability-distribution or expected-goals
-level.
+level. Asian handicap ladders remain diagnostic inputs: parse broadly, constrain
+only stable near-money lines, and treat orientation warnings as paste-quality
+diagnostics.
 
 ## Version 3
 

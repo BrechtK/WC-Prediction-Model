@@ -21,6 +21,32 @@ class CalibrationWeights:
 
 
 @dataclass(frozen=True)
+class GroupScoringConfig:
+    """Single source of truth for group-stage scoring."""
+
+    exact_score_points: int = 10
+    goal_difference_points: int = 7
+    result_points: int = 5
+    participation_points: int = 1
+
+    @property
+    def exact_increment(self) -> int:
+        return self.exact_score_points - self.goal_difference_points
+
+    @property
+    def goal_difference_increment(self) -> int:
+        return self.goal_difference_points - self.result_points
+
+    @property
+    def result_increment(self) -> int:
+        return self.result_points - self.participation_points
+
+    @property
+    def draw_increment(self) -> int:
+        return self.goal_difference_points - self.participation_points
+
+
+@dataclass(frozen=True)
 class KnockoutScoringConfig:
     """Configurable interpretation of knockout-stage scoring."""
 

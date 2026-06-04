@@ -26,10 +26,15 @@ For matchday, keep:
 ```python
 RUN_PROFILE = "live"
 TERMINAL_VERBOSITY = "compact"
+MARGIN_REMOVAL_METHOD = "normalised_inverse_odds"
 ```
 
 `live` keeps the run fast. `compact` keeps the terminal focused on the final
 choice and any warnings that need attention.
+Shin, power, and additive margin removal remain available for explicit research
+runs. If one of those diagnostic methods fails for a sparse or unusual market,
+the live workflow falls back to `normalised_inverse_odds` for that market and
+prints/report a warning.
 
 ## 3. Find the match number
 
@@ -73,7 +78,10 @@ name aligned with the match ID from the list-date output.
 The `ASIAN_HANDICAP` section in the template is optional. Paste it when you
 have time, especially for strong favourites where `3-0`, `4-0`, and `5-0`
 can be close. Missing Asian handicap data is allowed and should not change the
-normal live workflow.
+normal live workflow. The parser keeps the full ladder for diagnostics, but the
+market-consistent challenger uses only a stable near-money subset. If the AH
+ladder appears reversed relative to 1X2 prices, the workbook and dashboard show
+`asian_handicap_orientation_suspicious`.
 
 ## 5. Run one selected match
 
@@ -131,7 +139,8 @@ Use `submission_sheet.xlsx` for the clean entry-ready view. Use
 The detailed workbook includes `asian_handicap` and `margin_diagnostics` sheets
 when the relevant data is available. The margin sheet explains which
 goal-difference margin wins under the same group-stage EV rule used by the
-scoreline optimiser.
+scoreline optimiser. Group-stage scoring is implemented as the assumed
+`10/7/5/1` rule unless the Sporza rules are confirmed to differ.
 
 ## 8. Submit the final choice
 

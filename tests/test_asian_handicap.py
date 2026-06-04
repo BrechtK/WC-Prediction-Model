@@ -18,6 +18,8 @@ from wc_predictor.market_consistent import (
 from wc_predictor.odds import aggregate_asian_handicap_probabilities, process_asian_handicap_odds
 from wc_predictor.oddsportal_asian_handicap import parse_oddsportal_asian_handicap_text
 from wc_predictor.probabilities import poisson_score_matrix
+from wc_predictor.config import ProjectConfig
+from wc_predictor.workflow import run_prediction_workflow
 
 
 def test_half_handicap_and_integer_push_settlement() -> None:
@@ -223,3 +225,76 @@ def test_many_deep_handicap_lines_do_not_create_artificial_boundary_mass() -> No
 
     assert result.matrix.probabilities[8, 0] < 0.04
     assert result.diagnostics["market_consistent_status"] != "failed_severe"
+
+
+def _orientation_core_odds() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "match_id": "MORIENT",
+                "date": "2026-06-14",
+                "stage": "group",
+                "group": "A",
+                "team_a": "Alpha",
+                "team_b": "Beta",
+                "bookmaker": "Book",
+                "odds_a_win": 1.40,
+                "odds_draw": 4.80,
+                "odds_b_win": 8.00,
+            }
+        ]
+    )
+
+
+def test_asian_handicap_orientation_guard_accepts_normal_ladder() -> None:
+    asian_handicap = pd.DataFrame(
+        [
+            {
+                "match_id": "MORIENT",
+                "bookmaker": "Book",
+                "handicap": -1.5,
+                "odds_team_a": 1.91,
+                "odds_team_b": 1.91,
+            }
+        ]
+    )
+
+    workflow = run_prediction_workflow(
+        _orientation_core_odds(),
+        config=ProjectConfig(enable_margin_method_comparison=False, enable_market_consistent_challenger=False),
+        asian_handicap_odds=asian_handicap,
+    )
+
+    report = workflow.match_report.iloc[0]
+    diagnostics = workflow.aggregated_asian_handicap_probabilities.iloc[0]
+    assert "asian_handicap_orientation_suspicious" not in report["warning_flags"]
+    assert report["asian_handicap_orientation_suspicious"] == "no"
+    assert diagnostics["asian_handicap_orientation_suspicious"] == "no"
+
+
+def test_asian_handicap_orientation_guard_warns_on_reversed_ladder() -> None:
+    asian_handicap = pd.DataFrame(
+        [
+            {
+                "match_id": "MORIENT",
+                "bookmaker": "Book",
+                "handicap": 1.5,
+                "odds_team_a": 1.91,
+                "odds_team_b": 1.91,
+            }
+        ]
+    )
+
+    workflow = run_prediction_workflow(
+        _orientation_core_odds(),
+        config=ProjectConfig(enable_margin_method_comparison=False, enable_market_consistent_challenger=False),
+        asian_handicap_odds=asian_handicap,
+    )
+
+    report = workflow.match_report.iloc[0]
+    dashboard = workflow.final_decision_dashboard.iloc[0]
+    diagnostics = workflow.aggregated_asian_handicap_probabilities.iloc[0]
+    assert "asian_handicap_orientation_suspicious" in report["warning_flags"]
+    assert report["asian_handicap_orientation_suspicious"] == "yes"
+    assert diagnostics["asian_handicap_orientation_suspicious"] == "yes"
+    assert "asian_handicap_orientation_suspicious" in dashboard["risk_notes"]

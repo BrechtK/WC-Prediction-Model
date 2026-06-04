@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from wc_predictor.scoring_rules import DEFAULT_GROUP_SCORING
 from wc_predictor.optimiser import (
     evaluate_group_prediction,
     evaluate_knockout_prediction,
@@ -22,11 +23,12 @@ def test_expected_points_are_calculated_for_manual_matrix() -> None:
 def test_group_ev_diagnostics_reconcile_with_scoring_formula() -> None:
     matrix = ScoreProbabilityMatrix(np.array([[0.20, 0.05], [0.30, 0.10], [0.25, 0.10]]))
     evaluation = evaluate_group_prediction(matrix, 1, 0)
+    scoring = DEFAULT_GROUP_SCORING
     expected = (
-        1
-        + 4 * evaluation.correct_result_probability
-        + 2 * evaluation.correct_goal_difference_probability
-        + 3 * evaluation.exact_score_probability
+        scoring.participation_points
+        + scoring.result_increment * evaluation.correct_result_probability
+        + scoring.goal_difference_increment * evaluation.correct_goal_difference_probability
+        + scoring.exact_increment * evaluation.exact_score_probability
     )
     assert evaluation.expected_points == pytest.approx(expected)
     assert evaluation.participation_only_probability == pytest.approx(1 - evaluation.correct_result_probability)

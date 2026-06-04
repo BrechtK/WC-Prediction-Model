@@ -26,7 +26,7 @@ from wc_predictor.paths import ( CACHE_SPLIT_PASTES_DIR, INPUT_ODDS_DIR, INPUT_S
 # 3. Use RUN_MODE = "single_match", keep the same DATE, and set GAME_NUMBER.
 # 4. Press "Run Python File" in VS Code.
 
-RUN_MODE = "single_match"
+RUN_MODE = "all_available"
 # RUN_MODE options:
 # "list_date"      -> list the games on DATE and exit; use this first.
 # "single_match"   -> run one game from DATE, selected by GAME_NUMBER.
@@ -56,8 +56,9 @@ PUBLIC_FIELD_SIZE = 100
 CORRECT_SCORE_POISSON_WEIGHT = 1.0
 CORRECT_SCORE_AGGREGATION_METHOD = "auto"
 
-MARGIN_REMOVAL_METHOD = "shin"
-# shin is more aggressive than normalised_inverse_odds, power is more aggressive than shin, and additive is more aggressive than power.
+MARGIN_REMOVAL_METHOD = "normalised_inverse_odds"
+# Optional research choices: "power", "additive", or "shin". These methods are
+# diagnostics and may fall back on sparse or unusual markets.
 
 # Fast matchday defaults.
 RUN_PROFILE = "live"

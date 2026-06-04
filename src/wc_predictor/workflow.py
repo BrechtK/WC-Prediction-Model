@@ -46,6 +46,7 @@ from wc_predictor.optimiser import (
 )
 from wc_predictor.probabilities import ScoreProbabilityMatrix
 from wc_predictor.public_strategy import build_public_strategy
+from wc_predictor.scoring_rules import DEFAULT_GROUP_SCORING
 from wc_predictor.score_models import (
     DixonColesScoreModel,
     Match,
@@ -182,11 +183,14 @@ def _score_matrix_audit(matrix: ScoreProbabilityMatrix) -> dict[str, float]:
 
 
 def _group_ev_components(evaluation: GroupPredictionEvaluation) -> dict[str, float]:
+    scoring = DEFAULT_GROUP_SCORING
     return {
-        "participation_component": 1.0,
-        "result_component": 4.0 * evaluation.correct_result_probability,
-        "goal_difference_component": 2.0 * evaluation.correct_goal_difference_probability,
-        "exact_score_component": 3.0 * evaluation.exact_score_probability,
+        "participation_component": float(scoring.participation_points),
+        "result_component": float(scoring.result_increment * evaluation.correct_result_probability),
+        "goal_difference_component": float(
+            scoring.goal_difference_increment * evaluation.correct_goal_difference_probability
+        ),
+        "exact_score_component": float(scoring.exact_increment * evaluation.exact_score_probability),
         "correct_result_probability": evaluation.correct_result_probability,
         "correct_goal_difference_probability": evaluation.correct_goal_difference_probability,
     }
@@ -971,6 +975,7 @@ def _dashboard_risk_notes(
             or "market_consistent_optimisation_failed" in flag
             or "market_consistent_constraint_fit_poor" in flag
             or "knockout_scoring_unverified" in flag
+            or "asian_handicap_orientation_suspicious" in flag
         )
     ]
     if severe_flags:
@@ -1181,6 +1186,63 @@ def _format_asian_handicap_lines(rows: pd.DataFrame) -> str:
     if rows.empty:
         return ""
     return "; ".join(f"{float(line):+g}" for line in sorted(rows["handicap"].unique()))
+
+
+def _asian_handicap_orientation_diagnostic(
+    rows: pd.DataFrame,
+    *,
+    market_a_win: float,
+    market_b_win: float,
+) -> tuple[pd.DataFrame, bool, str]:
+    """Flag AH ladders that appear reversed relative to the 1X2 favourite."""
+
+    if rows.empty or "handicap" not in rows:
+        return rows, False, ""
+    annotated = rows.copy()
+    annotated["asian_handicap_orientation_suspicious"] = "no"
+    annotated["asian_handicap_orientation_reason"] = ""
+    favourite_gap = float(market_a_win) - float(market_b_win)
+    if abs(favourite_gap) < 0.10:
+        return annotated, False, "1x2_favourite_not_strong_enough_for_orientation_check"
+
+    candidates = annotated
+    if "selected_for_market_consistent" in candidates:
+        selected = candidates[candidates["selected_for_market_consistent"].astype(str).str.lower().eq("yes")]
+        if not selected.empty:
+            candidates = selected
+    if "fair_team_a" in candidates:
+        near_money = candidates[candidates["fair_team_a"].astype(float).between(0.25, 0.75)]
+        if not near_money.empty:
+            candidates = near_money
+    candidates = candidates[candidates["handicap"].astype(float).abs() >= 0.25]
+    if candidates.empty:
+        return annotated, False, "no_near_money_directional_asian_handicap_lines"
+
+    weights = (
+        candidates["selection_weight"].astype(float)
+        if "selection_weight" in candidates
+        else candidates.get("bookmakers_count", pd.Series(1.0, index=candidates.index)).astype(float)
+    )
+    if not np.isfinite(weights).all() or float(weights.sum()) <= 0:
+        weights = pd.Series(1.0, index=candidates.index)
+    weighted_handicap = float(np.average(candidates["handicap"].astype(float), weights=weights))
+    ah_favourite = "team_a" if weighted_handicap < -0.25 else "team_b" if weighted_handicap > 0.25 else ""
+    one_x_two_favourite = "team_a" if favourite_gap > 0 else "team_b"
+    if not ah_favourite:
+        return annotated, False, f"ah_direction_neutral:weighted_handicap={weighted_handicap:+.2f}"
+    suspicious = ah_favourite != one_x_two_favourite
+    reason = (
+        f"asian_handicap_orientation_suspicious:1x2={one_x_two_favourite};"
+        f"ah={ah_favourite};weighted_handicap={weighted_handicap:+.2f}"
+        if suspicious
+        else f"orientation_ok:1x2={one_x_two_favourite};ah={ah_favourite};weighted_handicap={weighted_handicap:+.2f}"
+    )
+    if suspicious:
+        annotated["asian_handicap_orientation_suspicious"] = "yes"
+        annotated["asian_handicap_orientation_reason"] = reason
+    else:
+        annotated["asian_handicap_orientation_reason"] = reason
+    return annotated, suspicious, reason
 
 
 def _format_total_goals_fit_diagnostics(
@@ -1422,6 +1484,15 @@ def run_prediction_workflow(
             poisson_matrix.probabilities.shape,
             {"a_win": targets.a_win, "draw": targets.draw, "b_win": targets.b_win},
         )
+        (
+            match_asian_handicap,
+            asian_handicap_orientation_suspicious,
+            asian_handicap_orientation_reason,
+        ) = _asian_handicap_orientation_diagnostic(
+            match_asian_handicap,
+            market_a_win=targets.a_win,
+            market_b_win=targets.b_win,
+        )
         if not match_asian_handicap.empty:
             asian_handicap_diagnostic_frames.append(match_asian_handicap)
         baseline_matrices[match_id] = poisson_matrix
@@ -1537,6 +1608,8 @@ def run_prediction_workflow(
                 "Asian handicap market supplied; used only by market-consistent challenger diagnostics: "
                 + _format_asian_handicap_lines(match_asian_handicap)
             )
+        if asian_handicap_orientation_suspicious:
+            notes.append("Asian handicap orientation is suspicious relative to 1X2 prices; inspect pasted team order")
         if correct_score_blend_note:
             notes.append(correct_score_blend_note)
         knockout = is_knockout_stage(str(row["stage"]))
@@ -1977,6 +2050,9 @@ def run_prediction_workflow(
         dixon_coles_warning_flags = []
         if str(getattr(dixon_coles_rho_estimate, "warning", "")):
             dixon_coles_warning_flags.append("dixon_coles_rho_not_estimated")
+        asian_handicap_warning_flags = []
+        if asian_handicap_orientation_suspicious:
+            asian_handicap_warning_flags.append("asian_handicap_orientation_suspicious")
         extra_warning_flags = [
             str(flag).strip()
             for flag in extra_warning_flags_by_match.get(match_id, ())
@@ -1992,6 +2068,7 @@ def run_prediction_workflow(
                     *knockout_warning_flags,
                     *market_consistent_warning_flags,
                     *dixon_coles_warning_flags,
+                    *asian_handicap_warning_flags,
                     *extra_warning_flags,
                 ],
             )
@@ -2171,6 +2248,10 @@ def run_prediction_workflow(
                 ),
                 "asian_handicap_lines_available": _format_asian_handicap_lines(match_asian_handicap),
                 "asian_handicap_lines_used": market_consistent_asian_handicap_lines_used,
+                "asian_handicap_orientation_suspicious": (
+                    "yes" if asian_handicap_orientation_suspicious else "no"
+                ),
+                "asian_handicap_orientation_reason": asian_handicap_orientation_reason,
                 "asian_handicap_shift_recommendation": "yes" if asian_handicap_shift_recommendation else "no",
                 "margin_ev_gap": margin_ev_gap,
                 "margin_diagnostic_note": margin_diagnostic_note,

@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-from wc_predictor.config import KnockoutScoringConfig
+from wc_predictor.config import GroupScoringConfig, KnockoutScoringConfig
 from wc_predictor.utils import goal_difference, result_sign
+
+DEFAULT_GROUP_SCORING = GroupScoringConfig()
 
 
 def score_group_prediction(pred_a: int, pred_b: int, actual_a: int, actual_b: int) -> int:
     """Score a group-stage prediction according to the private-pool rules."""
 
+    config = DEFAULT_GROUP_SCORING
     if (pred_a, pred_b) == (actual_a, actual_b):
-        return 10
+        return config.exact_score_points
     if goal_difference(pred_a, pred_b) == goal_difference(actual_a, actual_b):
-        return 7
+        return config.goal_difference_points
     if result_sign(pred_a, pred_b) == result_sign(actual_a, actual_b):
-        return 5
-    return 1
+        return config.result_points
+    return config.participation_points
 
 
 def score_knockout_prediction(

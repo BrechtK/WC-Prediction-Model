@@ -21,7 +21,7 @@ p_i = q_i / R
 ```
 
 Fair probabilities are calculated per bookmaker and market, then aggregated
-across bookmakers.
+across bookmakers. The live default is `normalised_inverse_odds`.
 
 The live workflow can also compare diagnostic challenger methods. These do not
 change the default recommendation unless `margin_removal_method` is explicitly
@@ -53,6 +53,11 @@ valid positive probability vector cannot be found. Shin can be useful for
 favourite-longshot bias diagnostics, but it remains a challenger rather than a
 live default. It is especially uncertain for sparse correct-score markets,
 where the listed scorelines may not represent a complete bookmaker market.
+When a requested diagnostic margin method fails for an individual market, the
+live processor falls back to `normalised_inverse_odds`, preserves the requested
+method in diagnostics, and emits
+`margin_removal_failed_fallback_to_normalised_inverse_odds`. If the fallback
+cannot produce valid probabilities, the market is still rejected.
 
 The `margin_methods` diagnostics compare calibrated lambdas, fit errors, EV
 recommendations, and warning flags across implemented methods. Disagreement
@@ -154,8 +159,11 @@ out-of-grid scores. The live challenger therefore marks such lines as
 grid-boundary sensitive and skips them from the constraint set. The
 `asian_handicap` workbook sheet records `selected_for_market_consistent`,
 `selection_weight`, `selection_reason`, and `skipped_reason` for each line.
-Asian handicap is optional and does not enter default Poisson calibration or
-override the default EV recommendation automatically.
+The workflow also compares the AH-implied favourite direction with 1X2 prices;
+`asian_handicap_orientation_suspicious` is a diagnostic warning that the pasted
+handicap table may be reversed. Asian handicap is optional and does not enter
+default Poisson calibration or override the default EV recommendation
+automatically.
 
 Lambdas minimise squared calibration error. Calibration runs the bounded
 optimiser from several starting points and keeps the best converged fit. This
@@ -277,7 +285,9 @@ EV(a,b) = sum_{x,y} P(X=x,Y=y) S_group(a,b;x,y)
 ```
 
 The margin diagnostics sheet rewrites the same group-stage EV by predicted
-goal-difference margin `d = a - b`. For decisive margins:
+goal-difference margin `d = a - b`. The coefficients below are derived from
+the central group-stage scoring config (`10/7/5/1`), not maintained as a
+separate rule. For decisive margins:
 
 ```text
 EV(d) = 1
@@ -307,6 +317,9 @@ correct goal difference/result   -> 7 points
 correct result                   -> 5 points
 participation/otherwise          -> 1 point
 ```
+
+These are the assumed private-pool group-stage rules unless the Sporza rules
+are explicitly confirmed to differ.
 
 Under the baseline additive knockout interpretation:
 

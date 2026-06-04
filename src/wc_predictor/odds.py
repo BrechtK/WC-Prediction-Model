@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
 
 from wc_predictor.margin import MarginRemovalResult, remove_margin
+
+MARGIN_REMOVAL_FALLBACK_WARNING = "margin_removal_failed_fallback_to_normalised_inverse_odds"
 
 MARKETS: dict[str, tuple[str, ...]] = {
     "1x2": ("odds_a_win", "odds_draw", "odds_b_win"),
@@ -52,6 +55,10 @@ TOTAL_GOALS_OUTPUT_COLUMNS = [
     "fair_under",
     "total_goals_overround",
     "shin_z",
+    "margin_removal_requested_method",
+    "margin_removal_actual_method",
+    "margin_removal_fallback_warning",
+    "margin_removal_failure_message",
     "line_kind",
     "used_for_calibration",
     "warnings",
@@ -70,6 +77,10 @@ ASIAN_HANDICAP_OUTPUT_COLUMNS = [
     "fair_odds_team_b",
     "asian_handicap_overround",
     "shin_z",
+    "margin_removal_requested_method",
+    "margin_removal_actual_method",
+    "margin_removal_fallback_warning",
+    "margin_removal_failure_message",
     "line_kind",
     "warnings",
 ]
@@ -96,6 +107,58 @@ def fair_probabilities_from_decimal_odds(
 
     raw = decimal_odds_to_implied_probabilities(decimal_odds)
     return remove_margin(raw, method, suspicious_low, suspicious_high)
+
+
+def fair_probabilities_from_decimal_odds_with_fallback(
+    decimal_odds: Sequence[float],
+    method: str = "normalised_inverse_odds",
+    suspicious_low: float = 1.0,
+    suspicious_high: float = 1.20,
+) -> MarginRemovalResult:
+    """Convert decimal odds, falling back to normalised inverse odds on method failure."""
+
+    requested = str(method)
+    try:
+        result = fair_probabilities_from_decimal_odds(
+            decimal_odds,
+            requested,
+            suspicious_low,
+            suspicious_high,
+        )
+    except ValueError as exc:
+        if requested.lower() in {"normalised_inverse_odds", "proportional"}:
+            raise
+        fallback = fair_probabilities_from_decimal_odds(
+            decimal_odds,
+            "normalised_inverse_odds",
+            suspicious_low,
+            suspicious_high,
+        )
+        diagnostics = dict(fallback.diagnostics or {})
+        diagnostics.update(
+            {
+                "margin_removal_requested_method": requested,
+                "margin_removal_actual_method": fallback.method,
+                "margin_removal_failure_message": str(exc),
+                "margin_removal_fallback_applied": True,
+            }
+        )
+        warnings = (*fallback.warnings, MARGIN_REMOVAL_FALLBACK_WARNING)
+        return replace(fallback, warnings=tuple(dict.fromkeys(warnings)), diagnostics=diagnostics)
+    diagnostics = dict(result.diagnostics or {})
+    diagnostics.update(
+        {
+            "margin_removal_requested_method": requested,
+            "margin_removal_actual_method": result.method,
+            "margin_removal_failure_message": "",
+            "margin_removal_fallback_applied": False,
+        }
+    )
+    return replace(result, diagnostics=diagnostics)
+
+
+def _margin_diagnostic_value(result: MarginRemovalResult, key: str, default: object = "") -> object:
+    return (result.diagnostics or {}).get(key, default)
 
 
 def process_bookmaker_odds(
@@ -127,7 +190,7 @@ def process_bookmaker_odds(
             if values.isna().any():
                 output["warnings"].append(f"Ignored incomplete {market_name} market")
                 continue
-            result = fair_probabilities_from_decimal_odds(
+            result = fair_probabilities_from_decimal_odds_with_fallback(
                 values.astype(float).tolist(), margin_method, suspicious_low, suspicious_high
             )
             output.update(zip(RAW_COLUMNS[market_name], result.raw_probabilities, strict=True))
@@ -135,6 +198,20 @@ def process_bookmaker_odds(
             output[f"overround_{market_name}"] = result.overround
             if result.diagnostics and "shin_z" in result.diagnostics:
                 output[f"{market_name}_shin_z"] = result.diagnostics["shin_z"]
+            output[f"{market_name}_margin_removal_requested_method"] = _margin_diagnostic_value(
+                result, "margin_removal_requested_method", margin_method
+            )
+            output[f"{market_name}_margin_removal_actual_method"] = _margin_diagnostic_value(
+                result, "margin_removal_actual_method", result.method
+            )
+            output[f"{market_name}_margin_removal_fallback_warning"] = (
+                MARGIN_REMOVAL_FALLBACK_WARNING
+                if _margin_diagnostic_value(result, "margin_removal_fallback_applied", False)
+                else ""
+            )
+            output[f"{market_name}_margin_removal_failure_message"] = _margin_diagnostic_value(
+                result, "margin_removal_failure_message", ""
+            )
             output["warnings"].extend(result.warnings)
         output["warnings"] = "; ".join(output["warnings"])
         rows.append(output)
@@ -204,7 +281,7 @@ def process_correct_score_odds(
         raise ValueError(f"Correct-score odds are missing required columns: {sorted(missing)}")
     frames: list[pd.DataFrame] = []
     for (match_id, bookmaker), group in correct_score_odds.groupby(["match_id", "bookmaker"], sort=False):
-        fair = fair_probabilities_from_decimal_odds(group["decimal_odds"].tolist(), margin_method)
+        fair = fair_probabilities_from_decimal_odds_with_fallback(group["decimal_odds"].tolist(), margin_method)
         processed = group.copy()
         scorelines = set(zip(group["score_a"].astype(int), group["score_b"].astype(int)))
         has_other_bucket = (
@@ -217,6 +294,20 @@ def process_correct_score_odds(
         processed["market_overround"] = fair.overround
         processed["correct_score_overround"] = fair.overround
         processed["shin_z"] = (fair.diagnostics or {}).get("shin_z", pd.NA)
+        processed["margin_removal_requested_method"] = _margin_diagnostic_value(
+            fair, "margin_removal_requested_method", margin_method
+        )
+        processed["margin_removal_actual_method"] = _margin_diagnostic_value(
+            fair, "margin_removal_actual_method", fair.method
+        )
+        processed["margin_removal_fallback_warning"] = (
+            MARGIN_REMOVAL_FALLBACK_WARNING
+            if _margin_diagnostic_value(fair, "margin_removal_fallback_applied", False)
+            else ""
+        )
+        processed["margin_removal_failure_message"] = _margin_diagnostic_value(
+            fair, "margin_removal_failure_message", ""
+        )
         processed["number_of_scorelines"] = len(scorelines)
         processed["common_scoreline_coverage"] = len(scorelines & COMMON_CORRECT_SCORELINES) / len(COMMON_CORRECT_SCORELINES)
         processed["has_other_bucket"] = bool(has_other_bucket)
@@ -232,6 +323,10 @@ def process_correct_score_odds(
                 "market_overround",
                 "correct_score_overround",
                 "shin_z",
+                "margin_removal_requested_method",
+                "margin_removal_actual_method",
+                "margin_removal_fallback_warning",
+                "margin_removal_failure_message",
                 "number_of_scorelines",
                 "common_scoreline_coverage",
                 "has_other_bucket",
@@ -283,7 +378,7 @@ def process_total_goals_odds(
     rows: list[dict[str, object]] = []
     for _, source_row in total_goals_odds.iterrows():
         line = float(source_row["line"])
-        fair = fair_probabilities_from_decimal_odds(
+        fair = fair_probabilities_from_decimal_odds_with_fallback(
             [float(source_row["odds_over"]), float(source_row["odds_under"])],
             margin_method,
             suspicious_low,
@@ -300,6 +395,20 @@ def process_total_goals_odds(
                 "fair_under": float(fair.fair_probabilities[1]),
                 "total_goals_overround": fair.overround,
                 "shin_z": (fair.diagnostics or {}).get("shin_z", pd.NA),
+                "margin_removal_requested_method": _margin_diagnostic_value(
+                    fair, "margin_removal_requested_method", margin_method
+                ),
+                "margin_removal_actual_method": _margin_diagnostic_value(
+                    fair, "margin_removal_actual_method", fair.method
+                ),
+                "margin_removal_fallback_warning": (
+                    MARGIN_REMOVAL_FALLBACK_WARNING
+                    if _margin_diagnostic_value(fair, "margin_removal_fallback_applied", False)
+                    else ""
+                ),
+                "margin_removal_failure_message": _margin_diagnostic_value(
+                    fair, "margin_removal_failure_message", ""
+                ),
                 "line_kind": kind,
                 "used_for_calibration": kind == "half_goal",
                 "warnings": "; ".join(fair.warnings),
@@ -366,7 +475,7 @@ def process_asian_handicap_odds(
         if kind == "unsupported":
             warnings.append(f"unsupported_handicap_line:{handicap:g}")
         try:
-            fair = fair_probabilities_from_decimal_odds(
+            fair = fair_probabilities_from_decimal_odds_with_fallback(
                 [float(source_row["odds_team_a"]), float(source_row["odds_team_b"])],
                 margin_method,
                 suspicious_low,
@@ -388,6 +497,20 @@ def process_asian_handicap_odds(
                 "fair_odds_team_b": float(1.0 / fair.fair_probabilities[1]),
                 "asian_handicap_overround": fair.overround,
                 "shin_z": (fair.diagnostics or {}).get("shin_z", pd.NA),
+                "margin_removal_requested_method": _margin_diagnostic_value(
+                    fair, "margin_removal_requested_method", margin_method
+                ),
+                "margin_removal_actual_method": _margin_diagnostic_value(
+                    fair, "margin_removal_actual_method", fair.method
+                ),
+                "margin_removal_fallback_warning": (
+                    MARGIN_REMOVAL_FALLBACK_WARNING
+                    if _margin_diagnostic_value(fair, "margin_removal_fallback_applied", False)
+                    else ""
+                ),
+                "margin_removal_failure_message": _margin_diagnostic_value(
+                    fair, "margin_removal_failure_message", ""
+                ),
                 "line_kind": kind,
                 "warnings": "; ".join(warnings),
             }

@@ -7,12 +7,13 @@ profit.
 
 ## Priority 1: Robust Market-Implied Probability Extraction
 
-The live workflow now implements diagnostic comparison for:
+The live workflow default is `normalised_inverse_odds`. It also implements
+diagnostic comparison for:
 
 - normalised inverse-odds proportional normalisation;
 - additive removal;
 - power method;
-- Shin method where numerically valid;
+- Shin method where numerically valid.
 
 Still to evaluate or implement:
 
@@ -22,6 +23,10 @@ The comparison sheet reports whether recommendations change across implemented
 methods. Continue backtesting each approach under the pool scoring rules before
 promoting any challenger. Record odds timing and source quality so early
 recreational prices are not confused with sharper closing markets.
+Shin, power, and additive methods are optional research diagnostics. They can
+fail on sparse, low-overround, or unusually high-overround markets; live
+processing falls back to `normalised_inverse_odds` per market and records a
+warning rather than trusting invalid probabilities.
 
 ## Priority 2: Correct-Score Odds Validation
 
@@ -61,11 +66,18 @@ challenger input. The parser keeps the full pasted ladder for diagnostics, but
 the optimiser uses only a selected stable subset. Near-the-money lines are most
 informative; very deep lines are retained as tail diagnostics and skipped as
 constraints when the finite score grid cannot represent the relevant tail.
+Orientation warnings compare the AH-implied favourite direction with 1X2 prices
+and are diagnostics for potentially reversed pasted tables.
 This should be validated alongside totals because AH maps most directly to the
 goal-difference tier in the scoring rule and is especially useful for strong
 favourites and blowout-tail choices such as `3-0`, `4-0`, and `5-0`. It remains
 diagnostic/challenger input, not a direct override of the default EV
 recommendation.
+
+Group-stage scoring constants are centralised as the assumed `10/7/5/1` rule:
+exact score, correct goal difference, correct result, and participation. Margin
+diagnostics derive their coefficients from those constants so they stay
+consistent with the raw EV optimiser unless the confirmed rules change.
 
 ## Priority 4: Low-Score Correction / Dixon-Coles
 

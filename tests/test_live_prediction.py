@@ -236,6 +236,7 @@ def _capture_script_weight_sensitivity(
         captured["enable_margin_method_comparison"] = config.enable_margin_method_comparison
         captured["enable_market_consistent_challenger"] = config.enable_market_consistent_challenger
         captured["correct_score_poisson_weight"] = config.correct_score_poisson_weight
+        captured["margin_removal_method"] = config.margin_removal_method
         captured["extra_warning_flags_by_match"] = settings.extra_warning_flags_by_match
         return SimpleNamespace(runtime_timings={})
 
@@ -504,6 +505,16 @@ def test_script_research_profile_enables_weight_sensitivity_by_default(tmp_path:
     assert captured["enable_market_consistent_challenger"] is True
 
 
+def test_script_cli_can_still_select_shin_margin_method(tmp_path: Path, monkeypatch) -> None:
+    captured = _capture_script_weight_sensitivity(
+        tmp_path,
+        monkeypatch,
+        ["--run-profile", "research", "--margin-removal-method", "shin"],
+    )
+
+    assert captured["margin_removal_method"] == "shin"
+
+
 def test_script_flag_can_enable_weight_sensitivity_in_live_profile(tmp_path: Path, monkeypatch) -> None:
     captured = _capture_script_weight_sensitivity(tmp_path, monkeypatch, ["--enable-weight-sensitivity"])
 
@@ -519,7 +530,7 @@ def test_live_runner_strict_mode_fails_when_optional_paste_is_missing(tmp_path: 
         run_live_prediction(settings)
 
 
-def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
+def test_live_runner_script_runs_with_explicit_vscode_style_launch_args(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -536,7 +547,20 @@ def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
     )
     _write_combined_paste(tmp_path / "input/odds", "M004", clean_filename=True)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_live_prediction.py",
+            "--run-mode",
+            "single_match",
+            "--date",
+            "14-6",
+            "--game-number",
+            "4",
+            "--skip-weight-sensitivity",
+        ],
+    )
 
     runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
@@ -544,6 +568,13 @@ def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
     assert "Final recommendations:" in output
     assert "M004 Germany vs Curacao:" in output
     assert (tmp_path / "output/predictions.xlsx").exists()
+
+
+def test_live_runner_script_default_margin_method_is_normalised_inverse_odds() -> None:
+    module = _load_run_live_module()
+
+    assert module.MARGIN_REMOVAL_METHOD == "normalised_inverse_odds"
+    assert "shin" in module.VALID_MARGIN_REMOVAL_METHODS
 
 
 def test_live_runner_script_splits_combined_pastes_before_parsing(

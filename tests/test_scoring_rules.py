@@ -1,7 +1,20 @@
 import pytest
 
-from wc_predictor.config import KnockoutScoringConfig
-from wc_predictor.scoring_rules import score_group_prediction, score_knockout_prediction
+from wc_predictor.config import GroupScoringConfig, KnockoutScoringConfig
+from wc_predictor.scoring_rules import DEFAULT_GROUP_SCORING, score_group_prediction, score_knockout_prediction
+
+
+def test_group_scoring_config_preserves_current_points() -> None:
+    assert DEFAULT_GROUP_SCORING == GroupScoringConfig(
+        exact_score_points=10,
+        goal_difference_points=7,
+        result_points=5,
+        participation_points=1,
+    )
+    assert DEFAULT_GROUP_SCORING.exact_increment == 3
+    assert DEFAULT_GROUP_SCORING.goal_difference_increment == 2
+    assert DEFAULT_GROUP_SCORING.result_increment == 4
+    assert DEFAULT_GROUP_SCORING.draw_increment == 6
 
 
 @pytest.mark.parametrize(

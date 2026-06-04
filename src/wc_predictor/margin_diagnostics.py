@@ -7,6 +7,7 @@ import pandas as pd
 
 from wc_predictor.optimiser import evaluate_group_prediction
 from wc_predictor.probabilities import ScoreProbabilityMatrix
+from wc_predictor.scoring_rules import DEFAULT_GROUP_SCORING
 from wc_predictor.utils import result_sign
 
 
@@ -22,6 +23,7 @@ def margin_ev_diagnostics(
     """Return one group-stage diagnostic row per candidate goal-difference margin."""
 
     probabilities = matrix.probabilities
+    scoring = DEFAULT_GROUP_SCORING
     scores_a, scores_b = np.indices(probabilities.shape)
     margins = scores_a - scores_b
     rows: list[dict[str, object]] = []
@@ -41,15 +43,19 @@ def margin_ev_diagnostics(
         if margin == 0:
             result_bucket = "draw"
             correct_result_probability = float(np.trace(probabilities))
-            expected_value = 1.0 + 6.0 * correct_result_probability + 3.0 * float(probabilities[best_score])
+            expected_value = (
+                scoring.participation_points
+                + scoring.draw_increment * correct_result_probability
+                + scoring.exact_increment * float(probabilities[best_score])
+            )
         else:
             result_bucket = "home win" if margin > 0 else "away win"
             correct_result_probability = matrix.result_probability(result_sign(margin, 0))
             expected_value = (
-                1.0
-                + 4.0 * correct_result_probability
-                + 2.0 * margin_probability
-                + 3.0 * float(probabilities[best_score])
+                scoring.participation_points
+                + scoring.result_increment * correct_result_probability
+                + scoring.goal_difference_increment * margin_probability
+                + scoring.exact_increment * float(probabilities[best_score])
             )
         rows.append(
             {
