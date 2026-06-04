@@ -115,6 +115,48 @@ lines actually used as targets, and the skipped Asian lines. For each used
 half-goal line it also reports the aggregated fair market over probability,
 the fitted Poisson over probability, and their signed difference.
 
+Asian handicap odds add direct market information about the goal-difference
+distribution `X - Y`. For a team-A handicap `h`, a team-A stake at decimal odds
+`O` settles from:
+
+```text
+adjusted_margin = X - Y + h
+profit = O - 1    if adjusted_margin > 0
+profit = 0        if adjusted_margin = 0
+profit = -1       if adjusted_margin < 0
+```
+
+Team B uses the opposite side. Quarter lines split into two half-stake
+components, for example `-3.25 = 0.5 * -3.0 + 0.5 * -3.5`.
+
+Because integer and quarter handicaps include pushes or half-pushes, their
+quoted sides are not simple binary event probabilities. The workflow removes
+the two-way bookmaker margin to get fair decimal odds. It parses and reports
+the full available handicap ladder, but it does not feed every parsed line into
+the market-consistent challenger. Only a stable subset is used as soft
+expected-profit constraints:
+
+```text
+E_P[profit(handicap side at fair odds)] ~= 0
+```
+
+Near-money handicap lines, better bookmaker coverage, and lower overround get
+higher diagnostic weight. By default the challenger keeps only the strongest
+small set of Asian handicap constraints, prioritising lines around the market
+balance point. Lines with very high or very low cover probability are skipped
+as constraints and retained for diagnostics.
+
+Deep lines can be useful tail evidence, but they are unsafe when the finite
+score grid cannot represent the tail needed to settle the line. For example,
+with a `0..8` score grid, `Team A -7.5` can only cover as `8-0` inside the
+grid, while the real market also prices `9-0`, `9-1`, `10-0`, and other
+out-of-grid scores. The live challenger therefore marks such lines as
+grid-boundary sensitive and skips them from the constraint set. The
+`asian_handicap` workbook sheet records `selected_for_market_consistent`,
+`selection_weight`, `selection_reason`, and `skipped_reason` for each line.
+Asian handicap is optional and does not enter default Poisson calibration or
+override the default EV recommendation automatically.
+
 Lambdas minimise squared calibration error. Calibration runs the bounded
 optimiser from several starting points and keeps the best converged fit. This
 improves robustness for extreme favourites without changing the loss function.
@@ -200,6 +242,11 @@ the pure-EV score. Other modes are diagnostics for contest strategy review.
 They must be validated against realised leaderboard outcomes before replacing
 the default live submission.
 
+Public strategy can be scaled by target field size: `friends` keeps
+crowd/contrarian influence low, `balanced` is moderate, and `national` gives
+stronger decorrelation diagnostics. This scaling affects only the public
+strategy diagnostic score; it does not replace the default EV submission.
+
 The public-pick power exponent, common-score multiplier, Belgium/public-team
 bias, and alpha/beta/gamma ranking weights are heuristic and unvalidated. They
 are retained as diagnostic-only parameters, not as public strategy features
@@ -228,6 +275,29 @@ For a group-stage score prediction `(a,b)`:
 ```text
 EV(a,b) = sum_{x,y} P(X=x,Y=y) S_group(a,b;x,y)
 ```
+
+The margin diagnostics sheet rewrites the same group-stage EV by predicted
+goal-difference margin `d = a - b`. For decisive margins:
+
+```text
+EV(d) = 1
+      + 4 * P(correct result)
+      + 2 * P(X - Y = d)
+      + 3 * max_{a-b=d} P(a,b)
+```
+
+For draws:
+
+```text
+EV(0) = 1
+      + 6 * P(draw)
+      + 3 * max_{a=b} P(a,b)
+```
+
+This is algebraically equivalent to the raw scoreline EV optimiser for
+group-stage scoring and is used only to explain why a margin and its best
+representative scoreline win. The dashboard also reports the best draw score,
+best decisive score, and the draw-vs-decisive EV gap for balanced matches.
 
 The implemented group-stage scoring rule is:
 

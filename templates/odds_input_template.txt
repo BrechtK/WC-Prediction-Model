@@ -12,3 +12,6 @@ Team A vs Team B
 
 ### CORRECT_SCORE
 <paste OddsPortal correct-score table here>
+
+### ASIAN_HANDICAP
+<optional: paste OddsPortal Asian handicap table here>

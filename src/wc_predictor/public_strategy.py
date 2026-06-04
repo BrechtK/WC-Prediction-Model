@@ -45,6 +45,8 @@ class PublicStrategyResult:
     public_strategy_exact_score_probability: float
     public_strategy_result_probability: float
     public_strategy_candidate_count: int
+    public_strategy_target: str
+    public_field_size: int
     friend_strategy_score: str
     friend_strategy_reason: str
 
@@ -236,8 +238,8 @@ def build_public_strategy(
         upside_score = 10.0 * exact_probability + 2.0 * result_probability
         public_ranking_score = (
             float(evaluation.expected_points)
-            + public_config.alpha * contrarian_score
-            + public_config.beta * upside_score
+            + public_config.field_influence_scale * public_config.alpha * contrarian_score
+            + public_config.field_influence_scale * public_config.beta * upside_score
             - public_config.gamma * max(ev_gap, 0.0)
         )
         eligible = (
@@ -301,6 +303,8 @@ def build_public_strategy(
         public_strategy_exact_score_probability=float(selected["exact_probability"]),
         public_strategy_result_probability=float(selected["result_probability"]),
         public_strategy_candidate_count=len(rows),
+        public_strategy_target=public_config.public_strategy_target,
+        public_field_size=public_config.public_field_size,
         friend_strategy_score=friend_strategy_score,
         friend_strategy_reason=friend_strategy_reason,
     )

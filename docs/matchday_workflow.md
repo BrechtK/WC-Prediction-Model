@@ -70,6 +70,11 @@ templates/odds_input_template.txt
 Paste the latest OddsPortal tables under the matching headers. Keep the file
 name aligned with the match ID from the list-date output.
 
+The `ASIAN_HANDICAP` section in the template is optional. Paste it when you
+have time, especially for strong favourites where `3-0`, `4-0`, and `5-0`
+can be close. Missing Asian handicap data is allowed and should not change the
+normal live workflow.
+
 ## 5. Run one selected match
 
 Set:
@@ -107,6 +112,10 @@ Outputs:
 
 If warnings appear, fix those before submitting.
 
+Compact output does not print full margin tables. It only calls out Asian
+handicap when the market-consistent diagnostic score shifts or creates a
+manual-review reason.
+
 ## 7. Inspect Excel only when needed
 
 If `review yes` appears, open:
@@ -118,6 +127,11 @@ output/predictions.xlsx
 
 Use `submission_sheet.xlsx` for the clean entry-ready view. Use
 `predictions.xlsx` when you want the supporting diagnostics.
+
+The detailed workbook includes `asian_handicap` and `margin_diagnostics` sheets
+when the relevant data is available. The margin sheet explains which
+goal-difference margin wins under the same group-stage EV rule used by the
+scoreline optimiser.
 
 ## 8. Submit the final choice
 

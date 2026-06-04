@@ -24,6 +24,12 @@ from wc_predictor.oddsportal import (
     OddsPortalParseResult,
     parse_oddsportal_correct_score_folder,
 )
+from wc_predictor.oddsportal_asian_handicap import (
+    DEFAULT_OUTPUT_PATH as DEFAULT_ASIAN_HANDICAP_OUTPUT_PATH,
+    DEFAULT_REPORT_PATH as DEFAULT_ASIAN_HANDICAP_REPORT_PATH,
+    OddsPortalAsianHandicapParseResult,
+    parse_oddsportal_asian_handicap_folder,
+)
 from wc_predictor.oddsportal_core import (
     DEFAULT_INPUT_FOLDER,
     DEFAULT_METADATA_ODDS_PATH,
@@ -49,10 +55,11 @@ from wc_predictor.world_cup import WorldCupPredictionSettings, run_world_cup_pre
 from wc_predictor.workflow import PredictionWorkflowResult
 
 _PASTE_FILENAME_PATTERN = re.compile(
-    r"^(?P<match_id>.+)_(?P<market>1x2|over_under|btts|correct_score)\.txt$",
+    r"^(?P<match_id>.+)_(?P<market>1x2|over_under|btts|correct_score|asian_handicap)\.txt$",
     re.IGNORECASE,
 )
 _OPTIONAL_MARKETS = ("over_under", "btts", "correct_score")
+_STRICT_OPTIONAL_MARKETS = _OPTIONAL_MARKETS
 
 
 class LivePredictionError(RuntimeError):
@@ -78,6 +85,8 @@ class LivePredictionSettings:
     core_parse_report_path: Path = DEFAULT_CORE_REPORT_PATH
     correct_score_output_path: Path = DEFAULT_CORRECT_SCORE_OUTPUT_PATH
     correct_score_parse_report_path: Path = DEFAULT_CORRECT_SCORE_REPORT_PATH
+    asian_handicap_output_path: Path = DEFAULT_ASIAN_HANDICAP_OUTPUT_PATH
+    asian_handicap_parse_report_path: Path = DEFAULT_ASIAN_HANDICAP_REPORT_PATH
     recommendations_csv_output_path: Path = OUTPUT_PREDICTIONS_CSV_PATH
     recommendations_xlsx_output_path: Path = OUTPUT_PREDICTIONS_XLSX_PATH
     submission_xlsx_output_path: Path = OUTPUT_SUBMISSION_XLSX_PATH
@@ -95,6 +104,7 @@ class LivePredictionResult:
     settings: LivePredictionSettings
     core_parse: OddsPortalCoreParseResult
     correct_score_parse: OddsPortalParseResult
+    asian_handicap_parse: OddsPortalAsianHandicapParseResult
     workflow: PredictionWorkflowResult
     weight_comparison: CorrectScoreWeightComparison | None
     paste_warnings: dict[str, tuple[str, ...]]
@@ -110,6 +120,7 @@ class ParsedLivePredictionInputs:
     selected_match_ids: tuple[str, ...]
     core_parse: OddsPortalCoreParseResult
     correct_score_parse: OddsPortalParseResult
+    asian_handicap_parse: OddsPortalAsianHandicapParseResult
     paste_warnings: dict[str, tuple[str, ...]]
     schedule_metadata: pd.DataFrame
     schedule_parse: OddsPortalScheduleParseResult | None
@@ -121,6 +132,10 @@ class ParsedLivePredictionInputs:
     @property
     def has_correct_scores(self) -> bool:
         return not self.correct_score_parse.odds.empty
+
+    @property
+    def has_asian_handicap(self) -> bool:
+        return not self.asian_handicap_parse.odds.empty
 
 
 def discover_live_paste_markets(input_folder: str | Path) -> dict[str, set[str]]:
@@ -178,7 +193,8 @@ def _select_and_validate_pastes(
             if market not in discovered[selected_match_id]:
                 warning = f"missing_optional_paste:{market}"
                 _append_warning(warnings, selected_match_id, warning)
-                missing_optional.append(f"{selected_match_id}:{market}")
+                if market in _STRICT_OPTIONAL_MARKETS:
+                    missing_optional.append(f"{selected_match_id}:{market}")
     if strict and missing_optional:
         raise LivePredictionError(
             "Strict mode requires 1X2, O/U, BTTS, and correct-score pastes. Missing: "
@@ -248,12 +264,14 @@ def run_live_prediction(
     parsed = parse_live_prediction_inputs(settings, runtime_timings)
     has_total_goals = parsed.has_total_goals
     has_correct_scores = parsed.has_correct_scores
+    has_asian_handicap = parsed.has_asian_handicap
     mutable_warnings = {match_id: list(values) for match_id, values in parsed.paste_warnings.items()}
     workflow = run_world_cup_predictions(
         WorldCupPredictionSettings(
             input_path=settings.core_odds_output_path,
             total_goals_input_path=settings.total_goals_output_path if has_total_goals else None,
             correct_score_input_path=settings.correct_score_output_path if has_correct_scores else None,
+            asian_handicap_input_path=settings.asian_handicap_output_path if has_asian_handicap else None,
             csv_output_path=settings.recommendations_csv_output_path,
             xlsx_output_path=settings.recommendations_xlsx_output_path,
             submission_xlsx_output_path=settings.submission_xlsx_output_path,
@@ -296,6 +314,7 @@ def run_live_prediction(
         settings,
         parsed.core_parse,
         parsed.correct_score_parse,
+        parsed.asian_handicap_parse,
         workflow,
         weight_comparison,
         {match_id: tuple(values) for match_id, values in mutable_warnings.items()},
@@ -353,12 +372,26 @@ def parse_live_prediction_inputs(
             + time.perf_counter()
             - correct_score_parse_start
         )
+    asian_handicap_parse_start = time.perf_counter()
+    asian_handicap_parse = parse_oddsportal_asian_handicap_folder(
+        settings.input_folder,
+        settings.asian_handicap_output_path,
+        settings.asian_handicap_parse_report_path,
+        match_ids=selected,
+    )
+    if runtime_timings is not None:
+        runtime_timings["asian-handicap odds parse"] = (
+            runtime_timings.get("asian-handicap odds parse", 0.0)
+            + time.perf_counter()
+            - asian_handicap_parse_start
+        )
     _validate_parsed_markets(selected, core_parse, correct_score_parse, settings.strict, mutable_warnings)
     return ParsedLivePredictionInputs(
         settings,
         selected,
         core_parse,
         correct_score_parse,
+        asian_handicap_parse,
         {match_id: tuple(values) for match_id, values in mutable_warnings.items()},
         prepared_schedule.schedule,
         prepared_schedule.parse_result,
@@ -388,6 +421,7 @@ def format_live_prediction_summary(
             "combined paste split",
             "core odds parse",
             "correct-score odds parse",
+            "asian-handicap odds parse",
             "main model run",
             "market-consistent challenger",
             "margin-method comparison",
@@ -410,6 +444,7 @@ def format_live_prediction_summary(
             f"- combined paste split: {timings.get('combined paste split', 0.0):.2f}s",
             f"- core odds parse: {timings.get('core odds parse', 0.0):.2f}s",
             f"- correct-score odds parse: {timings.get('correct-score odds parse', 0.0):.2f}s",
+            f"- asian-handicap odds parse: {timings.get('asian-handicap odds parse', 0.0):.2f}s",
             f"- main model run: {timings.get('main model run', 0.0):.2f}s",
             f"- market-consistent challenger: {timings.get('market-consistent challenger', 0.0):.2f}s",
             f"- margin-method comparison: {timings.get('margin-method comparison', 0.0):.2f}s",
@@ -444,6 +479,7 @@ def format_live_prediction_summary(
                 f"btts={format_float(row.get('market_consistent_btts_fit_error'))}, "
                 f"totals={format_float(row.get('market_consistent_total_goals_fit_error'))}, "
                 f"correct-score={format_float(row.get('market_consistent_correct_score_fit_error'))}"
+                f", asian-handicap={format_float(row.get('market_consistent_asian_handicap_fit_error'))}"
             ),
             f"- KL vs prior: {format_float(row.get('market_consistent_kl_divergence_vs_prior'))}",
             (
@@ -452,7 +488,23 @@ def format_live_prediction_summary(
                 f"1x2={row.get('market_consistent_1x2_constraint_count', 'n/a')}, "
                 f"btts={row.get('market_consistent_btts_constraint_count', 'n/a')}, "
                 f"totals={row.get('market_consistent_total_goals_constraint_count', 'n/a')}, "
+                f"asian-handicap={row.get('market_consistent_asian_handicap_constraint_count', 'n/a')}, "
                 f"correct-score={row.get('market_consistent_correct_score_constraint_count', 'n/a')}"
+            ),
+            (
+                "- Asian handicap: "
+                f"available={row.get('market_consistent_asian_handicap_lines_available', 'n/a')}, "
+                f"selected={row.get('market_consistent_asian_handicap_lines_selected', 'n/a')}, "
+                f"skipped={row.get('market_consistent_asian_handicap_lines_skipped', 'n/a')}"
+            ),
+            f"- Asian handicap lines selected: {row.get('market_consistent_asian_handicap_lines_used') or 'none'}",
+            f"- Asian handicap fit all lines: {format_float(row.get('market_consistent_asian_handicap_fit_error_all'))}",
+            f"- margin distribution before: {row.get('market_consistent_margin_distribution_before') or 'n/a'}",
+            f"- margin distribution after: {row.get('market_consistent_margin_distribution_after') or 'n/a'}",
+            (
+                "- largest margin shift: "
+                f"{row.get('market_consistent_largest_margin_shift', 'n/a')} "
+                f"({format_float(row.get('market_consistent_largest_margin_shift_value'), 4)})"
             ),
         ]
 
@@ -461,6 +513,7 @@ def format_live_prediction_summary(
     margin_comparison = result.workflow.margin_method_comparison
     dashboard = result.workflow.final_decision_dashboard
     dashboard_by_match = dashboard.set_index("match_id") if not dashboard.empty else pd.DataFrame()
+    manual_review_lines: list[str] = []
     for _, row in result.workflow.match_report.iterrows():
         match_id = str(row["match_id"])
         dashboard_row = dashboard_by_match.loc[match_id] if not dashboard_by_match.empty and match_id in dashboard_by_match.index else pd.Series(dtype=object)
@@ -510,6 +563,9 @@ def format_live_prediction_summary(
                         f"- plausible alternatives: {row.get('plausible_top_alternatives') or 'none'}",
                         f"- manual review flag: {row.get('manual_review_flag')}",
                         f"- decision note: {row.get('decision_note')}",
+                        "Margin diagnostics:",
+                        f"- {row.get('margin_diagnostic_note') or 'n/a'}",
+                        f"- draw vs decisive gap: {format_float(row.get('draw_vs_decisive_gap'), 3)}",
                         *market_consistent_diagnostic_lines(row),
                         *margin_lines,
                         *(
@@ -545,7 +601,19 @@ def format_live_prediction_summary(
             final_line += f" | alt {alternative}"
         final_submissions.append(final_line)
 
-    manual_review_lines: list[str] = []
+        if (
+            terminal_verbosity == "compact"
+            and str(row.get("asian_handicap_shift_recommendation", "no")).lower() == "yes"
+        ):
+            manual_review_lines.extend(
+                [
+                    "",
+                    "Asian handicap review:",
+                    f"{match_id}: handicap constraints shift market-consistent score to "
+                    f"{row.get('market_consistent_recommended_score')}; default remains {row.get('recommended_score')}.",
+                ]
+            )
+
     dashboard_summary: list[str] = []
     if not dashboard.empty:
         high_count = int(dashboard["confidence_level"].astype(str).eq("high").sum())

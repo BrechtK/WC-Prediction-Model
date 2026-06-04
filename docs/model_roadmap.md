@@ -56,6 +56,17 @@ Compare:
 Report results across favourite-strength buckets because optional totals markets
 matter most when translating strong favourites into scoreline predictions.
 
+Asian handicap support is now available as an optional market-consistent
+challenger input. The parser keeps the full pasted ladder for diagnostics, but
+the optimiser uses only a selected stable subset. Near-the-money lines are most
+informative; very deep lines are retained as tail diagnostics and skipped as
+constraints when the finite score grid cannot represent the relevant tail.
+This should be validated alongside totals because AH maps most directly to the
+goal-difference tier in the scoring rule and is especially useful for strong
+favourites and blowout-tail choices such as `3-0`, `4-0`, and `5-0`. It remains
+diagnostic/challenger input, not a direct override of the default EV
+recommendation.
+
 ## Priority 4: Low-Score Correction / Dixon-Coles
 
 The optional Dixon-Coles low-score adjustment for `0-0`, `1-0`, `0-1`, and
@@ -79,6 +90,7 @@ Backtesting should answer:
 
 - whether blend weights below `w=1.0` improve realised points;
 - whether Shin or power margin removal changes recommendations usefully;
+- whether Asian handicap constraints improve margin-level decisions;
 - whether market-consistent or Dixon-Coles challenger recommendations add value;
 - whether decision-dashboard manual-review flags identify fragile matches.
 
@@ -103,6 +115,13 @@ This layer is not a replacement for pure EV. Before promotion, validate:
 - whether public-ranking suggestions improve realised leaderboard position;
 - whether gains survive different field sizes and popularity assumptions;
 - whether EV-loss caps remain conservative enough for small private pools.
+
+The public-strategy target/field-size settings should be treated as diagnostic
+scaling only:
+
+- `friends` / field size around 12: low crowd/contrarian weight;
+- `balanced` / field size around 100: moderate influence;
+- `national` / field size around 30000: stronger decorrelation diagnostics.
 
 The eventual objective may be probability of winning the pool rather than
 expected points alone, but that requires out-of-sample leaderboard evidence.

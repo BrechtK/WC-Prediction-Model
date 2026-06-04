@@ -11,29 +11,10 @@ import time
 import pandas as pd
 
 from wc_predictor.config import ProjectConfig, PublicStrategyConfig
-from wc_predictor.live_prediction import (
-    LivePredictionError,
-    LivePredictionSettings,
-    format_live_prediction_summary,
-    run_live_prediction,
-)
-from wc_predictor.oddsportal_combined import (
-    CombinedOddsPortalPasteError,
-    format_combined_oddsportal_split_summary,
-    split_combined_oddsportal_pastes,
-)
-from wc_predictor.oddsportal_schedule import (
-    DEFAULT_SCHEDULE_OUTPUT_PATH,
-    DEFAULT_SCHEDULE_REPORT_PATH,
-    OddsPortalScheduleParseError,
-    format_oddsportal_schedule_parse_summary,
-    prepare_schedule_metadata,
-)
-from wc_predictor.paths import (
-    CACHE_SPLIT_PASTES_DIR,
-    INPUT_ODDS_DIR,
-    INPUT_SCHEDULE_PATH,
-)
+from wc_predictor.live_prediction import ( LivePredictionError, LivePredictionSettings, format_live_prediction_summary, run_live_prediction, )
+from wc_predictor.oddsportal_combined import ( CombinedOddsPortalPasteError, format_combined_oddsportal_split_summary, split_combined_oddsportal_pastes, )
+from wc_predictor.oddsportal_schedule import ( DEFAULT_SCHEDULE_OUTPUT_PATH, DEFAULT_SCHEDULE_REPORT_PATH, OddsPortalScheduleParseError, format_oddsportal_schedule_parse_summary, prepare_schedule_metadata, )
+from wc_predictor.paths import ( CACHE_SPLIT_PASTES_DIR, INPUT_ODDS_DIR, INPUT_SCHEDULE_PATH, )
 
 # ============================================================
 # USER SETTINGS
@@ -44,7 +25,8 @@ from wc_predictor.paths import (
 # 2. Paste fresh odds into input/odds/Mxxx.txt.
 # 3. Use RUN_MODE = "single_match", keep the same DATE, and set GAME_NUMBER.
 # 4. Press "Run Python File" in VS Code.
-RUN_MODE = "all_available"
+
+RUN_MODE = "single_match"
 # RUN_MODE options:
 # "list_date"      -> list the games on DATE and exit; use this first.
 # "single_match"   -> run one game from DATE, selected by GAME_NUMBER.
@@ -54,7 +36,7 @@ RUN_MODE = "all_available"
 # DATE accepts 14-6, 14/6, 14-06, or 2026-06-14.
 DATE = "14/6"
 # GAME_NUMBER comes from RUN_MODE = "list_date". It is 1 for the first listed game.
-GAME_NUMBER = 3
+GAME_NUMBER = 4
 # MATCH_ID is optional. Set it only if you already know the ID, for example "M008".
 # When MATCH_ID is set, it overrides DATE and GAME_NUMBER in single-match mode.
 MATCH_ID = None
@@ -65,13 +47,17 @@ STRATEGY_MODE = "ev"
 # "balanced"
 # "public-ranking"
 # "aggressive-public-ranking"
+PUBLIC_STRATEGY_TARGET = "balanced"
+# Options: "friends", "balanced", "national".
+PUBLIC_FIELD_SIZE = 100
 
 # Conservative live default: keep the Poisson-only score matrix until a
 # blended correct-score default is validated. Use 0.85 only for research runs.
 CORRECT_SCORE_POISSON_WEIGHT = 1.0
 CORRECT_SCORE_AGGREGATION_METHOD = "auto"
 
-MARGIN_REMOVAL_METHOD = "normalised_inverse_odds"
+MARGIN_REMOVAL_METHOD = "shin"
+# shin is more aggressive than normalised_inverse_odds, power is more aggressive than shin, and additive is more aggressive than power.
 
 # Fast matchday defaults.
 RUN_PROFILE = "live"
@@ -92,7 +78,10 @@ WRITE_DETAILED_EXCEL = True
 WRITE_CACHE_OUTPUTS = True
 SHOW_RUNTIME_SUMMARY = True
 
+# Set a small positive rho to increase the probability of low-scoring draws, or a small negative rho to decrease it. 
+# The optimal value may differ between tournaments; 0.0 is a reasonable default for the World Cup.
 DIXON_COLES_RHO = 0.0
+
 
 STRICT_INPUT_VALIDATION = False
 STALE_ODDS_WARNING_HOURS = 24
@@ -115,10 +104,13 @@ NO_ODDS_INPUT_MESSAGE = (
     "### MATCH\n"
     "### OVER_UNDER\n"
     "### BTTS\n"
-    "### CORRECT_SCORE"
+    "### CORRECT_SCORE\n"
+    "Optional diagnostic section:\n"
+    "### ASIAN_HANDICAP"
 )
 VALID_RUN_MODES = {"all_available", "date", "single_match", "list_date"}
 VALID_STRATEGY_MODES = ("ev", "balanced", "public-ranking", "aggressive-public-ranking")
+VALID_PUBLIC_STRATEGY_TARGETS = ("friends", "balanced", "national")
 VALID_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive", "shin")
 VALID_RUN_PROFILES = ("live", "research")
 VALID_TERMINAL_VERBOSITIES = ("compact", "normal", "debug")
@@ -424,6 +416,8 @@ def main() -> None:
         "--strategy-mode",
         choices=VALID_STRATEGY_MODES,
     )
+    parser.add_argument("--public-strategy-target", choices=VALID_PUBLIC_STRATEGY_TARGETS)
+    parser.add_argument("--public-field-size", type=int)
     parser.add_argument("--skip-weight-sensitivity", action="store_true")
     parser.add_argument("--enable-weight-sensitivity", action="store_true")
     parser.add_argument("--disable-weight-sensitivity", action="store_true")
@@ -449,6 +443,12 @@ def main() -> None:
         game_number = args.game_number if args.game_number is not None else GAME_NUMBER
         match_id = args.match_id if args.match_id is not None else MATCH_ID
         strategy_mode = args.strategy_mode if args.strategy_mode is not None else STRATEGY_MODE
+        public_strategy_target = (
+            args.public_strategy_target
+            if args.public_strategy_target is not None
+            else PUBLIC_STRATEGY_TARGET
+        )
+        public_field_size = args.public_field_size if args.public_field_size is not None else PUBLIC_FIELD_SIZE
         run_profile = args.run_profile if args.run_profile is not None else RUN_PROFILE
         terminal_verbosity = (
             args.terminal_verbosity
@@ -629,7 +629,11 @@ def main() -> None:
                 enable_margin_method_comparison=enable_margin_method_comparison,
                 enable_market_consistent_challenger=enable_market_consistent_challenger,
                 dixon_coles_rho=dixon_coles_rho,
-                public_strategy=PublicStrategyConfig(mode=strategy_mode),
+                public_strategy=PublicStrategyConfig(
+                    mode=strategy_mode,
+                    public_strategy_target=public_strategy_target,
+                    public_field_size=public_field_size,
+                ),
             ),
         )
         result.runtime_timings["total"] = time.perf_counter() - total_start

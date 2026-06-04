@@ -530,9 +530,11 @@ def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
             ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
             ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
             ("14 Jun 2026", "06:00", "Australia", "Turkey"),
+            ("14 Jun 2026", "09:00", "Germany", "Curacao"),
+            ("14 Jun 2026", "12:00", "Netherlands", "Japan"),
         ],
     )
-    _write_combined_paste(tmp_path / "input/odds", "M003", clean_filename=True)
+    _write_combined_paste(tmp_path / "input/odds", "M004", clean_filename=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
 
@@ -540,7 +542,7 @@ def test_live_runner_script_runs_with_defaults_from_vscode_style_launch(
 
     output = capsys.readouterr().out
     assert "Final recommendations:" in output
-    assert "M003 Australia vs Turkey:" in output
+    assert "M004 Germany vs Curacao:" in output
     assert (tmp_path / "output/predictions.xlsx").exists()
 
 
@@ -739,6 +741,8 @@ def test_live_runner_script_list_date_lists_fixtures_and_exits(
             ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
             ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
             ("14 Jun 2026", "06:00", "Australia", "Turkey"),
+            ("14 Jun 2026", "09:00", "Germany", "Curacao"),
+            ("14 Jun 2026", "12:00", "Netherlands", "Japan"),
         ],
     )
     monkeypatch.chdir(tmp_path)
@@ -750,6 +754,8 @@ def test_live_runner_script_list_date_lists_fixtures_and_exits(
     assert "14 Jun 2026" in output
     assert "1. M001 | 00:00 | Brazil vs Morocco" in output
     assert "3. M003 | 06:00 | Australia vs Turkey" in output
+    assert "4. M004 | 09:00 | Germany vs Curacao" in output
+    assert "5. M005 | 12:00 | Netherlands vs Japan" in output
     assert "Final recommended submission:" not in output
     assert not (tmp_path / "output/predictions.xlsx").exists()
 

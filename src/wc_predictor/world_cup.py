@@ -9,7 +9,7 @@ from shutil import copyfile
 import time
 
 from wc_predictor.config import ProjectConfig
-from wc_predictor.market_data import load_correct_score_odds, load_odds, load_total_goals_odds
+from wc_predictor.market_data import load_asian_handicap_odds, load_correct_score_odds, load_odds, load_total_goals_odds
 from wc_predictor.paths import (
     INPUT_PREPARED_WORLD_CUP_ODDS_CSV_PATH,
     INPUT_PREPARED_WORLD_CUP_ODDS_XLSX_PATH,
@@ -41,6 +41,7 @@ class WorldCupPredictionSettings:
     input_path: Path | None = None
     correct_score_input_path: Path | None = None
     total_goals_input_path: Path | None = None
+    asian_handicap_input_path: Path | None = None
     csv_output_path: Path = OUTPUT_PREDICTIONS_CSV_PATH
     xlsx_output_path: Path = OUTPUT_PREDICTIONS_XLSX_PATH
     submission_xlsx_output_path: Path = OUTPUT_SUBMISSION_XLSX_PATH
@@ -96,6 +97,11 @@ def run_world_cup_predictions(
         if settings.total_goals_input_path is not None
         else None
     )
+    asian_handicap_odds = (
+        load_asian_handicap_odds(settings.asian_handicap_input_path)
+        if settings.asian_handicap_input_path is not None
+        else None
+    )
     model_start = time.perf_counter()
     market_consistent_before = (
         runtime_timings.get("market-consistent challenger", 0.0) if runtime_timings is not None else 0.0
@@ -106,6 +112,7 @@ def run_world_cup_predictions(
         config=config,
         correct_score_odds=correct_score_odds,
         total_goals_odds=total_goals_odds,
+        asian_handicap_odds=asian_handicap_odds,
         runtime_timings=runtime_timings,
         extra_warning_flags_by_match=settings.extra_warning_flags_by_match,
     )
@@ -128,6 +135,8 @@ def run_world_cup_predictions(
             settings.xlsx_output_path,
             workflow.margin_method_comparison,
             workflow.final_decision_dashboard,
+            workflow.aggregated_asian_handicap_probabilities,
+            workflow.margin_diagnostics,
         )
     export_world_cup_submission_sheet_excel(workflow.match_report, settings.submission_xlsx_output_path)
     if runtime_timings is not None:
@@ -147,6 +156,7 @@ def run_and_print_world_cup_predictions(
         input_path=input_path,
         correct_score_input_path=settings.correct_score_input_path,
         total_goals_input_path=settings.total_goals_input_path,
+        asian_handicap_input_path=settings.asian_handicap_input_path,
         csv_output_path=settings.csv_output_path,
         xlsx_output_path=settings.xlsx_output_path,
         submission_xlsx_output_path=settings.submission_xlsx_output_path,

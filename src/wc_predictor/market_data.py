@@ -51,6 +51,13 @@ def load_total_goals_odds(path: str | Path) -> pd.DataFrame:
     return _require_columns(load_tabular_data(path), required, "Total-goals odds")
 
 
+def load_asian_handicap_odds(path: str | Path) -> pd.DataFrame:
+    """Load optional long-format bookmaker Asian-handicap ladders."""
+
+    required = {"match_id", "bookmaker", "handicap", "odds_team_a", "odds_team_b"}
+    return _require_columns(load_tabular_data(path), required, "Asian-handicap odds")
+
+
 def load_predictions(path: str | Path) -> pd.DataFrame:
     """Load friends' predictions from CSV or Excel."""
 

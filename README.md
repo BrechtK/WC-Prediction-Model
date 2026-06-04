@@ -62,10 +62,26 @@ Team A vs Team B
 
 ### CORRECT_SCORE
 <paste OddsPortal correct-score table here>
+
+### ASIAN_HANDICAP
+<optional: paste OddsPortal Asian handicap table here>
 ```
 
 Live schedule and odds files are ignored by Git. Keep real tournament inputs in
 `input/`, not in `data/raw/`.
+
+Asian handicap is optional. When supplied, it is used by the
+market-consistent challenger and diagnostics to improve goal-difference and
+blowout-tail information; it does not override the default EV recommendation
+automatically. The market roles are:
+
+| Market | Main scoring information |
+| --- | --- |
+| 1X2 | Result tier |
+| Correct score | Exact-score tier |
+| Asian handicap | Goal-difference distribution |
+| O/U totals | Total-goals environment |
+| BTTS | Scoring dependence |
 
 ## Running From VS Code
 
@@ -131,6 +147,11 @@ TERMINAL_VERBOSITY = "debug"
 Research mode enables margin-method comparison, market-consistent challenger
 diagnostics, and correct-score weight sensitivity. These are for investigation;
 they do not change the default live recommendation by themselves.
+
+Public strategy remains diagnostic. Use `PUBLIC_STRATEGY_TARGET` /
+`public_strategy_target` values such as `friends`, `balanced`, or `national`
+to scale crowding/decorrelation diagnostics for different field sizes; pure
+expected-points optimisation stays the default score.
 
 Additional research diagnostics include optional Shin margin removal,
 market-estimated Dixon-Coles rho from low correct-score cells, and a historical

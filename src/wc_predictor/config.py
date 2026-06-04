@@ -98,6 +98,8 @@ class PublicStrategyConfig:
     min_exact_score_probability: float = 0.025
     min_result_probability: float = 0.20
     friend_sample_weight: float = 0.15
+    public_strategy_target: str = "balanced"
+    public_field_size: int = 100
     team_popularity_weights: dict[str, float] = field(
         default_factory=lambda: {
             "Belgium": 1.00,
@@ -120,6 +122,11 @@ class PublicStrategyConfig:
         valid_modes = {"ev", "balanced", "public-ranking", "aggressive-public-ranking"}
         if self.mode not in valid_modes:
             raise ValueError(f"strategy mode must be one of {sorted(valid_modes)}")
+        valid_targets = {"friends", "balanced", "national"}
+        if self.public_strategy_target not in valid_targets:
+            raise ValueError(f"public_strategy_target must be one of {sorted(valid_targets)}")
+        if self.public_field_size <= 0:
+            raise ValueError("public_field_size must be positive")
         for name in ("alpha", "beta", "gamma", "min_exact_score_probability", "min_result_probability"):
             value = float(getattr(self, name))
             if not np.isfinite(value) or value < 0:
@@ -142,6 +149,18 @@ class PublicStrategyConfig:
         if self.mode == "aggressive-public-ranking":
             return 0.30
         return 0.0
+
+    @property
+    def field_influence_scale(self) -> float:
+        """Return diagnostic public-field influence by target size."""
+
+        target_scale = {
+            "friends": 0.45,
+            "balanced": 1.0,
+            "national": 1.75,
+        }[self.public_strategy_target]
+        size_scale = min(2.0, max(0.35, np.log10(max(self.public_field_size, 2)) / 2.0))
+        return target_scale * size_scale
 
 
 @dataclass(frozen=True)

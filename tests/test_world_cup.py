@@ -666,6 +666,7 @@ def test_top_ten_ev_decomposition_is_written_to_excel(tmp_path: Path) -> None:
     assert "market_consistent_constraint_count" in market_consistent_headers
     assert "warning_flags" in market_consistent_headers
     assert "market_consistent_top_10_probability_scorelines" in market_consistent_headers
+    assert len(market_consistent_headers) == len(set(market_consistent_headers))
     assert "final_decision_score" in recommendation_headers
     assert "final_decision_score" in dashboard_headers
     assert "risk_notes" in dashboard_headers

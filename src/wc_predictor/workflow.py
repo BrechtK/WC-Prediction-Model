@@ -23,11 +23,14 @@ from wc_predictor.correct_scores import (
 )
 from wc_predictor.friends import analyse_friend_predictions
 from wc_predictor.margin import IMPLEMENTED_MARGIN_REMOVAL_METHODS
-from wc_predictor.market_consistent import fit_market_consistent_matrix
+from wc_predictor.margin_diagnostics import draw_vs_decisive_diagnostics, margin_ev_diagnostics
+from wc_predictor.market_consistent import fit_market_consistent_matrix, select_asian_handicap_constraints
 from wc_predictor.odds import (
+    aggregate_asian_handicap_probabilities,
     aggregate_bookmaker_probabilities,
     aggregate_total_goals_probabilities,
     process_bookmaker_odds,
+    process_asian_handicap_odds,
     process_correct_score_odds,
     process_total_goals_odds,
 )
@@ -81,6 +84,9 @@ class PredictionWorkflowResult:
     challenger_score_matrices: dict[str, dict[str, ScoreProbabilityMatrix]]
     margin_method_comparison: pd.DataFrame
     final_decision_dashboard: pd.DataFrame
+    processed_asian_handicap_probabilities: pd.DataFrame
+    aggregated_asian_handicap_probabilities: pd.DataFrame
+    margin_diagnostics: pd.DataFrame
 
 
 def _optional_probability(row: pd.Series, column: str) -> float | None:
@@ -788,6 +794,7 @@ def _build_margin_method_comparison(
     default_report: pd.DataFrame,
     correct_score_odds: pd.DataFrame | None,
     total_goals_odds: pd.DataFrame | None,
+    asian_handicap_odds: pd.DataFrame | None,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     default_by_match = default_report.set_index("match_id")
@@ -803,6 +810,7 @@ def _build_margin_method_comparison(
                 config=comparison_config,
                 correct_score_odds=correct_score_odds,
                 total_goals_odds=total_goals_odds,
+                asian_handicap_odds=asian_handicap_odds,
             )
         except (ValueError, NotImplementedError) as error:
             rows.extend(_failed_margin_method_rows(odds, method, error))
@@ -1028,6 +1036,7 @@ def _build_final_decision_dashboard(
         market_consistent_score = str(row.get("market_consistent_recommended_score", ""))
         dixon_coles_score = str(row.get("dixon_coles_recommended_score", ""))
         public_strategy_score = str(row.get("public_strategy_score", ""))
+        asian_handicap_shift = str(row.get("asian_handicap_shift_recommendation", "no")).lower() == "yes"
         correct_score_blended_score = str(row.get("correct_score_blended_recommended_score", ""))
         challenger_scores = [
             market_consistent_score,
@@ -1075,6 +1084,8 @@ def _build_final_decision_dashboard(
             high_score_cluster=high_score_cluster,
             warning_flags=str(row.get("warning_flags", "")),
         )
+        if asian_handicap_shift:
+            risk_notes = "; ".join(filter(None, [risk_notes, "asian_handicap_shifts_market_consistent_score"]))
         manual_review = any(
             [
                 ev_gap_small,
@@ -1122,6 +1133,10 @@ def _build_final_decision_dashboard(
                 "market_consistent_differs": "yes" if market_consistent_differs else "no",
                 "dixon_coles_differs": "yes" if dixon_coles_differs else "no",
                 "public_strategy_differs": "yes" if public_strategy_differs else "no",
+                "asian_handicap_shift_recommendation": "yes" if asian_handicap_shift else "no",
+                "margin_ev_gap": row.get("margin_ev_gap", pd.NA),
+                "draw_vs_decisive_gap": row.get("draw_vs_decisive_gap", pd.NA),
+                "margin_diagnostic_note": row.get("margin_diagnostic_note", ""),
                 "warning_flags": row.get("warning_flags", ""),
                 "risk_notes": risk_notes,
                 "decision_note": decision_note,
@@ -1158,6 +1173,14 @@ def _format_total_goals_lines(rows: pd.DataFrame) -> str:
     if rows.empty:
         return ""
     return "; ".join(f"{float(line):g}" for line in sorted(rows["line"].unique()))
+
+
+def _format_asian_handicap_lines(rows: pd.DataFrame) -> str:
+    """Format distinct handicap lines compactly for recommendation diagnostics."""
+
+    if rows.empty:
+        return ""
+    return "; ".join(f"{float(line):+g}" for line in sorted(rows["handicap"].unique()))
 
 
 def _format_total_goals_fit_diagnostics(
@@ -1284,6 +1307,7 @@ def run_prediction_workflow(
     config: ProjectConfig | None = None,
     correct_score_odds: pd.DataFrame | None = None,
     total_goals_odds: pd.DataFrame | None = None,
+    asian_handicap_odds: pd.DataFrame | None = None,
     runtime_timings: dict[str, float] | None = None,
     extra_warning_flags_by_match: Mapping[str, Sequence[str]] | None = None,
 ) -> PredictionWorkflowResult:
@@ -1314,6 +1338,17 @@ def run_prediction_workflow(
         else pd.DataFrame()
     )
     aggregated_total_goals = aggregate_total_goals_probabilities(processed_total_goals)
+    processed_asian_handicap = (
+        process_asian_handicap_odds(
+            asian_handicap_odds,
+            config.margin_removal_method,
+            config.suspicious_overround_low,
+            config.suspicious_overround_high,
+        )
+        if asian_handicap_odds is not None
+        else pd.DataFrame()
+    )
+    aggregated_asian_handicap = aggregate_asian_handicap_probabilities(processed_asian_handicap)
     aggregated = aggregate_bookmaker_probabilities(bookmaker_probabilities, config.bookmaker_aggregation_method)
     required_1x2 = {"fair_a_win", "fair_draw", "fair_b_win"}
     if not required_1x2.issubset(aggregated.columns):
@@ -1336,12 +1371,19 @@ def run_prediction_workflow(
     correct_score_matrices: dict[str, ScoreProbabilityMatrix] = {}
     baseline_matrices: dict[str, ScoreProbabilityMatrix] = {}
     challenger_matrices: dict[str, dict[str, ScoreProbabilityMatrix]] = {}
+    margin_diagnostic_frames: list[pd.DataFrame] = []
+    asian_handicap_diagnostic_frames: list[pd.DataFrame] = []
     for _, row in market.iterrows():
         match_id = str(row["match_id"])
         metadata = odds_metadata[match_id]
         match_total_goals = (
             aggregated_total_goals[aggregated_total_goals["match_id"].astype(str) == match_id]
             if not aggregated_total_goals.empty
+            else pd.DataFrame()
+        )
+        match_asian_handicap = (
+            aggregated_asian_handicap[aggregated_asian_handicap["match_id"].astype(str) == match_id]
+            if not aggregated_asian_handicap.empty
             else pd.DataFrame()
         )
         calibratable_total_goals = (
@@ -1375,6 +1417,13 @@ def run_prediction_workflow(
             config.poor_calibration_loss_threshold,
         )
         poisson_matrix = calibration.score_matrix
+        match_asian_handicap = select_asian_handicap_constraints(
+            match_asian_handicap,
+            poisson_matrix.probabilities.shape,
+            {"a_win": targets.a_win, "draw": targets.draw, "b_win": targets.b_win},
+        )
+        if not match_asian_handicap.empty:
+            asian_handicap_diagnostic_frames.append(match_asian_handicap)
         baseline_matrices[match_id] = poisson_matrix
         correct_score_blend_suppressed = False
         correct_score_blend_note = ""
@@ -1483,6 +1532,11 @@ def run_prediction_workflow(
                 "Stored but skipped from default Poisson calibration; used by market-consistent diagnostics: "
                 + _format_total_goals_lines(skipped_total_goals)
             )
+        if not match_asian_handicap.empty:
+            notes.append(
+                "Asian handicap market supplied; used only by market-consistent challenger diagnostics: "
+                + _format_asian_handicap_lines(match_asian_handicap)
+            )
         if correct_score_blend_note:
             notes.append(correct_score_blend_note)
         knockout = is_knockout_stage(str(row["stage"]))
@@ -1529,6 +1583,12 @@ def run_prediction_workflow(
         )
         if run_market_consistent:
             market_consistent_start = time.perf_counter()
+            market_consistent_kwargs: dict[str, object] = {
+                "total_goals": match_total_goals,
+                "correct_score_matrix": correct_score_matrices.get(match_id),
+            }
+            if not match_asian_handicap.empty:
+                market_consistent_kwargs["asian_handicap"] = match_asian_handicap
             market_consistent_result = fit_market_consistent_matrix(
                 poisson_matrix,
                 {
@@ -1537,8 +1597,7 @@ def run_prediction_workflow(
                     "b_win": targets.b_win,
                     "btts_yes": _optional_probability(row, "fair_btts_yes"),
                 },
-                total_goals=match_total_goals,
-                correct_score_matrix=correct_score_matrices.get(match_id),
+                **market_consistent_kwargs,
             )
             market_consistent_matrix = market_consistent_result.matrix
             match_challenger_matrices["market_consistent_matrix"] = market_consistent_matrix
@@ -1581,13 +1640,42 @@ def run_prediction_workflow(
                         "market_consistent_1x2_constraint_count": 0,
                         "market_consistent_btts_constraint_count": 0,
                         "market_consistent_total_goals_constraint_count": 0,
+                        "market_consistent_asian_handicap_constraint_count": 0,
                         "market_consistent_correct_score_constraint_count": 0,
                         "market_consistent_kl_divergence_vs_prior": pd.NA,
                         "market_consistent_1x2_fit_error": pd.NA,
                         "market_consistent_btts_fit_error": pd.NA,
                         "market_consistent_total_goals_fit_error": pd.NA,
+                        "market_consistent_asian_handicap_fit_error": pd.NA,
                         "market_consistent_correct_score_fit_error": pd.NA,
                         "market_consistent_asian_totals_used": "",
+                        "market_consistent_asian_handicap_lines_available": len(match_asian_handicap),
+                        "market_consistent_asian_handicap_lines_selected": int(
+                            match_asian_handicap["selected_for_market_consistent"]
+                            .astype(str)
+                            .str.lower()
+                            .eq("yes")
+                            .sum()
+                        )
+                        if not match_asian_handicap.empty and "selected_for_market_consistent" in match_asian_handicap
+                        else 0,
+                        "market_consistent_asian_handicap_lines_skipped": int(
+                            match_asian_handicap["selected_for_market_consistent"]
+                            .astype(str)
+                            .str.lower()
+                            .ne("yes")
+                            .sum()
+                        )
+                        if not match_asian_handicap.empty and "selected_for_market_consistent" in match_asian_handicap
+                        else 0,
+                        "market_consistent_asian_handicap_lines_used": "",
+                        "market_consistent_asian_handicap_lines_skipped_detail": "",
+                        "market_consistent_asian_handicap_fit_error_selected": pd.NA,
+                        "market_consistent_asian_handicap_fit_error_all": pd.NA,
+                        "market_consistent_margin_distribution_before": "",
+                        "market_consistent_margin_distribution_after": "",
+                        "market_consistent_largest_margin_shift": pd.NA,
+                        "market_consistent_largest_margin_shift_value": pd.NA,
                     }
                 },
             )()
@@ -1648,6 +1736,13 @@ def run_prediction_workflow(
             bool(market_consistent_asian_totals_used)
             and market_consistent_recommended_score != baseline_poisson_recommended_score
         )
+        market_consistent_asian_handicap_lines_used = str(
+            market_consistent_result.diagnostics.get("market_consistent_asian_handicap_lines_used", "")
+        )
+        asian_handicap_shift_recommendation = (
+            bool(market_consistent_asian_handicap_lines_used)
+            and market_consistent_recommended_score != baseline_poisson_recommended_score
+        )
         score_audit = _score_matrix_audit(score_matrix)
         market_btts_yes = row.get("fair_btts_yes", pd.NA)
         market_btts_no = row.get("fair_btts_no", pd.NA)
@@ -1687,6 +1782,69 @@ def run_prediction_workflow(
             market_consistent_top_10_ev_decomposition_records = []
             market_consistent_top_10_ev_decomposition_json = "[]"
             market_consistent_top_10_probability_scorelines = ""
+        if not knockout:
+            match_margin_diagnostics = margin_ev_diagnostics(
+                score_matrix,
+                match_id,
+                config.max_candidate_goals,
+            )
+            margin_diagnostic_frames.append(match_margin_diagnostics)
+            top_margin = match_margin_diagnostics.iloc[0] if not match_margin_diagnostics.empty else pd.Series(dtype=object)
+            second_margin = (
+                match_margin_diagnostics.iloc[1]
+                if len(match_margin_diagnostics) > 1
+                else pd.Series(dtype=object)
+            )
+            margin_ev_gap = (
+                float(top_margin["representative_scoreline_ev"] - second_margin["representative_scoreline_ev"])
+                if not top_margin.empty and not second_margin.empty
+                else pd.NA
+            )
+            margin_diagnostic_note = (
+                f"Best margin {int(top_margin['margin']):+d} via {top_margin['best_scoreline_on_margin']} "
+                f"beats next margin by {float(margin_ev_gap):.3f} EV."
+                if pd.notna(margin_ev_gap)
+                else ""
+            )
+            largest_margin_shift_value = market_consistent_result.diagnostics.get(
+                "market_consistent_largest_margin_shift_value",
+                pd.NA,
+            )
+            if (
+                bool(market_consistent_asian_handicap_lines_used)
+                and pd.notna(largest_margin_shift_value)
+                and abs(float(largest_margin_shift_value)) >= 0.02
+            ):
+                margin_diagnostic_note = " ".join(
+                    filter(
+                        None,
+                        [
+                            margin_diagnostic_note,
+                            (
+                                "AH constraints shift margin distribution: "
+                                f"largest shift at margin "
+                                f"{market_consistent_result.diagnostics.get('market_consistent_largest_margin_shift')} "
+                                f"({float(largest_margin_shift_value):+.3f})."
+                            ),
+                        ],
+                    )
+                )
+            draw_decisive = draw_vs_decisive_diagnostics(
+                score_matrix,
+                config.max_candidate_goals,
+                config.strategies.low_confidence_ev_gap_threshold,
+            )
+        else:
+            margin_ev_gap = pd.NA
+            margin_diagnostic_note = "Margin decomposition diagnostics are group-stage only."
+            draw_decisive = {
+                "best_draw_score": "",
+                "best_draw_ev": pd.NA,
+                "best_decisive_score": "",
+                "best_decisive_ev": pd.NA,
+                "draw_vs_decisive_gap": pd.NA,
+                "draw_boundary_flag": "",
+            }
         market_consistent_status = str(
             market_consistent_result.diagnostics.get("market_consistent_status", "")
         )
@@ -2011,6 +2169,12 @@ def run_prediction_workflow(
                 "market_consistent_asian_totals_shift_recommendation": (
                     "yes" if market_consistent_asian_totals_shift_recommendation else "no"
                 ),
+                "asian_handicap_lines_available": _format_asian_handicap_lines(match_asian_handicap),
+                "asian_handicap_lines_used": market_consistent_asian_handicap_lines_used,
+                "asian_handicap_shift_recommendation": "yes" if asian_handicap_shift_recommendation else "no",
+                "margin_ev_gap": margin_ev_gap,
+                "margin_diagnostic_note": margin_diagnostic_note,
+                **draw_decisive,
                 **market_consistent_high_score_comparison,
                 "exact_score_probability": recommendation.best.exact_score_probability,
                 "correct_goal_difference_probability": recommendation.best.correct_goal_difference_probability,
@@ -2045,11 +2209,23 @@ def run_prediction_workflow(
                 "public_strategy_exact_score_probability": public_strategy.public_strategy_exact_score_probability,
                 "public_strategy_result_probability": public_strategy.public_strategy_result_probability,
                 "public_strategy_candidate_count": public_strategy.public_strategy_candidate_count,
+                "public_strategy_target": public_strategy.public_strategy_target,
+                "public_field_size": public_strategy.public_field_size,
                 "friend_strategy_score": public_strategy.friend_strategy_score,
                 "friend_strategy_reason": public_strategy.friend_strategy_reason,
             }
         )
     match_report = pd.DataFrame(report_rows)
+    margin_diagnostics_frame = (
+        pd.concat(margin_diagnostic_frames, ignore_index=True)
+        if margin_diagnostic_frames
+        else pd.DataFrame()
+    )
+    asian_handicap_diagnostics_frame = (
+        pd.concat(asian_handicap_diagnostic_frames, ignore_index=True)
+        if asian_handicap_diagnostic_frames
+        else aggregated_asian_handicap
+    )
     friend_report = (
         analyse_friend_predictions(predictions, matches, matrices, recommendations, qualification, config)
         if predictions is not None
@@ -2063,6 +2239,7 @@ def run_prediction_workflow(
             default_report=match_report,
             correct_score_odds=correct_score_odds,
             total_goals_odds=total_goals_odds,
+            asian_handicap_odds=asian_handicap_odds,
         )
         if runtime_timings is not None:
             runtime_timings["margin-method comparison"] = (
@@ -2091,6 +2268,10 @@ def run_prediction_workflow(
             "override_candidate",
             "risk_notes",
             "decision_note",
+            "asian_handicap_shift_recommendation",
+            "margin_ev_gap",
+            "draw_vs_decisive_gap",
+            "margin_diagnostic_note",
         ]
         match_report = match_report.drop(
             columns=[column for column in decision_columns if column in match_report and column != "match_id"],
@@ -2117,4 +2298,7 @@ def run_prediction_workflow(
         challenger_matrices,
         margin_method_comparison,
         final_decision_dashboard,
+        processed_asian_handicap,
+        asian_handicap_diagnostics_frame,
+        margin_diagnostics_frame,
     )

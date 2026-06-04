@@ -18,6 +18,7 @@ SECTION_FILENAMES = {
     "over_under": "over_under",
     "btts": "btts",
     "correct_score": "correct_score",
+    "asian_handicap": "asian_handicap",
 }
 OPTIONAL_SECTIONS = ("over_under", "btts", "correct_score")
 _FILENAME_PATTERN = re.compile(r"^(?P<match_id>.+?)(?:_all_odds)?\.txt$", re.IGNORECASE)
@@ -32,6 +33,8 @@ _SECTION_ALIASES = {
     "BTTS": "btts",
     "BOTH TEAMS TO SCORE": "btts",
     "CORRECT SCORE": "correct_score",
+    "ASIAN HANDICAP": "asian_handicap",
+    "HANDICAP": "asian_handicap",
 }
 
 

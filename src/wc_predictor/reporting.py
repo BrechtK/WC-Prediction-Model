@@ -546,6 +546,7 @@ def _market_consistent_diagnostics_sheet(frame: pd.DataFrame) -> pd.DataFrame:
         "market_consistent_1x2_constraint_count",
         "market_consistent_btts_constraint_count",
         "market_consistent_total_goals_constraint_count",
+        "market_consistent_asian_handicap_constraint_count",
         "market_consistent_correct_score_constraint_count",
         "warning_flags",
         "market_consistent_best_expected_points",
@@ -554,9 +555,22 @@ def _market_consistent_diagnostics_sheet(frame: pd.DataFrame) -> pd.DataFrame:
         "market_consistent_1x2_fit_error",
         "market_consistent_btts_fit_error",
         "market_consistent_total_goals_fit_error",
+        "market_consistent_asian_handicap_fit_error",
+        "market_consistent_asian_handicap_fit_error_selected",
+        "market_consistent_asian_handicap_fit_error_all",
+        "market_consistent_largest_margin_shift_value",
         "market_consistent_correct_score_fit_error",
         "market_consistent_asian_totals_used",
         "market_consistent_asian_totals_shift_recommendation",
+        "market_consistent_asian_handicap_lines_available",
+        "market_consistent_asian_handicap_lines_selected",
+        "market_consistent_asian_handicap_lines_skipped",
+        "market_consistent_asian_handicap_lines_used",
+        "market_consistent_asian_handicap_lines_skipped_detail",
+        "asian_handicap_shift_recommendation",
+        "market_consistent_margin_distribution_before",
+        "market_consistent_margin_distribution_after",
+        "market_consistent_largest_margin_shift",
         "market_consistent_top_10_ev_scorelines",
         "market_consistent_top_10_ev_decomposition",
         "market_consistent_top_10_probability_scorelines",
@@ -567,7 +581,8 @@ def _market_consistent_diagnostics_sheet(frame: pd.DataFrame) -> pd.DataFrame:
         "market_consistent_matrix_ev_favourite_4_0",
         "market_consistent_matrix_ev_favourite_5_0",
     ]
-    return frame[[column for column in columns if column in frame]].copy()
+    selected_columns = list(dict.fromkeys(column for column in columns if column in frame))
+    return frame[selected_columns].copy()
 
 
 def export_world_cup_recommendations_excel(
@@ -575,6 +590,8 @@ def export_world_cup_recommendations_excel(
     path: str | Path,
     margin_method_comparison: pd.DataFrame | None = None,
     final_decision_dashboard: pd.DataFrame | None = None,
+    asian_handicap_diagnostics: pd.DataFrame | None = None,
+    margin_diagnostics: pd.DataFrame | None = None,
 ) -> None:
     """Export readable real-tournament recommendations with Excel formatting."""
 
@@ -725,9 +742,23 @@ def export_world_cup_recommendations_excel(
         "market_consistent_1x2_fit_error",
         "market_consistent_btts_fit_error",
         "market_consistent_total_goals_fit_error",
+        "market_consistent_asian_handicap_fit_error",
         "market_consistent_correct_score_fit_error",
         "market_consistent_asian_totals_used",
         "market_consistent_asian_totals_shift_recommendation",
+        "asian_handicap_lines_available",
+        "asian_handicap_lines_used",
+        "market_consistent_asian_handicap_lines_available",
+        "market_consistent_asian_handicap_lines_selected",
+        "market_consistent_asian_handicap_lines_skipped",
+        "market_consistent_asian_handicap_lines_used",
+        "market_consistent_asian_handicap_lines_skipped_detail",
+        "market_consistent_asian_handicap_fit_error_selected",
+        "market_consistent_asian_handicap_fit_error_all",
+        "market_consistent_margin_distribution_before",
+        "market_consistent_margin_distribution_after",
+        "market_consistent_largest_margin_shift",
+        "market_consistent_largest_margin_shift_value",
         "market_consistent_top_10_ev_scorelines",
         "market_consistent_top_10_ev_decomposition",
         "market_consistent_top_10_probability_scorelines",
@@ -740,6 +771,8 @@ def export_world_cup_recommendations_excel(
         "estimated_most_crowded_public_score",
         "estimated_most_crowded_public_pick_share",
         "public_strategy_mode",
+        "public_strategy_target",
+        "public_field_size",
         "public_strategy_score",
         "public_strategy_ev_cost",
         "public_strategy_public_pick_share",
@@ -789,6 +822,9 @@ def export_world_cup_recommendations_excel(
         "correct_score_blended_top_10",
         "ev_gap_best_vs_second",
         "ev_gap_best_vs_modal",
+        "margin_ev_gap",
+        "draw_vs_decisive_gap",
+        "margin_diagnostic_note",
         "warning_flags",
         "lambda_a_near_bound",
         "lambda_b_near_bound",
@@ -807,6 +843,10 @@ def export_world_cup_recommendations_excel(
             high_score_diagnostics.to_excel(writer, index=False, sheet_name="high_score_diagnostics")
         if not market_consistent_diagnostics.empty:
             market_consistent_diagnostics.to_excel(writer, index=False, sheet_name="market_consistent")
+        if asian_handicap_diagnostics is not None and not asian_handicap_diagnostics.empty:
+            asian_handicap_diagnostics.to_excel(writer, index=False, sheet_name="asian_handicap")
+        if margin_diagnostics is not None and not margin_diagnostics.empty:
+            margin_diagnostics.to_excel(writer, index=False, sheet_name="margin_diagnostics")
         if margin_method_comparison is not None and not margin_method_comparison.empty:
             margin_method_comparison.to_excel(writer, index=False, sheet_name="margin_methods")
         if final_decision_dashboard is not None and not final_decision_dashboard.empty:
@@ -905,7 +945,12 @@ def export_world_cup_recommendations_excel(
         "market_consistent_1x2_fit_error",
         "market_consistent_btts_fit_error",
         "market_consistent_total_goals_fit_error",
+        "market_consistent_asian_handicap_fit_error",
         "market_consistent_correct_score_fit_error",
+        "margin_ev_gap",
+        "draw_vs_decisive_gap",
+        "best_draw_ev",
+        "best_decisive_ev",
         "market_consistent_poisson_ev_favourite_3_0",
         "market_consistent_poisson_ev_favourite_4_0",
         "market_consistent_poisson_ev_favourite_5_0",
@@ -963,6 +1008,12 @@ def export_world_cup_recommendations_excel(
         "model_disagreement_warning",
         "dixon_coles_top_5_ev_predictions",
         "market_consistent_asian_totals_used",
+        "asian_handicap_lines_available",
+        "asian_handicap_lines_used",
+        "market_consistent_asian_handicap_lines_used",
+        "market_consistent_margin_distribution_before",
+        "market_consistent_margin_distribution_after",
+        "margin_diagnostic_note",
         "market_consistent_top_10_ev_scorelines",
         "market_consistent_top_10_ev_decomposition",
         "market_consistent_top_10_probability_scorelines",
