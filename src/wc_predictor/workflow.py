@@ -24,7 +24,12 @@ from wc_predictor.correct_scores import (
 from wc_predictor.friends import analyse_friend_predictions
 from wc_predictor.margin import IMPLEMENTED_MARGIN_REMOVAL_METHODS
 from wc_predictor.margin_diagnostics import draw_vs_decisive_diagnostics, margin_ev_diagnostics
-from wc_predictor.market_consistent import fit_market_consistent_matrix, select_asian_handicap_constraints
+from wc_predictor.margin_model import fit_skellam_margin_model
+from wc_predictor.market_consistent import (
+    MarketConsistentWeights,
+    fit_market_consistent_matrix,
+    select_asian_handicap_constraints,
+)
 from wc_predictor.odds import (
     aggregate_asian_handicap_probabilities,
     aggregate_bookmaker_probabilities,
@@ -48,9 +53,11 @@ from wc_predictor.probabilities import ScoreProbabilityMatrix
 from wc_predictor.public_strategy import build_public_strategy
 from wc_predictor.scoring_rules import DEFAULT_GROUP_SCORING
 from wc_predictor.score_models import (
+    BivariatePoissonScoreModel,
     DixonColesScoreModel,
     Match,
     build_challenger_score_matrices,
+    conservative_bivariate_covariance,
     estimate_dixon_coles_rho_from_market,
 )
 from wc_predictor.utils import favourite_strength_bucket, is_knockout_stage
@@ -539,12 +546,13 @@ def _larger_grid_sensitivity(
     normal_poisson_matrix: ScoreProbabilityMatrix,
     normal_poisson_recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
     favourite_is_team_a: bool,
+    larger_max_goals: int = LARGER_GRID_MAX_GOALS,
 ) -> dict[str, object]:
     final_score = _score_label(final_recommendation.best.predicted_score)
     normal_poisson_score = _score_label(normal_poisson_recommendation.best.predicted_score)
     larger_calibration = calibrate_poisson_model(
         targets,
-        LARGER_GRID_MAX_GOALS,
+        larger_max_goals,
         config.calibration_weights,
         config.renormalise_score_matrix,
         config.poor_calibration_loss_threshold,
@@ -588,6 +596,10 @@ def _larger_grid_sensitivity(
         "larger_grid_poisson_changes_recommendation": normal_poisson_score != larger_score,
         "larger_grid_differs_from_live_recommendation": final_score != larger_score,
         "larger_grid_tail_mass": larger_calibration.score_matrix.tail_probability,
+        "grid_max_goals_used": int(larger_max_goals),
+        "tail_mass_before_grid_extension": float(normal_poisson_matrix.tail_probability),
+        "tail_mass_after_grid_extension": float(larger_calibration.score_matrix.tail_probability),
+        "recommendation_changed_due_to_larger_grid": "yes" if normal_poisson_score != larger_score else "no",
         **clean_sheet_evs,
     }
 
@@ -674,6 +686,190 @@ def _market_consistent_high_score_comparison(
             config,
         )
     return comparison
+
+
+def _market_consistent_weights(config: ProjectConfig) -> MarketConsistentWeights:
+    """Scale the baseline market-consistent weights by configured group multipliers."""
+
+    base = MarketConsistentWeights()
+    groups = config.market_consistent_group_weights
+    return MarketConsistentWeights(
+        one_x_two=base.one_x_two * groups.one_x_two,
+        liquid_total_goals=base.liquid_total_goals * groups.total_goals,
+        asian_handicap=base.asian_handicap * groups.asian_handicap,
+        btts=base.btts * groups.btts,
+        correct_score=base.correct_score * groups.correct_score,
+        max_correct_score_cells=base.max_correct_score_cells,
+    )
+
+
+_RESULT_MARGIN_OVERLAP_GROUPS = ("1x2", "asian_handicap", "correct_score")
+
+
+def _market_consistent_correlation_note(diagnostics: object) -> tuple[str, str]:
+    """Return active constraint groups and a double-counting scaffold note.
+
+    Constraints are weighted but treated as independent. 1X2, Asian handicap and
+    correct score all carry result/margin information, so activating several at
+    once can over-count shared market signal. This is a transparent diagnostic,
+    not a fitted covariance model.
+    """
+
+    get = diagnostics.get if hasattr(diagnostics, "get") else (lambda *_: 0)
+    counts = {
+        "1x2": int(get("market_consistent_1x2_constraint_count", 0) or 0),
+        "btts": int(get("market_consistent_btts_constraint_count", 0) or 0),
+        "total_goals": int(get("market_consistent_total_goals_constraint_count", 0) or 0),
+        "asian_handicap": int(get("market_consistent_asian_handicap_constraint_count", 0) or 0),
+        "correct_score": int(get("market_consistent_correct_score_constraint_count", 0) or 0),
+    }
+    active = [group for group, count in counts.items() if count > 0]
+    overlap = [group for group in _RESULT_MARGIN_OVERLAP_GROUPS if counts[group] > 0]
+    note = "constraints_treated_independently"
+    if len(overlap) >= 2:
+        note += "; potential_result_margin_double_counting:" + "+".join(overlap)
+    return ", ".join(active), note
+
+
+def _build_bivariate_prior_matrix(
+    *,
+    match: Match,
+    lambda_a: float,
+    lambda_b: float,
+    config: ProjectConfig,
+    max_goals: int,
+) -> tuple[ScoreProbabilityMatrix | None, float, str]:
+    """Return a conservative bivariate-Poisson matrix, or None when unstable."""
+
+    covariance = conservative_bivariate_covariance(lambda_a, lambda_b, config.bivariate_poisson_covariance)
+    try:
+        matrix = BivariatePoissonScoreModel(
+            lambda_a, lambda_b, covariance, config.renormalise_score_matrix
+        ).predict_score_matrix(match, max_goals)
+    except ValueError as exc:
+        return None, covariance, f"bivariate_poisson_unstable:{exc}"
+    return matrix, covariance, ""
+
+
+def _empty_bivariate_diagnostic() -> dict[str, object]:
+    return {
+        "bivariate_lambda_1": pd.NA,
+        "bivariate_lambda_2": pd.NA,
+        "bivariate_lambda_3": pd.NA,
+        "bivariate_prior_recommended_score": "",
+        "bivariate_differs_from_default": "no",
+        "bivariate_warnings": "",
+    }
+
+
+def _bivariate_poisson_diagnostic(
+    *,
+    match: Match,
+    calibration: object,
+    config: ProjectConfig,
+    knockout: bool,
+    qualifier_probabilities: dict[str, float] | None,
+    default_score: tuple[int, int],
+) -> dict[str, object]:
+    """Optional research-only bivariate-Poisson challenger recommendation."""
+
+    if not config.enable_bivariate_poisson_diagnostic:
+        return _empty_bivariate_diagnostic()
+    lambda_a = float(calibration.lambda_a)
+    lambda_b = float(calibration.lambda_b)
+    covariance = conservative_bivariate_covariance(lambda_a, lambda_b, config.bivariate_poisson_covariance)
+    try:
+        matrix = BivariatePoissonScoreModel(
+            lambda_a, lambda_b, covariance, config.renormalise_score_matrix
+        ).predict_score_matrix(match, config.max_goals_score_matrix)
+    except ValueError as exc:
+        diagnostic = _empty_bivariate_diagnostic()
+        diagnostic["bivariate_lambda_3"] = float(covariance)
+        diagnostic["bivariate_warnings"] = f"bivariate_poisson_unstable:{exc}"
+        return diagnostic
+    recommendation = _optimise_score_matrix(matrix, knockout, qualifier_probabilities, config)
+    score = recommendation.best.predicted_score
+    warning = "bivariate_reduces_to_independent_poisson" if covariance == 0.0 else ""
+    return {
+        "bivariate_lambda_1": float(lambda_a - covariance),
+        "bivariate_lambda_2": float(lambda_b - covariance),
+        "bivariate_lambda_3": float(covariance),
+        "bivariate_prior_recommended_score": _score_label(score),
+        "bivariate_differs_from_default": "yes" if score != default_score else "no",
+        "bivariate_warnings": warning,
+    }
+
+
+def _empty_margin_model_diagnostic() -> dict[str, object]:
+    return {
+        "asian_handicap_margin_model_type": "",
+        "asian_handicap_margin_parameters": "",
+        "asian_handicap_margin_fit_error": pd.NA,
+        "asian_handicap_margin_distribution_comparison": "",
+        "asian_handicap_margin_recommendation_if_adjusted": "",
+        "asian_handicap_margin_model_warnings": "",
+    }
+
+
+def _asian_handicap_margin_model_diagnostic(
+    *,
+    config: ProjectConfig,
+    match_asian_handicap: pd.DataFrame,
+    lambda_a: float,
+    lambda_b: float,
+) -> dict[str, object]:
+    """Optional research-only Skellam margin model fitted to Asian-handicap lines."""
+
+    if not config.enable_asian_handicap_margin_model:
+        return _empty_margin_model_diagnostic()
+    model = fit_skellam_margin_model(
+        match_asian_handicap if match_asian_handicap is not None and not match_asian_handicap.empty else None,
+        lambda_a=lambda_a,
+        lambda_b=lambda_b,
+    )
+    if model is None:
+        return _empty_margin_model_diagnostic()
+    parameters = "; ".join(f"{key}={value:.4f}" for key, value in model.fitted_margin_parameters.items())
+    return {
+        "asian_handicap_margin_model_type": model.margin_model_type,
+        "asian_handicap_margin_parameters": parameters,
+        "asian_handicap_margin_fit_error": model.margin_fit_error,
+        "asian_handicap_margin_distribution_comparison": model.margin_distribution_comparison,
+        "asian_handicap_margin_recommendation_if_adjusted": model.recommendation_if_margin_adjusted,
+        "asian_handicap_margin_model_warnings": model.warnings,
+    }
+
+
+def _select_market_consistent_prior(
+    *,
+    prior_choice: str,
+    poisson_matrix: ScoreProbabilityMatrix,
+    dixon_coles_matrix: ScoreProbabilityMatrix,
+    dixon_coles_rho_estimate: object,
+    bivariate_matrix: ScoreProbabilityMatrix | None,
+    bivariate_warning: str,
+) -> tuple[ScoreProbabilityMatrix, str, float, str]:
+    """Pick the prior matrix for the market-consistent projection.
+
+    Returns ``(prior_matrix, prior_source, dixon_coles_rho_used, warning)``.
+    Defaults to independent Poisson; a Dixon-Coles prior uses the estimated or
+    configured rho; a bivariate prior falls back to independent Poisson with a
+    warning when estimation is unstable.
+    """
+
+    if prior_choice == "dixon_coles":
+        rho_used = float(getattr(dixon_coles_rho_estimate, "rho", 0.0))
+        return dixon_coles_matrix, "dixon_coles", rho_used, str(getattr(dixon_coles_rho_estimate, "warning", ""))
+    if prior_choice == "bivariate_poisson":
+        if bivariate_matrix is not None:
+            return bivariate_matrix, "bivariate_poisson", float("nan"), bivariate_warning
+        return (
+            poisson_matrix,
+            "independent_poisson_fallback",
+            float("nan"),
+            bivariate_warning or "bivariate prior unavailable; used independent Poisson",
+        )
+    return poisson_matrix, "independent_poisson", float("nan"), ""
 
 
 def _should_run_market_consistent_challenger(
@@ -789,6 +985,70 @@ def _failed_margin_method_rows(
         }
         for _, row in matches.iterrows()
     ]
+
+
+def _first_nonempty_method(series: pd.Series) -> str:
+    for value in series:
+        text = str(value).strip()
+        if text and text.lower() not in {"nan", "none", "<na>"}:
+            return text
+    return ""
+
+
+def _devig_method_summary(
+    *,
+    match_id: str,
+    bookmaker_probabilities: pd.DataFrame,
+    processed_total_goals: pd.DataFrame,
+    processed_asian_handicap: pd.DataFrame,
+    processed_correct_scores: pd.DataFrame,
+) -> dict[str, object]:
+    """Summarise requested vs actual devig method per market for one match."""
+
+    parts: list[str] = []
+    fallbacks: list[str] = []
+
+    def record(label: str, requested: str, actual: str) -> None:
+        if not requested:
+            return
+        parts.append(f"{label}:{requested}->{actual}")
+        if actual and requested != actual:
+            fallbacks.append(f"{label}:{requested}->{actual}")
+
+    if bookmaker_probabilities is not None and not bookmaker_probabilities.empty:
+        match_rows = bookmaker_probabilities[
+            bookmaker_probabilities["match_id"].astype(str) == match_id
+        ]
+        for market in ("1x2", "btts", "over_under_2_5", "qualification"):
+            requested_column = f"{market}_margin_removal_requested_method"
+            actual_column = f"{market}_margin_removal_actual_method"
+            if not match_rows.empty and requested_column in match_rows:
+                record(
+                    market,
+                    _first_nonempty_method(match_rows[requested_column]),
+                    _first_nonempty_method(match_rows[actual_column]),
+                )
+
+    for label, frame in (
+        ("total_goals", processed_total_goals),
+        ("asian_handicap", processed_asian_handicap),
+        ("correct_score", processed_correct_scores),
+    ):
+        if frame is None or frame.empty or "margin_removal_requested_method" not in frame:
+            continue
+        match_rows = frame[frame["match_id"].astype(str) == match_id]
+        if match_rows.empty:
+            continue
+        record(
+            label,
+            _first_nonempty_method(match_rows["margin_removal_requested_method"]),
+            _first_nonempty_method(match_rows["margin_removal_actual_method"]),
+        )
+
+    return {
+        "devig_methods_by_market": "; ".join(parts),
+        "devig_fallback_warnings": "; ".join(fallbacks),
+    }
 
 
 def _build_margin_method_comparison(
@@ -1377,22 +1637,29 @@ def run_prediction_workflow(
 
     config = config or ProjectConfig()
     extra_warning_flags_by_match = extra_warning_flags_by_match or {}
+    devig = config.resolved_devig()
     bookmaker_probabilities = process_bookmaker_odds(
         odds,
-        config.margin_removal_method,
+        devig.default_method,
         config.suspicious_overround_low,
         config.suspicious_overround_high,
+        market_methods={
+            "1x2": devig.method_for("1x2"),
+            "over_under_2_5": devig.method_for("over_under_2_5"),
+            "btts": devig.method_for("btts"),
+            "qualification": devig.method_for("qualification"),
+        },
     )
     odds_metadata = _summarise_odds_metadata(odds, bookmaker_probabilities)
     processed_correct_scores = (
-        process_correct_score_odds(correct_score_odds, config.margin_removal_method)
+        process_correct_score_odds(correct_score_odds, devig.method_for("correct_score"))
         if correct_score_odds is not None
         else pd.DataFrame()
     )
     processed_total_goals = (
         process_total_goals_odds(
             total_goals_odds,
-            config.margin_removal_method,
+            devig.method_for("total_goals"),
             config.suspicious_overround_low,
             config.suspicious_overround_high,
         )
@@ -1403,7 +1670,7 @@ def run_prediction_workflow(
     processed_asian_handicap = (
         process_asian_handicap_odds(
             asian_handicap_odds,
-            config.margin_removal_method,
+            devig.method_for("asian_handicap"),
             config.suspicious_overround_low,
             config.suspicious_overround_high,
         )
@@ -1642,6 +1909,20 @@ def run_prediction_workflow(
             qualifier_probabilities,
             config,
         )
+        bivariate_diagnostic = _bivariate_poisson_diagnostic(
+            match=Match(match_id, str(row["stage"]), str(row["team_a"]), str(row["team_b"])),
+            calibration=calibration,
+            config=config,
+            knockout=knockout,
+            qualifier_probabilities=qualifier_probabilities,
+            default_score=recommendation.best.predicted_score,
+        )
+        margin_model_diagnostic = _asian_handicap_margin_model_diagnostic(
+            config=config,
+            match_asian_handicap=match_asian_handicap,
+            lambda_a=calibration.lambda_a,
+            lambda_b=calibration.lambda_b,
+        )
         preliminary_ev_gap_to_second = _ev_gap_best_vs_second(recommendation)
         preliminary_extreme_favourite = (
             max(targets.a_win, targets.b_win) > EXTREME_FAVOURITE_PROBABILITY_THRESHOLD
@@ -1654,6 +1935,12 @@ def run_prediction_workflow(
             warning_flags="",
             config=config,
         )
+        market_consistent_prior_source = "independent_poisson"
+        market_consistent_prior_rho_used: object = pd.NA
+        market_consistent_prior_covariance_used: object = pd.NA
+        market_consistent_prior_kl_vs_independent: object = pd.NA
+        market_consistent_prior_changed_recommendation = "no"
+        market_consistent_prior_warning = ""
         if run_market_consistent:
             market_consistent_start = time.perf_counter()
             market_consistent_kwargs: dict[str, object] = {
@@ -1662,8 +1949,39 @@ def run_prediction_workflow(
             }
             if not match_asian_handicap.empty:
                 market_consistent_kwargs["asian_handicap"] = match_asian_handicap
+            market_consistent_kwargs["weights"] = _market_consistent_weights(config)
+            bivariate_prior_matrix, bivariate_prior_covariance, bivariate_prior_warning = (
+                _build_bivariate_prior_matrix(
+                    match=Match(match_id, str(row["stage"]), str(row["team_a"]), str(row["team_b"])),
+                    lambda_a=calibration.lambda_a,
+                    lambda_b=calibration.lambda_b,
+                    config=config,
+                    max_goals=config.max_goals_score_matrix,
+                )
+                if config.market_consistent_prior == "bivariate_poisson"
+                else (None, pd.NA, "")
+            )
+            prior_matrix, market_consistent_prior_source, prior_rho_used, market_consistent_prior_warning = (
+                _select_market_consistent_prior(
+                    prior_choice=config.market_consistent_prior,
+                    poisson_matrix=poisson_matrix,
+                    dixon_coles_matrix=dixon_coles_matrix,
+                    dixon_coles_rho_estimate=dixon_coles_rho_estimate,
+                    bivariate_matrix=bivariate_prior_matrix,
+                    bivariate_warning=bivariate_prior_warning,
+                )
+            )
+            if market_consistent_prior_source == "dixon_coles":
+                market_consistent_prior_rho_used = prior_rho_used
+            if market_consistent_prior_source == "bivariate_poisson":
+                market_consistent_prior_covariance_used = float(bivariate_prior_covariance)
+            market_consistent_prior_kl_vs_independent = (
+                0.0
+                if market_consistent_prior_source in {"independent_poisson", "independent_poisson_fallback"}
+                else market_to_poisson_kl_divergence(poisson_matrix, prior_matrix)
+            )
             market_consistent_result = fit_market_consistent_matrix(
-                poisson_matrix,
+                prior_matrix,
                 {
                     "a_win": targets.a_win,
                     "draw": targets.draw,
@@ -1680,6 +1998,29 @@ def run_prediction_workflow(
                 qualifier_probabilities,
                 config,
             )
+            if market_consistent_prior_source not in {"independent_poisson", "independent_poisson_fallback"}:
+                reference_result = fit_market_consistent_matrix(
+                    poisson_matrix,
+                    {
+                        "a_win": targets.a_win,
+                        "draw": targets.draw,
+                        "b_win": targets.b_win,
+                        "btts_yes": _optional_probability(row, "fair_btts_yes"),
+                    },
+                    **market_consistent_kwargs,
+                )
+                reference_recommendation = _optimise_score_matrix(
+                    reference_result.matrix,
+                    knockout,
+                    qualifier_probabilities,
+                    config,
+                )
+                market_consistent_prior_changed_recommendation = (
+                    "yes"
+                    if reference_recommendation.best.predicted_score
+                    != market_consistent_recommendation.best.predicted_score
+                    else "no"
+                )
             if runtime_timings is not None:
                 runtime_timings["market-consistent challenger"] = (
                     runtime_timings.get("market-consistent challenger", 0.0)
@@ -1954,7 +2295,7 @@ def run_prediction_workflow(
             if market_consistent_matrix is not None and market_consistent_recommendation is not None
             else _empty_market_consistent_high_score_comparison()
         )
-        if extreme_favourite_audit_triggered:
+        if extreme_favourite_audit_triggered and config.dynamic_grid_enabled:
             extreme_audit = _extreme_favourite_audit(
                 matrix=score_matrix,
                 favourite_is_team_a=favourite_is_team_a,
@@ -1971,6 +2312,7 @@ def run_prediction_workflow(
                 normal_poisson_matrix=poisson_matrix,
                 normal_poisson_recommendation=baseline_recommendation,
                 favourite_is_team_a=favourite_is_team_a,
+                larger_max_goals=config.extreme_favourite_max_goals,
             )
         else:
             extreme_audit = {
@@ -1992,6 +2334,10 @@ def run_prediction_workflow(
                 "larger_grid_poisson_changes_recommendation": False,
                 "larger_grid_differs_from_live_recommendation": False,
                 "larger_grid_tail_mass": pd.NA,
+                "grid_max_goals_used": int(config.max_goals_score_matrix),
+                "tail_mass_before_grid_extension": float(normal_grid_tail_mass),
+                "tail_mass_after_grid_extension": float(normal_grid_tail_mass),
+                "recommendation_changed_due_to_larger_grid": "no",
                 "ev_3_0_normal_grid": pd.NA,
                 "ev_4_0_normal_grid": pd.NA,
                 "ev_5_0_normal_grid": pd.NA,
@@ -2122,6 +2468,10 @@ def run_prediction_workflow(
                 else None
             ),
         )
+        (
+            market_consistent_active_constraint_groups,
+            market_consistent_constraint_correlation_note,
+        ) = _market_consistent_correlation_note(market_consistent_result.diagnostics)
         report_rows.append(
             {
                 "match_id": match_id,
@@ -2143,6 +2493,23 @@ def run_prediction_workflow(
                 "bookmakers_used": metadata["bookmakers_used"],
                 "number_of_bookmakers": metadata["number_of_bookmakers"],
                 "margin_removal_method": _canonical_margin_method(config.margin_removal_method),
+                **_devig_method_summary(
+                    match_id=match_id,
+                    bookmaker_probabilities=bookmaker_probabilities,
+                    processed_total_goals=processed_total_goals,
+                    processed_asian_handicap=processed_asian_handicap,
+                    processed_correct_scores=processed_correct_scores,
+                ),
+                "market_consistent_prior_source": market_consistent_prior_source,
+                "market_consistent_prior_dixon_coles_rho_used": market_consistent_prior_rho_used,
+                "market_consistent_prior_covariance_used": market_consistent_prior_covariance_used,
+                "market_consistent_prior_kl_vs_independent": market_consistent_prior_kl_vs_independent,
+                "market_consistent_prior_changed_recommendation": market_consistent_prior_changed_recommendation,
+                "market_consistent_prior_warning": market_consistent_prior_warning,
+                **bivariate_diagnostic,
+                **margin_model_diagnostic,
+                "market_consistent_active_constraint_groups": market_consistent_active_constraint_groups,
+                "market_consistent_constraint_correlation_note": market_consistent_constraint_correlation_note,
                 "odds_source_urls": metadata["odds_source_urls"],
                 "source_qualities": metadata["source_qualities"],
                 "source_notes": metadata["source_notes"],

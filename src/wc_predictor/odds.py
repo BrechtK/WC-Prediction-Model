@@ -166,14 +166,21 @@ def process_bookmaker_odds(
     margin_method: str = "normalised_inverse_odds",
     suspicious_low: float = 1.0,
     suspicious_high: float = 1.20,
+    market_methods: Mapping[str, str] | None = None,
 ) -> pd.DataFrame:
-    """Calculate bookmaker-level fair probabilities for each available complete market."""
+    """Calculate bookmaker-level fair probabilities for each available complete market.
+
+    ``market_methods`` optionally overrides the devig method per market key
+    (``1x2``, ``over_under_2_5``, ``btts``, ``qualification``); markets absent
+    from the mapping use ``margin_method``.
+    """
 
     required = {"match_id", "bookmaker"}
     missing = required - set(odds.columns)
     if missing:
         raise ValueError(f"Odds data is missing required columns: {sorted(missing)}")
 
+    market_methods = dict(market_methods or {})
     rows: list[dict[str, object]] = []
     for _, source_row in odds.iterrows():
         output: dict[str, object] = {
@@ -190,8 +197,9 @@ def process_bookmaker_odds(
             if values.isna().any():
                 output["warnings"].append(f"Ignored incomplete {market_name} market")
                 continue
+            method = market_methods.get(market_name, margin_method)
             result = fair_probabilities_from_decimal_odds_with_fallback(
-                values.astype(float).tolist(), margin_method, suspicious_low, suspicious_high
+                values.astype(float).tolist(), method, suspicious_low, suspicious_high
             )
             output.update(zip(RAW_COLUMNS[market_name], result.raw_probabilities, strict=True))
             output.update(zip(FAIR_COLUMNS[market_name], result.fair_probabilities, strict=True))

@@ -751,6 +751,74 @@ def test_extreme_favourite_audit_and_larger_grid_sensitivity_trigger(tmp_path: P
     assert pd.notna(report["ev_favourite_3_0_larger_grid"])
 
 
+def _extreme_favourite_settings(tmp_path: Path) -> WorldCupPredictionSettings:
+    input_path = tmp_path / "extreme_dynamic.csv"
+    pd.DataFrame(
+        [
+            {
+                "match_id": "EXTREME",
+                "date": "2026-06-12",
+                "stage": "group stage",
+                "group": "A",
+                "team_a": "Favourite",
+                "team_b": "Longshot",
+                "bookmaker": "MarketOne",
+                "odds_a_win": 1.06,
+                "odds_draw": 14.0,
+                "odds_b_win": 41.0,
+                "odds_btts_yes": 2.40,
+                "odds_btts_no": 1.60,
+            }
+        ]
+    ).to_csv(input_path, index=False)
+    return WorldCupPredictionSettings(
+        input_path=input_path,
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+
+def test_dynamic_grid_uses_extreme_favourite_max_goals(tmp_path: Path) -> None:
+    settings = _extreme_favourite_settings(tmp_path)
+
+    report = run_world_cup_predictions(
+        settings, ProjectConfig(extreme_favourite_max_goals=12)
+    ).match_report.iloc[0]
+
+    assert bool(report["extreme_favourite_audit_triggered"])
+    assert report["grid_max_goals_used"] == 12
+    assert report["tail_mass_after_grid_extension"] < report["tail_mass_before_grid_extension"]
+    assert report["recommendation_changed_due_to_larger_grid"] in {"yes", "no"}
+
+
+def test_dynamic_grid_can_be_disabled(tmp_path: Path) -> None:
+    settings = _extreme_favourite_settings(tmp_path)
+
+    report = run_world_cup_predictions(
+        settings, ProjectConfig(dynamic_grid_enabled=False, max_goals_score_matrix=8)
+    ).match_report.iloc[0]
+
+    # The diagnostic grid extension is suppressed; the default grid is reported.
+    assert report["grid_max_goals_used"] == 8
+    assert report["recommendation_changed_due_to_larger_grid"] == "no"
+
+
+def test_normal_match_reports_default_grid(tmp_path: Path) -> None:
+    settings = WorldCupPredictionSettings(
+        input_path=EXAMPLES / "example_world_cup_odds.csv",
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+    report = run_world_cup_predictions(settings, ProjectConfig(max_goals_score_matrix=8)).match_report
+
+    balanced = report[~report["extreme_favourite_audit_triggered"].astype(bool)]
+    assert not balanced.empty
+    assert (balanced["grid_max_goals_used"] == 8).all()
+
+
 def test_larger_grid_sensitivity_can_change_poisson_recommendation_on_synthetic_extreme_favourite(
     tmp_path: Path,
 ) -> None:
@@ -829,6 +897,152 @@ def test_world_cup_workflow_optionally_uses_correct_score_blend(tmp_path: Path) 
     assert report["correct_score_bookmaker_diagnostics"].str.contains("overround=").all()
     assert report["dixon_coles_rho_source"].eq("market_estimated").all()
     assert report["dixon_coles_rho_used"].between(-0.20, 0.20).all()
+
+
+def test_market_specific_devig_keeps_correct_score_conservative(tmp_path: Path) -> None:
+    from wc_predictor.config import DevigConfig
+
+    settings = WorldCupPredictionSettings(
+        input_path=EXAMPLES / "example_world_cup_odds.csv",
+        correct_score_input_path=EXAMPLES / "example_world_cup_correct_score_odds.csv",
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+    workflow = run_world_cup_predictions(
+        settings,
+        ProjectConfig(
+            correct_score_poisson_weight=0.5,
+            min_scorelines_for_blend=6,
+            devig=DevigConfig(one_x_two_method="power", correct_score_method="normalised_inverse_odds"),
+        ),
+    )
+    report = workflow.match_report
+
+    # 1X2 used the aggressive method while correct score stayed conservative,
+    # and the run did not crash on the many-outcome correct-score market.
+    assert report["devig_methods_by_market"].str.contains("1x2:power->power").all()
+    assert report["devig_methods_by_market"].str.contains(
+        "correct_score:normalised_inverse_odds"
+    ).all()
+
+
+def test_market_specific_devig_does_not_crash_with_shin_on_correct_score(tmp_path: Path) -> None:
+    from wc_predictor.config import DevigConfig
+
+    settings = WorldCupPredictionSettings(
+        input_path=EXAMPLES / "example_world_cup_odds.csv",
+        correct_score_input_path=EXAMPLES / "example_world_cup_correct_score_odds.csv",
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+    # Even an aggressive correct-score method must fall back safely, never crash.
+    workflow = run_world_cup_predictions(
+        settings,
+        ProjectConfig(
+            correct_score_poisson_weight=0.5,
+            min_scorelines_for_blend=6,
+            devig=DevigConfig(default_method="shin", correct_score_method="shin"),
+        ),
+    )
+    assert not workflow.match_report.empty
+
+
+def _market_consistent_settings(tmp_path: Path) -> WorldCupPredictionSettings:
+    return WorldCupPredictionSettings(
+        input_path=EXAMPLES / "example_world_cup_odds.csv",
+        csv_output_path=tmp_path / "recommendations.csv",
+        xlsx_output_path=tmp_path / "recommendations.xlsx",
+        submission_xlsx_output_path=tmp_path / "submission.xlsx",
+    )
+
+
+def test_market_consistent_default_prior_is_independent_poisson(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(
+        _market_consistent_settings(tmp_path),
+        ProjectConfig(enable_market_consistent_challenger=True, enable_margin_method_comparison=False),
+    ).match_report
+
+    assert (report["market_consistent_prior_source"] == "independent_poisson").all()
+    assert (report["market_consistent_prior_kl_vs_independent"] == 0.0).all()
+    assert (report["market_consistent_prior_changed_recommendation"] == "no").all()
+
+
+def test_market_consistent_dixon_coles_prior_is_reported(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(
+        _market_consistent_settings(tmp_path),
+        ProjectConfig(
+            enable_market_consistent_challenger=True,
+            enable_margin_method_comparison=False,
+            market_consistent_prior="dixon_coles",
+            enable_dixon_coles_rho_estimation=False,
+            dixon_coles_rho=0.12,
+        ),
+    ).match_report
+
+    assert (report["market_consistent_prior_source"] == "dixon_coles").all()
+    assert (report["market_consistent_prior_dixon_coles_rho_used"] == 0.12).all()
+    assert (report["market_consistent_prior_kl_vs_independent"] > 0).all()
+
+
+def test_bivariate_poisson_diagnostic_reported_when_enabled(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(
+        _market_consistent_settings(tmp_path),
+        ProjectConfig(
+            enable_bivariate_poisson_diagnostic=True,
+            bivariate_poisson_covariance=0.2,
+            enable_margin_method_comparison=False,
+        ),
+    ).match_report
+
+    assert report["bivariate_prior_recommended_score"].str.len().gt(0).all()
+    assert (report["bivariate_lambda_3"] > 0).any()
+
+
+def test_market_consistent_constraint_correlation_note_is_reported(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(
+        _market_consistent_settings(tmp_path),
+        ProjectConfig(enable_market_consistent_challenger=True, enable_margin_method_comparison=False),
+    ).match_report
+
+    assert report["market_consistent_constraint_correlation_note"].str.contains(
+        "constraints_treated_independently"
+    ).all()
+    assert report["market_consistent_active_constraint_groups"].str.contains("1x2").all()
+
+
+def test_market_consistent_group_weights_can_downweight_a_group(tmp_path: Path) -> None:
+    from wc_predictor.config import MarketConsistentGroupWeights
+
+    base = run_world_cup_predictions(
+        _market_consistent_settings(tmp_path),
+        ProjectConfig(enable_market_consistent_challenger=True, enable_margin_method_comparison=False),
+    ).match_report.set_index("match_id")
+    downweighted = run_world_cup_predictions(
+        _market_consistent_settings(tmp_path),
+        ProjectConfig(
+            enable_market_consistent_challenger=True,
+            enable_margin_method_comparison=False,
+            market_consistent_group_weights=MarketConsistentGroupWeights(one_x_two=0.01),
+        ),
+    ).match_report.set_index("match_id")
+
+    assert not base["market_consistent_kl_divergence_vs_prior"].equals(
+        downweighted["market_consistent_kl_divergence_vs_prior"]
+    )
+
+
+def test_bivariate_poisson_diagnostic_disabled_by_default(tmp_path: Path) -> None:
+    report = run_world_cup_predictions(
+        _market_consistent_settings(tmp_path),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).match_report
+
+    assert (report["bivariate_prior_recommended_score"] == "").all()
+    assert (report["bivariate_differs_from_default"] == "no").all()
 
 
 def test_world_cup_workflow_optionally_loads_total_goals_ladder(tmp_path: Path) -> None:

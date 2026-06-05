@@ -160,8 +160,28 @@ expected-points optimisation stays the default score.
 
 Additional research diagnostics include optional Shin margin removal,
 market-estimated Dixon-Coles rho from low correct-score cells, and a historical
-World Cup backtest harness. To run the historical harness, create a legally safe
-local CSV from:
+World Cup backtest harness.
+
+An opt-in advanced modelling layer is also available, all diagnostic-first and
+off by default (see [docs/mathematical_basis.md](docs/mathematical_basis.md)):
+
+- **Market-type-specific devig** via `DEVIG_PROFILE = "market_specific"` in
+  `scripts/run_live_prediction.py`, or `ProjectConfig(devig=DevigConfig(...))`.
+  Aggressive methods can be used on 1X2/BTTS/O/U/Asian handicap while
+  correct-score markets stay on normalised inverse odds with safe fallback.
+- **Dynamic larger grid** for extreme favourites (`dynamic_grid_enabled`,
+  `extreme_favourite_max_goals`) to quantify hidden score-grid tail mass.
+- **Dixon-Coles / bivariate-Poisson priors** for the market-consistent KL
+  projection (`market_consistent_prior`), and a standalone bivariate challenger
+  (`enable_bivariate_poisson_diagnostic`).
+- **Skellam margin model** fitted to Asian-handicap lines
+  (`enable_asian_handicap_margin_model`).
+- **Group-level constraint weights** (`MarketConsistentGroupWeights`) and a
+  constraint correlation / double-counting diagnostic note.
+
+None of these change the default live recommendation unless explicitly enabled.
+
+To run the historical harness, create a legally safe local CSV from:
 
 ```text
 templates/historical_world_cup_matches_template.csv

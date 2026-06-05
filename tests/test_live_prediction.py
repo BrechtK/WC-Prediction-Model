@@ -237,6 +237,7 @@ def _capture_script_weight_sensitivity(
         captured["enable_market_consistent_challenger"] = config.enable_market_consistent_challenger
         captured["correct_score_poisson_weight"] = config.correct_score_poisson_weight
         captured["margin_removal_method"] = config.margin_removal_method
+        captured["devig"] = config.devig
         captured["extra_warning_flags_by_match"] = settings.extra_warning_flags_by_match
         return SimpleNamespace(runtime_timings={})
 
@@ -513,6 +514,25 @@ def test_script_cli_can_still_select_shin_margin_method(tmp_path: Path, monkeypa
     )
 
     assert captured["margin_removal_method"] == "shin"
+
+
+def test_script_devig_profile_defaults_to_global(tmp_path: Path, monkeypatch) -> None:
+    captured = _capture_script_weight_sensitivity(tmp_path, monkeypatch, [])
+
+    assert captured["devig"] is None
+
+
+def test_script_cli_can_select_market_specific_devig(tmp_path: Path, monkeypatch) -> None:
+    captured = _capture_script_weight_sensitivity(
+        tmp_path,
+        monkeypatch,
+        ["--devig-profile", "market_specific"],
+    )
+
+    devig = captured["devig"]
+    assert devig is not None
+    assert devig.method_for("correct_score") == "normalised_inverse_odds"
+    assert devig.method_for("1x2") == "power"
 
 
 def test_script_flag_can_enable_weight_sensitivity_in_live_profile(tmp_path: Path, monkeypatch) -> None:

@@ -160,3 +160,32 @@ Only after the market baseline is robust:
 
 No challenger should replace the market-implied baseline merely because it is
 more elaborate.
+
+## Advanced Modelling Layer (Implemented, Diagnostic-First)
+
+A staged advanced layer is implemented and defaults to the existing behaviour.
+See `docs/mathematical_basis.md` for the maths. It adds, all optional:
+
+- **Market-type-specific devig** (`DevigConfig`): aggressive methods such as
+  power or Shin on 2-way/3-way markets while correct score stays on normalised
+  inverse odds, with safe per-market fallback and requested/actual diagnostics.
+  Correct-score markets are sparse, high-overround and may carry an "Other"
+  bucket, so they must not be devigged with Shin/additive blindly.
+- **Dynamic larger grid** (`dynamic_grid_enabled`, `extreme_favourite_max_goals`,
+  `research_max_goals`): a larger diagnostic grid for extreme favourites and deep
+  Asian-handicap tails that quantifies hidden tail mass without changing the
+  default EV recommendation.
+- **Dixon-Coles / bivariate-Poisson priors** (`market_consistent_prior`): optional
+  priors for the KL projection, diagnostic-only; default stays independent
+  Poisson. The bivariate model is also a standalone challenger.
+- **Skellam margin model from Asian handicap**
+  (`enable_asian_handicap_margin_model`): fits the goal-difference distribution to
+  half-goal handicap cover probabilities and compares it with Poisson margins.
+- **Group-level constraint weights + correlation scaffold**
+  (`MarketConsistentGroupWeights`): per-group multipliers and a double-counting
+  note, because constraints are currently treated as independent. A fitted
+  correlated-error covariance model is future research and is intentionally not
+  faked.
+
+Each of these must be validated out of sample under the pool scoring rules
+before any of them is considered for the default live recommendation.

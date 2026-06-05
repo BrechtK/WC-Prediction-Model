@@ -2,16 +2,47 @@ import numpy as np
 import pytest
 
 from wc_predictor.score_models import (
+    BivariatePoissonScoreModel,
     DixonColesScoreModel,
     IndependentPoissonScoreModel,
     Match,
     build_challenger_score_matrices,
+    conservative_bivariate_covariance,
     estimate_dixon_coles_rho_from_market,
 )
 from wc_predictor.probabilities import ScoreProbabilityMatrix
 
 
 MATCH = Match("M1", "group", "Alpha", "Beta")
+
+
+def test_bivariate_poisson_zero_covariance_reduces_to_independent() -> None:
+    baseline = IndependentPoissonScoreModel(1.5, 1.2).predict_score_matrix(MATCH, max_goals=8)
+    challenger = BivariatePoissonScoreModel(1.5, 1.2, covariance=0.0).predict_score_matrix(MATCH, max_goals=8)
+
+    assert np.allclose(challenger.probabilities, baseline.probabilities)
+    assert challenger.tail_probability == pytest.approx(baseline.tail_probability)
+
+
+def test_bivariate_poisson_matrix_sums_to_one_and_adds_diagonal_mass() -> None:
+    baseline = IndependentPoissonScoreModel(1.5, 1.2).predict_score_matrix(MATCH, max_goals=10)
+    challenger = BivariatePoissonScoreModel(1.5, 1.2, covariance=0.3).predict_score_matrix(MATCH, max_goals=10)
+
+    assert challenger.probabilities.sum() == pytest.approx(1.0)
+    # Positive covariance moves mass towards equal-ish scorelines (draws up).
+    baseline_draw = float(np.trace(baseline.probabilities))
+    challenger_draw = float(np.trace(challenger.probabilities))
+    assert challenger_draw > baseline_draw
+
+
+def test_bivariate_poisson_rejects_covariance_above_marginals() -> None:
+    with pytest.raises(ValueError, match="below both marginal means"):
+        BivariatePoissonScoreModel(0.5, 1.2, covariance=0.6).predict_score_matrix(MATCH, max_goals=6)
+
+
+def test_conservative_bivariate_covariance_clamps() -> None:
+    assert conservative_bivariate_covariance(1.5, 0.4, 0.9) == pytest.approx(0.36)
+    assert conservative_bivariate_covariance(1.5, 1.2, -0.1) == 0.0
 
 
 def test_dixon_coles_rho_zero_reproduces_independent_poisson() -> None:

@@ -37,6 +37,15 @@ Validate the diagnostic Dixon-Coles challenger and test bivariate-Poisson
 extensions. Consider negative-binomial count models where overdispersion is
 material.
 
+Several of these are now implemented as diagnostic-first, opt-in options
+(market-type-specific devig, dynamic larger grids for extreme favourites,
+Dixon-Coles and bivariate-Poisson priors for the KL projection, a Skellam
+margin model fitted to Asian handicap, and group-level constraint weights with a
+correlation/double-counting scaffold). See `docs/model_roadmap.md` and
+`docs/mathematical_basis.md`. The remaining work is out-of-sample validation
+under the pool scoring rules and, eventually, a data-driven correlated-error
+covariance model for market constraints.
+
 ## Later Research
 
 Only after simpler baselines are measured: machine learning, richer ensembles,

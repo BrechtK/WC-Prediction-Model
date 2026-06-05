@@ -10,7 +10,7 @@ import time
 
 import pandas as pd
 
-from wc_predictor.config import ProjectConfig, PublicStrategyConfig
+from wc_predictor.config import DevigConfig, ProjectConfig, PublicStrategyConfig
 from wc_predictor.live_prediction import ( LivePredictionError, LivePredictionSettings, format_live_prediction_summary, run_live_prediction, )
 from wc_predictor.oddsportal_combined import ( CombinedOddsPortalPasteError, format_combined_oddsportal_split_summary, split_combined_oddsportal_pastes, )
 from wc_predictor.oddsportal_schedule import ( DEFAULT_SCHEDULE_OUTPUT_PATH, DEFAULT_SCHEDULE_REPORT_PATH, OddsPortalScheduleParseError, format_oddsportal_schedule_parse_summary, prepare_schedule_metadata, )
@@ -59,6 +59,19 @@ CORRECT_SCORE_AGGREGATION_METHOD = "auto"
 MARGIN_REMOVAL_METHOD = "normalised_inverse_odds"
 # Optional research choices: "power", "additive", or "shin". These methods are
 # diagnostics and may fall back on sparse or unusual markets.
+
+# Optional market-type-specific devig. Keep "global" for the conservative,
+# unchanged behaviour (every market uses MARGIN_REMOVAL_METHOD with a safe
+# normalised-inverse-odds fallback). Use "market_specific" to apply the
+# DEVIG_* methods below: a chosen method on 2-way/3-way markets while
+# correct-score markets stay on normalised inverse odds.
+DEVIG_PROFILE = "global"
+# Options: "global", "market_specific".
+DEVIG_ONE_X_TWO_METHOD = "power"
+DEVIG_BTTS_METHOD = "power"
+DEVIG_TOTAL_GOALS_METHOD = "power"
+DEVIG_ASIAN_HANDICAP_METHOD = "power"
+DEVIG_CORRECT_SCORE_METHOD = "normalised_inverse_odds"
 
 # Fast matchday defaults.
 RUN_PROFILE = "live"
@@ -113,6 +126,7 @@ VALID_RUN_MODES = {"all_available", "date", "single_match", "list_date"}
 VALID_STRATEGY_MODES = ("ev", "balanced", "public-ranking", "aggressive-public-ranking")
 VALID_PUBLIC_STRATEGY_TARGETS = ("friends", "balanced", "national")
 VALID_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive", "shin")
+VALID_DEVIG_PROFILES = ("global", "market_specific")
 VALID_RUN_PROFILES = ("live", "research")
 VALID_TERMINAL_VERBOSITIES = ("compact", "normal", "debug")
 
@@ -408,6 +422,7 @@ def main() -> None:
     parser.add_argument("--correct-score-poisson-weight", type=float)
     parser.add_argument("--correct-score-aggregation-method")
     parser.add_argument("--margin-removal-method", choices=VALID_MARGIN_REMOVAL_METHODS)
+    parser.add_argument("--devig-profile", choices=VALID_DEVIG_PROFILES)
     parser.add_argument("--compare-margin-methods", action="store_true")
     parser.add_argument("--no-compare-margin-methods", action="store_true")
     parser.add_argument("--run-profile", choices=VALID_RUN_PROFILES)
@@ -472,6 +487,23 @@ def main() -> None:
             args.margin_removal_method
             if args.margin_removal_method is not None
             else MARGIN_REMOVAL_METHOD
+        )
+        devig_profile = args.devig_profile if args.devig_profile is not None else DEVIG_PROFILE
+        if devig_profile not in VALID_DEVIG_PROFILES:
+            raise ValueError(
+                f"Invalid DEVIG_PROFILE {devig_profile!r}. Use one of: {', '.join(VALID_DEVIG_PROFILES)}."
+            )
+        devig_config = (
+            DevigConfig(
+                default_method=margin_removal_method,
+                one_x_two_method=DEVIG_ONE_X_TWO_METHOD,
+                btts_method=DEVIG_BTTS_METHOD,
+                total_goals_method=DEVIG_TOTAL_GOALS_METHOD,
+                asian_handicap_method=DEVIG_ASIAN_HANDICAP_METHOD,
+                correct_score_method=DEVIG_CORRECT_SCORE_METHOD,
+            )
+            if devig_profile == "market_specific"
+            else None
         )
         enable_market_consistent_challenger = ENABLE_MARKET_CONSISTENT_CHALLENGER
         enable_margin_method_comparison = ENABLE_MARGIN_METHOD_COMPARISON
@@ -627,6 +659,7 @@ def main() -> None:
                 correct_score_poisson_weight=correct_score_poisson_weight,
                 correct_score_aggregation_method=correct_score_aggregation_method,
                 margin_removal_method=margin_removal_method,
+                devig=devig_config,
                 enable_margin_method_comparison=enable_margin_method_comparison,
                 enable_market_consistent_challenger=enable_market_consistent_challenger,
                 dixon_coles_rho=dixon_coles_rho,

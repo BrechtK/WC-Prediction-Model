@@ -417,6 +417,96 @@ matrix. When the direct market is converted into the finite EV matrix,
 out-of-grid scorelines are omitted, the represented grid is renormalised, and
 the omitted scoreline labels are reported as a coverage warning.
 
+## Advanced Modelling Layer (Diagnostic-First)
+
+These additions are configurable and default to the existing conservative
+behaviour. None of them changes the default live EV recommendation unless
+explicitly enabled.
+
+### Market-Type-Specific Devig
+
+`DevigConfig` lets each market use its own margin-removal method:
+
+```text
+default_method        -> 2-way / 3-way markets (1X2, BTTS, O/U, Asian handicap)
+correct_score_method  -> always defaults to normalised_inverse_odds
+fallback_method       -> used when a requested method fails on a market
+```
+
+1X2, BTTS, O/U and Asian handicap are 2-way or 3-way markets where Shin or the
+power method can be reasonable. Correct-score markets are many-outcome,
+high-overround, sparse, and often carry an "Other" bucket, so the listed
+scorelines may not form a complete market and the overround can fall below one
+or far above the Shin validity range. Applying Shin or additive devig blindly to
+correct score is therefore unsafe, so it defaults to normalised inverse odds. If
+any market's requested method fails, devig falls back to `fallback_method` and
+records the requested method, the actual method used, and a fallback warning.
+When `ProjectConfig.devig` is unset, every market uses `margin_removal_method`,
+exactly preserving the previous behaviour.
+
+### Dynamic Larger Grid For Extreme Favourites
+
+Extreme favourites and deep Asian-handicap lines push probability mass towards
+or beyond the default `0..max_goals` grid. When `dynamic_grid_enabled` is set
+and a match is flagged as an extreme favourite or high tail mass, a larger
+diagnostic grid (`extreme_favourite_max_goals`, default 12) is recalibrated to
+quantify how much tail mass and which recommendation the truncation hides. The
+report records `grid_max_goals_used`, `tail_mass_before_grid_extension`,
+`tail_mass_after_grid_extension`, and `recommendation_changed_due_to_larger_grid`.
+The default EV recommendation still uses `max_goals_score_matrix`; the larger
+grid is diagnostic.
+
+### Dixon-Coles And Bivariate-Poisson Priors For The KL Projection
+
+`market_consistent_prior` selects the prior matrix for the market-consistent
+projection:
+
+```text
+independent_poisson   -> default
+dixon_coles           -> uses estimated rho, else configured rho, else independent
+bivariate_poisson     -> shared covariance component, else independent fallback
+```
+
+A Dixon-Coles prior carries low-score dependence into the projection; a
+bivariate-Poisson prior (`X = Y1 + Y3`, `Y = Y2 + Y3`, `Cov(X,Y) = lambda_3`)
+adds a positive covariance component. `lambda_3 = 0` reduces exactly to
+independent Poisson, and the covariance is clamped strictly below both marginal
+means for numerical stability. Both are diagnostic-first: the default prior is
+independent Poisson, and the report records `market_consistent_prior_source`,
+`market_consistent_prior_dixon_coles_rho_used`,
+`market_consistent_prior_kl_vs_independent`, and
+`market_consistent_prior_changed_recommendation`. The bivariate model is also
+available as a standalone challenger (`enable_bivariate_poisson_diagnostic`).
+
+### Skellam Margin Model From Asian Handicap
+
+Asian handicap prices the goal-difference (margin) distribution directly. The
+optional Skellam margin model (`enable_asian_handicap_margin_model`) fits a
+Skellam distribution to the fair cover probabilities of push-free half-goal
+handicap lines, where a team-A handicap `h` covers when `margin > -h`, so
+
+```text
+fair_team_a(h) ~= P(margin >= floor(-h) + 1)
+```
+
+It reports the fitted `mu1`, `mu2`, the implied mean margin, the fit error, and a
+margin-by-margin comparison against the calibrated independent-Poisson margins.
+It is diagnostic only: it does not adjust the default score matrix.
+
+### Reliability / Covariance-Aware Constraints (Research Scaffold)
+
+The market-consistent projection weights constraints but treats them as
+independent. 1X2, Asian handicap and correct score all carry result and margin
+information, so activating several at once can over-count shared market signal.
+A true correlated-error covariance model needs data that is not yet available,
+so instead `MarketConsistentGroupWeights` exposes per-group multipliers
+(`one_x_two`, `total_goals`, `asian_handicap`, `btts`, `correct_score`, all
+defaulting to `1.0`) to down-weight an over-represented group, and the report
+records `market_consistent_active_constraint_groups` plus a
+`market_consistent_constraint_correlation_note` that flags potential
+result/margin double counting. Building a fitted covariance matrix remains
+future research.
+
 ## Finite Score Grid And Tail Mass
 
 The score matrix contains scores from `0-0` through `max_goals-max_goals`.

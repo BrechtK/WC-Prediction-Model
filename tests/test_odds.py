@@ -177,3 +177,51 @@ def test_bookmaker_and_total_goals_margin_failures_record_fallback() -> None:
     assert MARGIN_REMOVAL_FALLBACK_WARNING in processed_bookmaker.loc[0, "warnings"]
     assert processed_totals.loc[0, "margin_removal_actual_method"] == "normalised_inverse_odds"
     assert MARGIN_REMOVAL_FALLBACK_WARNING in processed_totals.loc[0, "warnings"]
+
+
+def test_devig_config_resolves_methods_per_market() -> None:
+    from wc_predictor.config import DevigConfig
+
+    devig = DevigConfig(one_x_two_method="power", btts_method="shin")
+
+    assert devig.method_for("1x2") == "power"
+    assert devig.method_for("btts") == "shin"
+    # Unset markets fall back to the default method.
+    assert devig.method_for("total_goals") == "normalised_inverse_odds"
+    assert devig.method_for("asian_handicap") == "normalised_inverse_odds"
+    # Correct score keeps its own conservative default, not default_method.
+    aggressive = DevigConfig(default_method="power")
+    assert aggressive.method_for("1x2") == "power"
+    assert aggressive.method_for("correct_score") == "normalised_inverse_odds"
+
+
+def test_devig_config_rejects_unknown_method() -> None:
+    from wc_predictor.config import DevigConfig
+
+    with pytest.raises(ValueError, match="one_x_two_method"):
+        DevigConfig(one_x_two_method="nonsense")
+
+
+def test_process_bookmaker_odds_applies_market_specific_methods() -> None:
+    bookmaker_odds = pd.DataFrame(
+        [
+            {
+                "match_id": "M1",
+                "bookmaker": "Book",
+                "odds_a_win": 2.2,
+                "odds_draw": 3.4,
+                "odds_b_win": 3.6,
+                "odds_btts_yes": 1.9,
+                "odds_btts_no": 1.9,
+            }
+        ]
+    )
+
+    processed = process_bookmaker_odds(
+        bookmaker_odds,
+        margin_method="normalised_inverse_odds",
+        market_methods={"1x2": "power", "btts": "normalised_inverse_odds"},
+    )
+
+    assert processed.loc[0, "1x2_margin_removal_actual_method"] == "power"
+    assert processed.loc[0, "btts_margin_removal_actual_method"] == "normalised_inverse_odds"

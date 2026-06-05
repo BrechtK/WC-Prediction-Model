@@ -246,6 +246,47 @@ def _orientation_core_odds() -> pd.DataFrame:
     )
 
 
+def test_asian_handicap_margin_model_diagnostic_is_reported_when_enabled() -> None:
+    asian_handicap = pd.DataFrame(
+        [
+            {"match_id": "MORIENT", "bookmaker": "Book", "handicap": handicap, "odds_team_a": 1.91, "odds_team_b": 1.91}
+            for handicap in (-1.5, -0.5, 0.5)
+        ]
+    )
+
+    workflow = run_prediction_workflow(
+        _orientation_core_odds(),
+        config=ProjectConfig(
+            enable_margin_method_comparison=False,
+            enable_market_consistent_challenger=False,
+            enable_asian_handicap_margin_model=True,
+        ),
+        asian_handicap_odds=asian_handicap,
+    )
+
+    report = workflow.match_report.iloc[0]
+    assert report["asian_handicap_margin_model_type"] == "skellam"
+    assert "skellam=" in report["asian_handicap_margin_distribution_comparison"]
+    assert pd.notna(report["asian_handicap_margin_fit_error"])
+
+
+def test_asian_handicap_margin_model_diagnostic_off_by_default() -> None:
+    asian_handicap = pd.DataFrame(
+        [
+            {"match_id": "MORIENT", "bookmaker": "Book", "handicap": handicap, "odds_team_a": 1.91, "odds_team_b": 1.91}
+            for handicap in (-1.5, -0.5, 0.5)
+        ]
+    )
+
+    workflow = run_prediction_workflow(
+        _orientation_core_odds(),
+        config=ProjectConfig(enable_margin_method_comparison=False, enable_market_consistent_challenger=False),
+        asian_handicap_odds=asian_handicap,
+    )
+
+    assert workflow.match_report.iloc[0]["asian_handicap_margin_model_type"] == ""
+
+
 def test_asian_handicap_orientation_guard_accepts_normal_ladder() -> None:
     asian_handicap = pd.DataFrame(
         [
