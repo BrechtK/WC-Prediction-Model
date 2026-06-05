@@ -1,0 +1,4 @@
+match_id,date,stage,group,team_a,team_b,actual_score_a,actual_score_b
+M001,2022-11-20,group stage,A,Qatar,Ecuador,0,2
+M002,2022-11-21,group stage,A,Senegal,Netherlands,0,2
+M003,2022-11-21,group stage,B,England,Iran,6,2
