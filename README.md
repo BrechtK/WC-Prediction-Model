@@ -147,10 +147,10 @@ reason to change the default score.
 
 The current manual-review flags are:
 
-- `draw_prone_flag`: low O/U median total plus balanced favourite probability.
+- `draw_prone_flag`: low model `expected_total_goals` plus balanced favourite probability.
 - `btts_conflict_flag`: narrow only; no-BTTS EV pick, elevated BTTS probability,
   balanced/draw-prone context, and a close BTTS-compatible alternative.
-- `blowout_risk_flag`: strong favourite plus high O/U median total, used to
+- `blowout_risk_flag`: strong favourite plus high total-goals signal, used to
   surface higher-margin alternatives.
 
 All of these leave `recommended_score` unchanged.
@@ -189,12 +189,21 @@ World Cup backtest harness.
 Current 2026 policy from the combined 2018+2022 review:
 
 - EV remains the live default; diagnostics do not override `recommended_score`.
+- Combined evidence is 96 group-stage matches. Modal/most-likely was strong in
+  2022 and weak in 2018, so it is not robust enough to promote.
+- Do not promote modal/most-likely, MC+AH, correct-score blend-weight changes,
+  power devig, global draw boosts, or AH favourite-under-cover adjustments to
+  the live default.
 - Modal/draw is manual-review only, not a default strategy.
 - Correct-score blending remains research; keep the live default weight unchanged.
 - MC+AH is a gated challenger: inspect it only when optimiser fit is acceptable.
-- Round-3 favourite fade and BTTS conflict are review notes, not alternative-pick rules.
+- Real quoted AH main-line under-cover evidence is weak and monitor-only.
+- Round-3 favourite fade and narrowed BTTS conflict are review notes, not alternative-pick rules.
 - Power devig should not be used for serious live decisions.
 - Dixon-Coles and larger-grid diagnostics are retained, but were inert on the combined group-stage backtest.
+- Use `expected_total_goals` for draw-prone/high-total diagnostics. The old
+  `ou_median_total` compatibility alias is only an O/U ladder median, not an
+  expected-goals estimate.
 
 An opt-in advanced modelling layer is also available, all diagnostic-first and
 off by default (see [docs/mathematical_basis.md](docs/mathematical_basis.md)):
@@ -263,3 +272,20 @@ python -m venv .venv
 python -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest -q
 ```
+
+Useful test commands:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -m "not slow"
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Quick combined historical smoke run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_live_backtest.py
+```
+
+With the checked-in runner defaults this uses the combined `wc2018` + `wc2022`
+folders, `BACKTEST_PROFILE = "quick"`, `EXPORT_CSV_ONLY = True`, and
+`SHOW_PROGRESS = False`.

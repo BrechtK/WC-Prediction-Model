@@ -42,11 +42,13 @@ HOW TO USE
 
 5. Press "Run Python File" in VS Code.
 
-6. Open the Excel workbook:
+6. Inspect the CSV outputs:
 
-       output/research/live_backtest.xlsx
+       output/research/combined_backtest/live_backtest_summary.csv
+       output/research/combined_backtest/live_backtest_predictions.csv
 
-   The "summary" sheet ranks every config x strategy combination by
+   Set EXPORT_CSV_ONLY = False only when you want the final inspection workbook.
+   The workbook "summary" sheet ranks every config x strategy combination by
    average realised pool points. The "matchday_performance" sheet groups
    World Cup group-stage totals by playing round: M001-M016, M017-M032, and
    M033-M048. The "predictions" sheet has per-match detail.
@@ -65,9 +67,8 @@ Multiple strategies are extracted from each run and scored independently:
 The key comparison is:
   baseline_ev / ev_default   vs   mc_with_ah / market_consistent
 
-If mc_with_ah / market_consistent consistently outscores baseline_ev / ev_default
-across many matches, the market-consistent challenger with AH is worth
-considering as the live default recommendation.
+MC+AH is a gated challenger only. Even when it is positive in backtests, it must
+not override the live EV recommendation without a separate policy change.
 """
 
 from __future__ import annotations
@@ -91,38 +92,43 @@ from wc_predictor.config import DevigConfig, MarketConsistentGroupWeights, Proje
 # USER SETTINGS
 # ============================================================
 
-# Path to the folder that contains results.csv and the odds/ subfolder.
-# Used only when running a single tournament.
+# 1. Tournament selection ----------------------------------------------------
+#
+# TOURNAMENT_FOLDER is used only when TOURNAMENT_FOLDERS contains one entry.
+# Keep TOURNAMENT_FOLDERS as the source of truth for combined runs; avoid
+# reassigning it elsewhere in this file.
 TOURNAMENT_FOLDER = Path("input/historical/wc2018")
 
-# Set multiple folders to produce a combined tournament-labelled workbook.
+# The default smoke run is the reproducible combined 2018+2022 group-stage
+# backtest. Outputs are tournament-labelled so M001 from different tournaments
+# cannot collide.
 TOURNAMENT_FOLDERS = (
     Path("input/historical/wc2018"),
     Path("input/historical/wc2022"),
 )
 
-# "quick" tests 2 configs: baseline + MC-with-AH
-# "standard" tests 5 configs: baseline, devig, MC, MC+AH, MC+DC+AH
-# "research_fast" tests baseline + blend-weight + modal/draw-threshold sweeps (no MC)
-# "research" adds full blend-weight, modal/draw-threshold, larger-grid, and MC configs
-# "custom" uses CUSTOM_CONFIGS below
+# 2. Backtest profile --------------------------------------------------------
+#
+# "quick"         smoke test: baseline EV + gated MC-with-AH challenger.
+# "standard"      five core configs: baseline, power devig, MC, MC+AH, MC+DC+AH.
+# "research_fast" blend-weight + modal/draw-threshold sweeps without MC.
+# "research"      full/slow research set, including MC and larger-grid configs.
+# "custom"        uses CUSTOM_CONFIGS below.
 BACKTEST_PROFILE = "quick"
 
-# Fast iteration switches.
-EXPORT_CSV_ONLY = True  # If True, skip Excel export and only write CSVs (much faster when many configs).
-ENABLE_PARSED_ODDS_CACHE = True
-ENABLE_CALIBRATION_CACHE = True
+# 3. Output settings ---------------------------------------------------------
+#
+# CSV-only is recommended for research iterations. Excel export is useful for
+# final inspection, but workbook creation is slower and not needed for smoke
+# checks.
+EXPORT_CSV_ONLY = True
 
-# Useful when focusing only on blend weights/draw thresholds.
-DISABLE_MARKET_CONSISTENT_CONFIGS = False
+# Per-match progress is noisy for combined smoke runs. Turn it on only when
+# debugging a specific tournament or parse issue.
+SHOW_PROGRESS = True
 
-# Filename of the results CSV inside TOURNAMENT_FOLDER.
-RESULTS_FILENAME = "results.csv"
-
-# Subfolder (inside TOURNAMENT_FOLDER) that contains the combined paste files.
-ODDS_SUBFOLDER = "odds"
-
-# Output paths (relative to project root).
+# Output paths (relative to project root). Combined runs write below
+# output/research/combined_backtest/.
 SUMMARY_OUTPUT = Path("output/research/live_backtest_summary.csv")
 PREDICTIONS_OUTPUT = Path("output/research/live_backtest_predictions.csv")
 EXCEL_OUTPUT = Path("output/research/live_backtest.xlsx")
@@ -131,11 +137,25 @@ COMBINED_SUMMARY_OUTPUT = Path("output/research/combined_backtest/live_backtest_
 COMBINED_PREDICTIONS_OUTPUT = Path("output/research/combined_backtest/live_backtest_predictions.csv")
 COMBINED_EXCEL_OUTPUT = Path("output/research/combined_backtest/live_backtest.xlsx")
 
-# Cache folder for split paste files.
+# 4. Performance / caching settings -----------------------------------------
+ENABLE_PARSED_ODDS_CACHE = True
+ENABLE_CALIBRATION_CACHE = True
+
+# Cache folder for split paste files and parsed market CSVs.
 CACHE_FOLDER = Path("cache/live_backtest/split_pastes")
 
-# Print per-match progress to the terminal while running.
-SHOW_PROGRESS = True
+# 5. Advanced / research-only settings --------------------------------------
+#
+# Useful when focusing only on blend weights/draw thresholds. This does not
+# change model behaviour inside a config; it only removes expensive MC configs
+# from the run list.
+DISABLE_MARKET_CONSISTENT_CONFIGS = False
+
+# Filename of the results CSV inside TOURNAMENT_FOLDER.
+RESULTS_FILENAME = "results.csv"
+
+# Subfolder (inside TOURNAMENT_FOLDER) that contains the combined paste files.
+ODDS_SUBFOLDER = "odds"
 
 # ---- Custom configs (used only when BACKTEST_PROFILE = "custom") ----------
 # Uncomment and edit to build your own comparison.

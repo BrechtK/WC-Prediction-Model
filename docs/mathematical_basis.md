@@ -291,10 +291,11 @@ close to the best decisive EV:
 draw_vs_decisive_gap = EV(best_draw_score) - EV(best_decisive_score)
 ```
 
-The WC 2022 group-stage backtest suggests the EV rule may over-select narrow
-decisive no-BTTS scores in balanced draw regimes, but that sample is too small
-to justify changing the default. The challenger therefore only updates
-diagnostic/manual-review fields; `recommended_score` remains `argmax_s EV(s)`.
+The WC 2022 group-stage backtest suggested the EV rule may over-select narrow
+decisive no-BTTS scores in balanced draw regimes. The combined 2018+2022
+96-match review did not make modal/most-likely robust enough to promote, so the
+challenger only updates diagnostic/manual-review fields; `recommended_score`
+remains `argmax_s EV(s)`.
 
 The BTTS conflict diagnostic similarly flags no-BTTS EV picks when market or
 model BTTS probability is elevated, the match is balanced or draw-prone, and a
@@ -306,7 +307,7 @@ The draw-prone diagnostic uses a market profile rather than a new probability
 model:
 
 ```text
-draw_prone = (median_OU_total < 2.25)
+draw_prone = (expected_total_goals < threshold)
              and (favourite_probability < 0.50)
 ```
 
@@ -315,10 +316,14 @@ matches:
 
 ```text
 blowout_risk = (favourite_probability > 0.70)
-               and (median_OU_total > 2.60)
+               and (high total-goals signal)
 ```
 
 Both diagnostics surface alternatives and set manual-review fields only.
+`ou_ladder_median_line` describes the median line visible in the pasted O/U
+ladder. The compatibility alias `ou_median_total` is deprecated and should not
+be interpreted as expected goals; use `expected_total_goals` for draw-prone and
+high-total reasoning.
 
 ## Expected Pool Points
 
@@ -455,6 +460,10 @@ Best odds for individual scorelines are not enough to recover fair
 probabilities: the best prices may come from different bookmakers and do not
 form one coherent market with a meaningful overround.
 
+As of the combined 2018+2022 group-stage review, correct-score blend sweeps are
+still research-only. The live default remains `w=1.0`; observed blend gains were
+not strong enough to justify changing the default score matrix.
+
 All supplied correct-score odds contribute to each bookmaker's overround and
 fair probabilities, including long-shot scores beyond the configured finite
 matrix. When the direct market is converted into the finite EV matrix,
@@ -466,6 +475,13 @@ the omitted scoreline labels are reported as a coverage warning.
 These additions are configurable and default to the existing conservative
 behaviour. None of them changes the default live EV recommendation unless
 explicitly enabled.
+
+Final 2026 governance after the combined 2018+2022 96-match review:
+EV optimisation remains the live default. MC+AH is a gated challenger only when
+the optimiser status is acceptable. Modal/draw, round-3 fade, blowout risk, and
+narrow BTTS conflict flags are manual-review notes. Power devig, Dixon-Coles,
+larger-grid, AH under-cover monitoring, broad public-strategy variants, and
+correct-score blend sweeps are research-only.
 
 ### Market-Type-Specific Devig
 
@@ -536,6 +552,11 @@ fair_team_a(h) ~= P(margin >= floor(-h) + 1)
 It reports the fitted `mu1`, `mu2`, the implied mean margin, the fit error, and a
 margin-by-margin comparison against the calibrated independent-Poisson margins.
 It is diagnostic only: it does not adjust the default score matrix.
+
+Historical AH under-cover analysis should use the realised settlement fields
+from the real quoted main AH line, including push and half-win/half-loss
+outcomes. The current evidence is weak and monitor-only; it is not an
+automatic favourite-fade rule.
 
 ### Reliability / Covariance-Aware Constraints (Research Scaffold)
 

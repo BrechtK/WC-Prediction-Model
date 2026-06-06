@@ -13,6 +13,11 @@ and track friend submissions and standings. Live margin removal defaults to
 fallback warnings. Group-stage scoring assumes the central `10/7/5/1` config
 unless confirmed rules differ.
 
+2026 freeze policy: the EV-optimal score remains the live default. Modal/draw,
+MC+AH, correct-score blend changes, power devig, global draw boosts, and AH
+favourite-under-cover adjustments are not promoted to default. They remain
+manual-review or research diagnostics as described in `docs/model_roadmap.md`.
+
 ## Version 1.5
 
 Extend the initial group-stage Football-Data-like backtester with additional

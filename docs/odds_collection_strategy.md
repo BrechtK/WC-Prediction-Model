@@ -15,6 +15,12 @@ are an optional enhancement because they are directly relevant to the pool
 scoring rules, but they should only influence live predictions when the source
 market is sufficiently coherent and complete.
 
+The 2026 live policy keeps the EV-optimal score as the default. Better data
+collection should improve diagnostics and manual review first; it should not
+silently promote modal picks, correct-score blend-weight changes, MC+AH, power
+devig, global draw boosts, BTTS alternatives, or AH favourite-under-cover
+adjustments.
+
 ## Executive Recommendation
 
 Use a two-tier workflow:
@@ -345,6 +351,18 @@ The weight-sensitivity table is especially valuable. If the recommendation is
 stable from `w=1.0` through `w=0.5`, the correct-score enhancement confirms the
 baseline. If it flips repeatedly, manual review matters more than selecting one
 apparently precise weight.
+The combined 2018+2022 backtest did not provide enough evidence to change the
+live default from `w=1.0`; blend sweeps remain research-only.
+
+For O/U diagnostics, use `expected_total_goals` when judging low-total draw
+prone matches or high-total blowout risk. `ou_ladder_median_line` describes the
+visible market ladder and the old `ou_median_total` alias should not be read as
+expected goals.
+
+For Asian handicap diagnostics, prefer the real quoted main-line fields
+(`ah_main_line`, implied cover probability, realised settlement, and realised
+profit). Favourite under-cover evidence from the combined review is weak and
+should be monitored as raw data, not converted into a live prediction rule.
 
 ## 9. Recommended Templates
 

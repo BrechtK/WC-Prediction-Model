@@ -82,6 +82,8 @@ normal live workflow. The parser keeps the full ladder for diagnostics, but the
 market-consistent challenger uses only a stable near-money subset. If the AH
 ladder appears reversed relative to 1X2 prices, the workbook and dashboard show
 `asian_handicap_orientation_suspicious`.
+AH under-cover patterns are monitor-only. The live workflow should not fade a
+favourite automatically from AH diagnostics.
 
 ## 5. Run one selected match
 
@@ -123,6 +125,8 @@ If warnings appear, fix those before submitting.
 Compact output does not print full margin tables. It only calls out Asian
 handicap when the market-consistent diagnostic score shifts or creates a
 manual-review reason.
+MC+AH remains a gated challenger only when optimiser status is acceptable; it
+does not replace the final EV recommendation.
 
 ## 7. Inspect Excel only when needed
 
@@ -146,6 +150,8 @@ scoreline optimiser. Group-stage scoring is implemented as the assumed
 
 Submit the score shown in the `Final recommendations` block unless the manual
 review diagnostics give you a clear reason to choose the listed alternative.
+Modal/draw, round-3 favourite fade, blowout risk, and BTTS conflict are
+manual-review notes only. They are not automatic override rules.
 
 ## Useful Variations
 

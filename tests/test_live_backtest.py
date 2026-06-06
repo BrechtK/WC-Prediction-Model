@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 from pathlib import Path
+import time
 import warnings
 
 import pandas as pd
@@ -793,6 +795,24 @@ def test_second_backtest_run_uses_parsed_odds_cache(tmp_path: Path) -> None:
     assert not second.predictions.empty
     notes = set(second.timings["notes"].astype(str))
     assert "cache_hit" in notes
+
+
+def test_parsed_odds_cache_invalidates_when_source_paste_changes(tmp_path: Path) -> None:
+    settings = _simple_settings(tmp_path, ["M001"])
+
+    first = run_live_backtest(settings, export=False, progress=False)
+    paste_path = settings.historical_odds_folder / "M001.txt"
+    future_mtime = time.time() + 2.0
+    os.utime(paste_path, (future_mtime, future_mtime))
+    second = run_live_backtest(settings, export=False, progress=False)
+
+    assert not first.predictions.empty
+    assert not second.predictions.empty
+    split_notes = second.timings.loc[
+        second.timings["phase"].eq("combined_paste_split"),
+        "notes",
+    ].astype(str).tolist()
+    assert "cache_miss" in split_notes
 
 
 def test_calibration_cache_reuses_baseline_matrix_across_configs(
