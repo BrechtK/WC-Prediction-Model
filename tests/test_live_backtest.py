@@ -29,6 +29,7 @@ from wc_predictor.live_backtest import (
     _format_expected_vs_actual_summary,
     _format_round_summary,
     _group_stage_playing_round,
+    _ah_main_line_realised_diagnostics,
     _parse_score,
     _score_strategies,
     _sheet_or_status,
@@ -310,6 +311,37 @@ def test_score_strategies_exports_realised_ah_cover_fields() -> None:
     assert ev["favourite_covered_ah"] == "yes"
     assert ev["realised_cover_margin"] == pytest.approx(0.5)
     assert ev["ah_cover_error"] == pytest.approx(0.40)
+
+
+@pytest.mark.parametrize(
+    ("line", "actual", "expected_result", "expected_profit"),
+    [
+        (-1.5, (2, 0), "win", 0.91),
+        (-1.5, (1, 1), "loss", -1.0),
+        (-1.0, (1, 0), "push", 0.0),
+        (-1.25, (1, 0), "half_loss", -0.5),
+        (-0.75, (1, 0), "half_win", 0.455),
+    ],
+)
+def test_ah_main_line_realised_result_handles_asian_settlement(
+    line: float,
+    actual: tuple[int, int],
+    expected_result: str,
+    expected_profit: float,
+) -> None:
+    row = pd.Series(
+        {
+            "ah_main_line": line,
+            "ah_main_favourite_side": "team_a",
+            "ah_main_favourite_odds": 1.91,
+            "ah_main_underdog_odds": 1.91,
+        }
+    )
+
+    diagnostics = _ah_main_line_realised_diagnostics(row, actual[0], actual[1])
+
+    assert diagnostics["ah_main_realised_result"] == expected_result
+    assert diagnostics["ah_main_realised_profit_favourite"] == pytest.approx(expected_profit)
 
 
 def test_build_summary_adds_expected_and_actual_point_totals() -> None:
@@ -612,7 +644,13 @@ def test_backtest_produces_summary_and_predictions_for_single_match(
     assert "market_a_win" in report.predictions.columns
     assert "market_draw" in report.predictions.columns
     assert "lambda_a" in report.predictions.columns
+    assert "expected_total_goals" in report.predictions.columns
+    assert "ou_ladder_median_line" in report.predictions.columns
     assert "ou_median_total" in report.predictions.columns
+    assert "ou_main_line" in report.predictions.columns
+    assert "ou_main_over_probability" in report.predictions.columns
+    assert "ou_main_under_probability" in report.predictions.columns
+    assert "ou_main_overround" in report.predictions.columns
     assert "market_total_line_used" in report.predictions.columns
     assert "ev_default_score" in report.predictions.columns
     assert "most_likely_score" in report.predictions.columns
@@ -623,14 +661,33 @@ def test_backtest_produces_summary_and_predictions_for_single_match(
     assert "btts_conflict_flag" in report.predictions.columns
     assert "btts_conflict_reason" in report.predictions.columns
     assert "correct_score_top_scores" in report.predictions.columns
+    assert "correct_score_market_top_score" in report.predictions.columns
+    assert "correct_score_market_top_probability" in report.predictions.columns
+    assert "correct_score_other_bucket_present" in report.predictions.columns
+    assert "correct_score_tail_mass_estimate" in report.predictions.columns
+    assert "correct_score_number_of_quoted_scores" in report.predictions.columns
+    assert "correct_score_overround" in report.predictions.columns
+    assert "correct_score_bookmakers_count" in report.predictions.columns
+    assert "correct_score_blend_weight" in report.predictions.columns
     assert "has_other_bucket" in report.predictions.columns
     assert "correct_score_tail_mass" in report.predictions.columns
+    assert "ah_main_line" in report.predictions.columns
+    assert "ah_main_favourite_side" in report.predictions.columns
+    assert "ah_main_realised_result" in report.predictions.columns
+    assert "mc_ah_challenger_available" in report.predictions.columns
+    assert "mc_ah_optimisation_acceptable" in report.predictions.columns
+    assert "mc_ah_gated_decision_note" in report.predictions.columns
+    assert "inert_feature_note" in report.predictions.columns
     assert "correct_score_poisson_weight" in report.predictions.columns
     assert "grid_max_goals_used" in report.predictions.columns
     ev_row = report.predictions[report.predictions["strategy"] == "ev_default"].iloc[0]
     assert ev_row["predicted_score"] == ev_row["ev_default_score"]
     assert "total_expected_points" in report.summary.columns
     assert "actual_points_sum" in report.summary.columns
+    assert "dixon_coles_changed_recommendation_count" in report.summary.columns
+    assert "larger_grid_changed_recommendation_count" in report.summary.columns
+    assert "larger_grid_recommended_count" in report.summary.columns
+    assert "inert_feature_note" in report.summary.columns
     assert not report.round_summary.empty
     assert "group_stage_playing_round" in report.round_summary.columns
     assert (tmp_path / "summary.csv").exists()
@@ -838,6 +895,12 @@ def test_backtest_with_ah_runs_mc_challenger(tmp_path: Path) -> None:
 
     assert not report.predictions.empty
     assert "mc_with_ah" in report.predictions["config"].values
+    ev_row = report.predictions[report.predictions["strategy"] == "ev_default"].iloc[0]
+    assert ev_row["predicted_score"] == ev_row["ev_default_score"]
+    assert ev_row["ah_main_line"] == pytest.approx(-1.5)
+    assert ev_row["ah_main_favourite_side"] == "team_a"
+    assert ev_row["ah_main_realised_result"] in {"win", "loss", "push", "half_win", "half_loss"}
+    assert ev_row["mc_ah_challenger_available"] == "yes"
 
 
 def test_backtest_summary_ranks_configs_by_average_points(tmp_path: Path) -> None:

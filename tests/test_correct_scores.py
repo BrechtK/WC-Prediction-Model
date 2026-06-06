@@ -198,6 +198,15 @@ def test_sparse_correct_score_market_is_reported_but_blending_is_suppressed() ->
     assert report.loc["M001", "correct_score_market_top_10"]
     assert report.loc["M001", "correct_score_blended_top_10"]
     assert report.loc["M001", "correct_score_kl_divergence"] > 0
+    assert report.loc["M001", "correct_score_market_top_score"]
+    assert pd.notna(report.loc["M001", "correct_score_market_top_probability"])
+    assert report.loc["M001", "correct_score_other_bucket_present"] in {"yes", "no"}
+    assert "correct_score_other_bucket_probability" in report.columns
+    assert "correct_score_tail_mass_estimate" in report.columns
+    assert report.loc["M001", "correct_score_number_of_quoted_scores"] > 0
+    assert pd.notna(report.loc["M001", "correct_score_overround"])
+    assert report.loc["M001", "correct_score_bookmakers_count"] > 0
+    assert report.loc["M001", "correct_score_blend_weight"] == pytest.approx(0.0)
     assert np.allclose(
         suppressed.score_matrices["M001"].probabilities,
         baseline.score_matrices["M001"].probabilities,

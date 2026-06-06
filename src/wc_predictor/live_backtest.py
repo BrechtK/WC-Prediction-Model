@@ -30,6 +30,7 @@ import time
 import numpy as np
 import pandas as pd
 
+from wc_predictor.asian_handicap import asian_handicap_profit
 from wc_predictor.config import DevigConfig, ProjectConfig, StrategyConfig
 from wc_predictor.oddsportal import parse_oddsportal_correct_score_folder
 from wc_predictor.oddsportal_asian_handicap import parse_oddsportal_asian_handicap_folder
@@ -639,6 +640,52 @@ def _ah_realised_cover_diagnostics(
     }
 
 
+def _classify_asian_profit(profit: float, odds: float) -> str:
+    if np.isclose(profit, 0.0):
+        return "push"
+    if np.isclose(profit, odds - 1.0):
+        return "win"
+    if np.isclose(profit, -1.0):
+        return "loss"
+    if profit > 0:
+        return "half_win"
+    if profit < 0:
+        return "half_loss"
+    return ""
+
+
+def _ah_main_line_realised_diagnostics(
+    report_row: pd.Series,
+    actual_a: int,
+    actual_b: int,
+) -> dict[str, object]:
+    line = pd.to_numeric(report_row.get("ah_main_line", pd.NA), errors="coerce")
+    side = str(report_row.get("ah_main_favourite_side", "") or "")
+    favourite_odds = pd.to_numeric(report_row.get("ah_main_favourite_odds", pd.NA), errors="coerce")
+    underdog_odds = pd.to_numeric(report_row.get("ah_main_underdog_odds", pd.NA), errors="coerce")
+    if pd.isna(line) or side not in {"team_a", "team_b"} or pd.isna(favourite_odds) or favourite_odds <= 1.0:
+        return {
+            "ah_main_realised_result": "",
+            "ah_main_realised_profit_favourite": pd.NA,
+            "ah_main_realised_profit_underdog": pd.NA,
+            "ah_main_realised_cover_margin": pd.NA,
+        }
+    underdog_side = "team_b" if side == "team_a" else "team_a"
+    profit_favourite = asian_handicap_profit(actual_a, actual_b, float(line), side, float(favourite_odds))
+    profit_underdog = (
+        asian_handicap_profit(actual_a, actual_b, float(line), underdog_side, float(underdog_odds))
+        if pd.notna(underdog_odds) and float(underdog_odds) > 1.0
+        else pd.NA
+    )
+    cover_margin = float(actual_a - actual_b + float(line)) if side == "team_a" else float(actual_b - actual_a - float(line))
+    return {
+        "ah_main_realised_result": _classify_asian_profit(profit_favourite, float(favourite_odds)),
+        "ah_main_realised_profit_favourite": profit_favourite,
+        "ah_main_realised_profit_underdog": profit_underdog,
+        "ah_main_realised_cover_margin": cover_margin,
+    }
+
+
 def _match_number(match_id: object) -> int | None:
     """Extract the numeric tournament match number from labels like M001."""
 
@@ -709,7 +756,12 @@ def _score_strategies(
         "lambda_a",
         "lambda_b",
         "expected_total_goals",
+        "ou_ladder_median_line",
         "ou_median_total",
+        "ou_main_line",
+        "ou_main_over_probability",
+        "ou_main_under_probability",
+        "ou_main_overround",
         "market_total_line_used",
         "market_fair_btts_yes_probability",
         "model_implied_btts_yes_probability",
@@ -763,7 +815,28 @@ def _score_strategies(
         "ah_cover_error",
         "ah_line_kind",
         "ah_selected_skipped_reason",
+        "ah_main_line",
+        "ah_main_line_kind",
+        "ah_main_favourite_side",
+        "ah_main_favourite_odds",
+        "ah_main_underdog_odds",
+        "ah_main_implied_favourite_cover_probability",
+        "ah_main_bookmakers_count",
+        "ah_main_aggregation_quality",
+        "ah_main_realised_result",
+        "ah_main_realised_profit_favourite",
+        "ah_main_realised_profit_underdog",
+        "ah_main_realised_cover_margin",
         "correct_score_top_scores",
+        "correct_score_market_top_score",
+        "correct_score_market_top_probability",
+        "correct_score_other_bucket_present",
+        "correct_score_other_bucket_probability",
+        "correct_score_tail_mass_estimate",
+        "correct_score_number_of_quoted_scores",
+        "correct_score_overround",
+        "correct_score_bookmakers_count",
+        "correct_score_blend_weight",
         "has_other_bucket",
         "correct_score_tail_mass",
         "market_consistent_status",
@@ -773,9 +846,18 @@ def _score_strategies(
         "market_consistent_total_goals_fit_error",
         "market_consistent_correct_score_fit_error",
         "market_consistent_warning_flags",
+        "mc_ah_challenger_available",
+        "mc_ah_optimisation_acceptable",
+        "mc_ah_recommendation",
+        "mc_ah_differs_from_ev",
+        "mc_ah_points_backtest",
+        "mc_ah_gated_decision_note",
         "correct_score_poisson_weight",
         "margin_removal_method",
         "grid_max_goals_used",
+        "dixon_coles_changes_recommendation",
+        "dixon_coles_inert_note",
+        "inert_feature_note",
         "decision_note",
         "risk_notes",
     )
@@ -795,6 +877,14 @@ def _score_strategies(
         pred_a, pred_b = score
         points = score_group_prediction(pred_a, pred_b, actual_a, actual_b)
         ah_cover = _ah_realised_cover_diagnostics(report_row, actual_a, actual_b)
+        ah_main = _ah_main_line_realised_diagnostics(report_row, actual_a, actual_b)
+        mc_ah_score = _parse_score(report_row.get("market_consistent_recommended_score"))
+        mc_ah_points = (
+            score_group_prediction(mc_ah_score[0], mc_ah_score[1], actual_a, actual_b)
+            if mc_ah_score is not None
+            and str(report_row.get("mc_ah_challenger_available", "no")).lower() == "yes"
+            else pd.NA
+        )
         rows.append(
             {
                 "strategy": strategy_name,
@@ -819,6 +909,8 @@ def _score_strategies(
                 "warning_flags": str(report_row.get("warning_flags", "")),
                 **shared_diagnostics,
                 **ah_cover,
+                **ah_main,
+                "mc_ah_points_backtest": mc_ah_points,
             }
         )
     return rows
@@ -846,6 +938,21 @@ def _build_summary(predictions: pd.DataFrame) -> pd.DataFrame:
             else np.nan
         )
         actual_points_sum = int(group["realised_points"].sum())
+        dixon_coles_changed = (
+            int(group["dixon_coles_changes_recommendation"].astype(str).str.lower().eq("true").sum())
+            if "dixon_coles_changes_recommendation" in group
+            else 0
+        )
+        larger_grid_changed = (
+            int(group["recommendation_changed_due_to_larger_grid"].astype(str).str.lower().eq("yes").sum())
+            if "recommendation_changed_due_to_larger_grid" in group
+            else 0
+        )
+        larger_grid_recommended = (
+            int(group["larger_grid_recommended"].astype(str).str.lower().eq("yes").sum())
+            if "larger_grid_recommended" in group
+            else 0
+        )
         rows.append(
             {
                 "config": config_name,
@@ -862,6 +969,14 @@ def _build_summary(predictions: pd.DataFrame) -> pd.DataFrame:
                 ),
                 "correct_result_rate": float(group["is_correct_result"].mean()),
                 "points_variance": float(group["realised_points"].var()),
+                "dixon_coles_changed_recommendation_count": dixon_coles_changed,
+                "larger_grid_changed_recommendation_count": larger_grid_changed,
+                "larger_grid_recommended_count": larger_grid_recommended,
+                "inert_feature_note": (
+                    "Dixon-Coles/larger-grid diagnostics were inert for this group."
+                    if dixon_coles_changed == 0 and larger_grid_changed == 0 and larger_grid_recommended == 0
+                    else ""
+                ),
             }
         )
     summary = (
@@ -1432,6 +1547,7 @@ def _build_draw_threshold_sweep(predictions: pd.DataFrame) -> tuple[pd.DataFrame
                             "draw_vs_decisive_gap": row.get("draw_vs_decisive_gap", np.nan),
                             "expected_total_goals": row.get("expected_total_goals", np.nan),
                             "total_signal_used_for_draw_prone": row.get("total_signal_used_for_draw_prone", ""),
+                            "ou_ladder_median_line": row.get("ou_ladder_median_line", np.nan),
                             "ou_median_total": row.get("ou_median_total", np.nan),
                             "favourite_probability": row.get("favourite_probability", np.nan),
                         }
@@ -1556,7 +1672,12 @@ def _build_draw_prone_candidates(predictions: pd.DataFrame, *, limit: int = 20) 
         "team_b",
         "expected_total_goals",
         "total_signal_used_for_draw_prone",
+        "ou_ladder_median_line",
         "ou_median_total",
+        "ou_main_line",
+        "ou_main_over_probability",
+        "ou_main_under_probability",
+        "ou_main_overround",
         "favourite_probability",
         "market_draw_probability",
         "ev_score",

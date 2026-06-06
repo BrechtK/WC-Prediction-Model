@@ -614,6 +614,36 @@ def _median_total_goals_line(
     return 2.5 if pd.notna(fallback_over_2_5) else pd.NA
 
 
+def _main_total_goals_line(match_total_goals: pd.DataFrame, fallback_over_2_5: object) -> dict[str, object]:
+    if not match_total_goals.empty and {"line", "fair_over", "fair_under"}.issubset(match_total_goals.columns):
+        rows = match_total_goals.copy()
+        rows["_main_distance"] = (pd.to_numeric(rows["fair_over"], errors="coerce") - 0.5).abs()
+        if "bookmakers_count" not in rows:
+            rows["bookmakers_count"] = 0
+        rows = rows.sort_values(["_main_distance", "bookmakers_count", "line"], ascending=[True, False, True])
+        row = rows.iloc[0]
+        return {
+            "ou_main_line": float(row["line"]),
+            "ou_main_over_probability": float(row["fair_over"]),
+            "ou_main_under_probability": float(row["fair_under"]),
+            "ou_main_overround": row.get("average_total_goals_overround", pd.NA),
+        }
+    if pd.notna(fallback_over_2_5):
+        over = float(fallback_over_2_5)
+        return {
+            "ou_main_line": 2.5,
+            "ou_main_over_probability": over,
+            "ou_main_under_probability": 1.0 - over,
+            "ou_main_overround": pd.NA,
+        }
+    return {
+        "ou_main_line": pd.NA,
+        "ou_main_over_probability": pd.NA,
+        "ou_main_under_probability": pd.NA,
+        "ou_main_overround": pd.NA,
+    }
+
+
 def _draw_prone_diagnostic(
     *,
     ou_median_total: object,
@@ -759,6 +789,112 @@ def _asian_handicap_favourite_summary(
         "ah_implied_favourite_cover_probability": row.get(probability_column, pd.NA),
         "ah_line_kind": row.get("line_kind", ""),
         "ah_selected_skipped_reason": selected_reason,
+    }
+
+
+def _asian_handicap_main_line_summary(
+    match_asian_handicap: pd.DataFrame,
+    *,
+    favourite_is_team_a: bool,
+) -> dict[str, object]:
+    empty = {
+        "ah_main_line": pd.NA,
+        "ah_main_line_kind": "",
+        "ah_main_favourite_side": "",
+        "ah_main_favourite_odds": pd.NA,
+        "ah_main_underdog_odds": pd.NA,
+        "ah_main_implied_favourite_cover_probability": pd.NA,
+        "ah_main_bookmakers_count": 0,
+        "ah_main_aggregation_quality": "unavailable",
+    }
+    if match_asian_handicap.empty or "handicap" not in match_asian_handicap:
+        return empty
+    rows = match_asian_handicap.copy()
+    rows["handicap"] = pd.to_numeric(rows["handicap"], errors="coerce")
+    rows = rows.dropna(subset=["handicap"])
+    if rows.empty:
+        return empty
+    favourite_side = "team_a" if favourite_is_team_a else "team_b"
+    probability_column = "fair_team_a" if favourite_is_team_a else "fair_team_b"
+    favourite_odds_column = "average_odds_team_a" if favourite_is_team_a else "average_odds_team_b"
+    underdog_odds_column = "average_odds_team_b" if favourite_is_team_a else "average_odds_team_a"
+    direction = rows[rows["handicap"].lt(0)] if favourite_is_team_a else rows[rows["handicap"].gt(0)]
+    candidates = direction if not direction.empty else rows
+    candidates = candidates.copy()
+    candidates["_main_distance"] = (pd.to_numeric(candidates[probability_column], errors="coerce") - 0.5).abs()
+    candidates["_bookmakers_count"] = pd.to_numeric(candidates.get("bookmakers_count", 0), errors="coerce").fillna(0)
+    candidates = candidates.sort_values(
+        ["_main_distance", "_bookmakers_count", "handicap"],
+        ascending=[True, False, True],
+    )
+    row = candidates.iloc[0]
+    bookmaker_count = int(row.get("bookmakers_count", 0) or 0)
+    quality = "ok" if bookmaker_count >= 2 else "thin_bookmaker_coverage"
+    return {
+        "ah_main_line": float(row["handicap"]),
+        "ah_main_line_kind": row.get("line_kind", ""),
+        "ah_main_favourite_side": favourite_side,
+        "ah_main_favourite_odds": row.get(favourite_odds_column, pd.NA),
+        "ah_main_underdog_odds": row.get(underdog_odds_column, pd.NA),
+        "ah_main_implied_favourite_cover_probability": row.get(probability_column, pd.NA),
+        "ah_main_bookmakers_count": bookmaker_count,
+        "ah_main_aggregation_quality": quality,
+    }
+
+
+def _correct_score_quality_summary(
+    correct_score_rows: pd.DataFrame,
+    correct_score_matrix: ScoreProbabilityMatrix | None,
+    bookmaker_diagnostics: pd.DataFrame | None,
+    *,
+    correct_score_top_scores: str,
+    correct_score_tail_mass: object,
+    blend_weight: float,
+) -> dict[str, object]:
+    if correct_score_rows.empty or correct_score_matrix is None:
+        return {
+            "correct_score_market_top_score": "",
+            "correct_score_market_top_probability": pd.NA,
+            "correct_score_other_bucket_present": "no",
+            "correct_score_other_bucket_probability": pd.NA,
+            "correct_score_tail_mass_estimate": pd.NA,
+            "correct_score_number_of_quoted_scores": 0,
+            "correct_score_overround": pd.NA,
+            "correct_score_bookmakers_count": 0,
+            "correct_score_blend_weight": blend_weight,
+        }
+    probabilities = correct_score_matrix.probabilities
+    index = np.unravel_index(int(np.argmax(probabilities)), probabilities.shape)
+    other_present = (
+        "has_other_bucket" in correct_score_rows
+        and correct_score_rows["has_other_bucket"]
+        .fillna(False)
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin({"true", "1", "yes"})
+        .any()
+    )
+    quoted_scores = {
+        (int(row["score_a"]), int(row["score_b"]))
+        for _, row in correct_score_rows.dropna(subset=["score_a", "score_b"]).iterrows()
+    }
+    bookmaker_count = int(correct_score_rows["bookmaker"].nunique()) if "bookmaker" in correct_score_rows else 0
+    if bookmaker_diagnostics is not None and not bookmaker_diagnostics.empty:
+        overround_values = pd.to_numeric(bookmaker_diagnostics["correct_score_overround"], errors="coerce").dropna()
+        overround = float(overround_values.mean()) if not overround_values.empty else pd.NA
+    else:
+        overround = pd.NA
+    return {
+        "correct_score_market_top_score": f"{int(index[0])}-{int(index[1])}",
+        "correct_score_market_top_probability": float(probabilities[index]),
+        "correct_score_other_bucket_present": "yes" if other_present else "no",
+        "correct_score_other_bucket_probability": pd.NA,
+        "correct_score_tail_mass_estimate": correct_score_tail_mass,
+        "correct_score_number_of_quoted_scores": len(quoted_scores),
+        "correct_score_overround": overround,
+        "correct_score_bookmakers_count": bookmaker_count,
+        "correct_score_blend_weight": blend_weight,
     }
 
 
@@ -1586,12 +1722,19 @@ def _build_final_decision_dashboard(
             if str(score)
         ] if not margin_rows.empty and "recommended_score" in margin_rows else []
         market_consistent_score = str(row.get("market_consistent_recommended_score", ""))
+        mc_ah_available = str(row.get("mc_ah_challenger_available", "no")).lower() == "yes"
+        mc_ah_acceptable = str(row.get("mc_ah_optimisation_acceptable", "no")).lower() == "yes"
+        market_consistent_challenger_score = (
+            market_consistent_score
+            if market_consistent_score and (not mc_ah_available or mc_ah_acceptable)
+            else ""
+        )
         dixon_coles_score = str(row.get("dixon_coles_recommended_score", ""))
         public_strategy_score = str(row.get("public_strategy_score", ""))
         asian_handicap_shift = str(row.get("asian_handicap_shift_recommendation", "no")).lower() == "yes"
         correct_score_blended_score = str(row.get("correct_score_blended_recommended_score", ""))
         challenger_scores = [
-            market_consistent_score,
+            market_consistent_challenger_score,
             dixon_coles_score,
             correct_score_blended_score,
             *margin_scores,
@@ -1607,7 +1750,7 @@ def _build_final_decision_dashboard(
         draw_prone = str(row.get("draw_prone_flag", "no")).lower() == "yes"
         blowout_risk = str(row.get("blowout_risk_flag", "no")).lower() == "yes"
         modal_draw_challenger_score = str(row.get("modal_draw_challenger_score", ""))
-        market_consistent_differs = market_consistent_score not in {"", default_score}
+        market_consistent_differs = market_consistent_challenger_score not in {"", default_score}
         dixon_coles_differs = dixon_coles_score not in {"", default_score}
         public_strategy_differs = public_strategy_score not in {"", default_score}
         strategic_alternative_score = (
@@ -1700,6 +1843,11 @@ def _build_final_decision_dashboard(
                 "default_score": default_score,
                 "final_decision_score": default_score,
                 "market_consistent_score": market_consistent_score,
+                "mc_ah_challenger_available": "yes" if mc_ah_available else "no",
+                "mc_ah_optimisation_acceptable": "yes" if mc_ah_acceptable else "no",
+                "mc_ah_recommendation": row.get("mc_ah_recommendation", ""),
+                "mc_ah_differs_from_ev": row.get("mc_ah_differs_from_ev", "no"),
+                "mc_ah_gated_decision_note": row.get("mc_ah_gated_decision_note", ""),
                 "dixon_coles_score": dixon_coles_score,
                 "public_strategy_score": public_strategy_score,
                 "margin_method_scores": margin_method_scores,
@@ -2084,11 +2232,12 @@ def run_prediction_workflow(
             for _, total_row in calibratable_total_goals.iterrows()
         )
         legacy_over_2_5 = _optional_probability(row, "fair_over_2_5") if not total_goals_targets else None
-        ou_median_total = _median_total_goals_line(
+        ou_ladder_median_line = _median_total_goals_line(
             calibratable_total_goals,
             match_total_goals,
             row.get("fair_over_2_5", pd.NA),
         )
+        ou_main_line = _main_total_goals_line(match_total_goals, row.get("fair_over_2_5", pd.NA))
         market_total_line_used = _format_total_goals_lines(calibratable_total_goals)
         targets = CalibrationTargets(
             float(row["fair_a_win"]),
@@ -2205,6 +2354,16 @@ def run_prediction_workflow(
             has_other_bucket = "no"
             correct_score_tail_mass = pd.NA
             has_correct_score_market = False
+            correct_score_matrix = None
+            correct_score_aggregation = None
+        correct_score_quality = _correct_score_quality_summary(
+            correct_score_rows,
+            correct_score_matrix,
+            correct_score_aggregation.bookmaker_diagnostics if correct_score_aggregation is not None else None,
+            correct_score_top_scores=correct_score_market_top_10,
+            correct_score_tail_mass=correct_score_tail_mass,
+            blend_weight=config.correct_score_poisson_weight,
+        )
         matrices[match_id] = score_matrix
         if config.enable_dixon_coles_rho_estimation:
             dixon_coles_rho_estimate = estimate_dixon_coles_rho_from_market(
@@ -2508,6 +2667,10 @@ def run_prediction_workflow(
             match_asian_handicap,
             favourite_is_team_a=favourite_is_team_a,
         )
+        ah_main_line_summary = _asian_handicap_main_line_summary(
+            match_asian_handicap,
+            favourite_is_team_a=favourite_is_team_a,
+        )
         bucket = favourite_strength_bucket(favourite_probability)
         ev_gap_best_vs_second = _ev_gap_best_vs_second(recommendation)
         ev_gap_best_vs_modal = _ev_gap_vs_modal(
@@ -2658,6 +2821,27 @@ def run_prediction_workflow(
         )
         market_consistent_classification = str(
             market_consistent_result.diagnostics.get("market_consistent_optimisation_classification", "")
+        )
+        mc_ah_challenger_available = bool(
+            market_consistent_recommendation is not None
+            and market_consistent_asian_handicap_lines_used
+        )
+        mc_ah_optimisation_acceptable = mc_ah_challenger_available and market_consistent_classification in {
+            "",
+            "success",
+            "optimisation_converged",
+            "optimisation_not_fully_converged_but_fit_acceptable",
+        } and market_consistent_status not in {"poor_fit", "failed_severe"}
+        mc_ah_differs_from_ev = (
+            mc_ah_challenger_available
+            and market_consistent_recommended_score != final_live_recommended_score
+        )
+        mc_ah_gated_decision_note = (
+            "MC+AH challenger available and optimiser fit is acceptable; review as gated challenger, EV remains default."
+            if mc_ah_optimisation_acceptable
+            else "MC+AH diagnostics available but optimiser fit/status is not acceptable; do not follow as challenger."
+            if mc_ah_challenger_available
+            else "MC+AH challenger not available for this match."
         )
         market_consistent_warning_flags = []
         if market_consistent_classification == "optimisation_failed_severe":
@@ -2869,7 +3053,7 @@ def run_prediction_workflow(
             config=config,
         )
         draw_prone = _draw_prone_diagnostic(
-            ou_median_total=ou_median_total,
+            ou_median_total=ou_ladder_median_line,
             expected_total_goals=score_audit["expected_total_goals"],
             favourite_probability=favourite_probability,
             market_draw_probability=targets.draw,
@@ -2883,7 +3067,7 @@ def run_prediction_workflow(
         )
         blowout_risk = _blowout_risk_diagnostic(
             favourite_probability=favourite_probability,
-            ou_median_total=ou_median_total,
+            ou_median_total=ou_ladder_median_line,
             high_margin_alternatives=high_margin_alternatives,
             high_score_tail_mass=float(normal_grid_tail_mass),
             larger_grid_recommendation=larger_grid_sensitivity.get("larger_grid_poisson_recommendation", ""),
@@ -2956,7 +3140,9 @@ def run_prediction_workflow(
                 "total_goals_lines_available": _format_total_goals_lines(match_total_goals),
                 "total_goals_lines_used_for_calibration": _format_total_goals_lines(calibratable_total_goals),
                 "market_total_line_used": market_total_line_used,
-                "ou_median_total": ou_median_total,
+                "ou_ladder_median_line": ou_ladder_median_line,
+                "ou_median_total": ou_ladder_median_line,
+                **ou_main_line,
                 "total_goals_lines_skipped_for_calibration": _format_total_goals_lines(skipped_total_goals),
                 "total_goals_lines_skipped": _format_total_goals_lines(skipped_total_goals),
                 "total_goals_line_fit_error": total_goals_line_fit_error,
@@ -2985,6 +3171,7 @@ def run_prediction_workflow(
                 "correct_score_top_scores": correct_score_market_top_10,
                 "has_other_bucket": has_other_bucket,
                 "correct_score_tail_mass": correct_score_tail_mass,
+                **correct_score_quality,
                 "correct_score_blended_top_10": correct_score_blended_top_10,
                 "correct_score_kl_divergence": correct_score_kl_divergence,
                 "top_10_market_scorelines": correct_score_market_top_10,
@@ -3029,6 +3216,11 @@ def run_prediction_workflow(
                 "dixon_coles_ev_gap_best_vs_second": _ev_gap_best_vs_second(dixon_coles_recommendation),
                 "dixon_coles_top_5_ev_predictions": _format_top_ev_predictions(dixon_coles_recommendation),
                 "dixon_coles_changes_recommendation": dixon_coles_recommended_score != final_live_recommended_score,
+                "dixon_coles_inert_note": (
+                    "Dixon-Coles diagnostic did not change the EV recommendation."
+                    if dixon_coles_recommended_score == final_live_recommended_score
+                    else ""
+                ),
                 "market_consistent_recommended_score": (
                     _score_label(market_consistent_recommended_score)
                     if market_consistent_recommendation is not None
@@ -3064,6 +3256,16 @@ def run_prediction_workflow(
                 "market_consistent_asian_totals_shift_recommendation": (
                     "yes" if market_consistent_asian_totals_shift_recommendation else "no"
                 ),
+                "mc_ah_challenger_available": "yes" if mc_ah_challenger_available else "no",
+                "mc_ah_optimisation_acceptable": "yes" if mc_ah_optimisation_acceptable else "no",
+                "mc_ah_recommendation": (
+                    _score_label(market_consistent_recommended_score)
+                    if mc_ah_challenger_available and mc_ah_optimisation_acceptable
+                    else ""
+                ),
+                "mc_ah_differs_from_ev": "yes" if mc_ah_differs_from_ev else "no",
+                "mc_ah_points_backtest": pd.NA,
+                "mc_ah_gated_decision_note": mc_ah_gated_decision_note,
                 "asian_handicap_lines_available": _format_asian_handicap_lines(match_asian_handicap),
                 "asian_handicap_lines_used": market_consistent_asian_handicap_lines_used,
                 "asian_handicap_orientation_suspicious": (
@@ -3072,6 +3274,7 @@ def run_prediction_workflow(
                 "asian_handicap_orientation_reason": asian_handicap_orientation_reason,
                 "asian_handicap_shift_recommendation": "yes" if asian_handicap_shift_recommendation else "no",
                 **ah_favourite_summary,
+                **ah_main_line_summary,
                 "margin_ev_gap": margin_ev_gap,
                 "margin_diagnostic_note": margin_diagnostic_note,
                 **draw_decisive,
@@ -3098,6 +3301,23 @@ def run_prediction_workflow(
                 "extreme_favourite_audit_triggered": extreme_favourite_audit_triggered,
                 **extreme_audit,
                 **larger_grid_sensitivity,
+                "inert_feature_note": "; ".join(
+                    filter(
+                        None,
+                        [
+                            (
+                                "Dixon-Coles did not change recommendation"
+                                if dixon_coles_recommended_score == final_live_recommended_score
+                                else ""
+                            ),
+                            (
+                                "larger-grid diagnostic did not change recommendation"
+                                if str(larger_grid_sensitivity.get("recommendation_changed_due_to_larger_grid", "no")).lower() != "yes"
+                                else ""
+                            ),
+                        ],
+                    )
+                ),
                 "normal_grid_tail_mass": normal_grid_tail_mass,
                 **plausible_decision_layer,
                 **decision_aid,

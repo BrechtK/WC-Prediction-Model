@@ -186,6 +186,16 @@ Additional research diagnostics include optional Shin margin removal,
 market-estimated Dixon-Coles rho from low correct-score cells, and a historical
 World Cup backtest harness.
 
+Current 2026 policy from the combined 2018+2022 review:
+
+- EV remains the live default; diagnostics do not override `recommended_score`.
+- Modal/draw is manual-review only, not a default strategy.
+- Correct-score blending remains research; keep the live default weight unchanged.
+- MC+AH is a gated challenger: inspect it only when optimiser fit is acceptable.
+- Round-3 favourite fade and BTTS conflict are review notes, not alternative-pick rules.
+- Power devig should not be used for serious live decisions.
+- Dixon-Coles and larger-grid diagnostics are retained, but were inert on the combined group-stage backtest.
+
 An opt-in advanced modelling layer is also available, all diagnostic-first and
 off by default (see [docs/mathematical_basis.md](docs/mathematical_basis.md)):
 

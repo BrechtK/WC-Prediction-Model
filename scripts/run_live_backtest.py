@@ -106,10 +106,10 @@ TOURNAMENT_FOLDERS = (
 # "research_fast" tests baseline + blend-weight + modal/draw-threshold sweeps (no MC)
 # "research" adds full blend-weight, modal/draw-threshold, larger-grid, and MC configs
 # "custom" uses CUSTOM_CONFIGS below
-BACKTEST_PROFILE = "research_fast"
+BACKTEST_PROFILE = "quick"
 
 # Fast iteration switches.
-EXPORT_CSV_ONLY = True
+EXPORT_CSV_ONLY = True  # If True, skip Excel export and only write CSVs (much faster when many configs).
 ENABLE_PARSED_ODDS_CACHE = True
 ENABLE_CALIBRATION_CACHE = True
 

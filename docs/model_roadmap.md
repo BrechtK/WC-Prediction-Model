@@ -166,18 +166,28 @@ adds context to the decision note, but it never changes `recommended_score`.
 
 The second-pass pattern review narrowed the practical flags:
 
-- `draw_prone_flag` is the cleaner draw signal: low O/U median total and a
-  balanced favourite probability.
+- `draw_prone_flag` is the cleaner draw signal: low model expected total goals
+  and a balanced favourite probability. The old `ou_median_total` field was a
+  ladder-median line, not expected goals; use `ou_ladder_median_line` only as a
+  market-ladder descriptor.
 - `btts_conflict_flag` is intentionally narrow. BTTS was not broadly
   under-calibrated in the 2022 sample, so elevated BTTS alone is not a warning;
   it must overlap with a balanced/draw-prone context and a close BTTS-compatible
-  alternative.
+  alternative. Treat it as a difficulty note, not an alternative-pick rule.
 - `blowout_risk_flag` is diagnostic-only for strong-favourite, high-total
   matches where higher-margin alternatives deserve review.
 
-Correct-score blend value is still unanswered until the research blend-weight
-sweeps are run with real correct-score coverage. Do not infer value from a
-backtest where all configs used `correct_score_poisson_weight = 1.0`.
+Correct-score blend value remains research-only: the combined review did not
+justify changing the live default weight. MC+AH is the only challenger that was
+positive in both 2018 and 2022, but it must stay gated by optimiser reliability;
+the final recommendation remains EV.
+
+Dixon-Coles is retained as a diagnostic and prior option, but currently has no
+observed recommendation effect on the combined 2018+2022 group-stage data.
+Larger-grid diagnostics are retained for extreme cases and hidden-tail checks,
+but the sweep was inert on the same combined sample. Power devig should be
+dropped from serious live-decision consideration unless future data reverses
+that conclusion.
 
 Future validation should replay the same diagnostics on 2018/2014 World Cup
 group-stage odds and monitor live 2026 matches before any default strategy
