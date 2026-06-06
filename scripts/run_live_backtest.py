@@ -47,9 +47,9 @@ HOW TO USE
        output/research/live_backtest.xlsx
 
    The "summary" sheet ranks every config x strategy combination by
-   average realised pool points. The "group_stage_rounds" sheet groups totals
-   by group-stage playing round: M001-M016, M017-M032, and M033-M048. The
-   "predictions" sheet has per-match detail.
+   average realised pool points. The "matchday_performance" sheet groups
+   World Cup group-stage totals by playing round: M001-M016, M017-M032, and
+   M033-M048. The "predictions" sheet has per-match detail.
 
 WHAT IS COMPARED
 ----------------
@@ -101,7 +101,7 @@ ODDS_SUBFOLDER = "odds"
 # "quick"    tests 2 configs: baseline + MC-with-AH (fastest)
 # "research" adds blend-weight, modal/draw-threshold, and larger-grid sweeps
 # "custom"   uses CUSTOM_CONFIGS below
-BACKTEST_PROFILE = "standard"
+BACKTEST_PROFILE = "research"
 
 # Output paths (relative to project root).
 SUMMARY_OUTPUT = Path("output/research/live_backtest_summary.csv")

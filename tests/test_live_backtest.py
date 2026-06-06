@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+import warnings
 
 import pandas as pd
 import pytest
 from openpyxl import load_workbook
 
+from wc_predictor.scoring_rules import score_group_prediction
 from wc_predictor.live_backtest import (
     DEFAULT_BACKTEST_CONFIGS,
     QUICK_BACKTEST_CONFIGS,
     RESEARCH_BACKTEST_CONFIGS,
     HistoricalResult,
     LiveBacktestSettings,
+    _build_correct_score_blend_sweep,
+    _build_draw_threshold_sweep,
+    _build_larger_grid_sweep,
     _build_round_summary,
     _build_summary,
     _classify_missing_odds,
@@ -22,6 +27,7 @@ from wc_predictor.live_backtest import (
     _group_stage_playing_round,
     _parse_score,
     _score_strategies,
+    _sheet_or_status,
     load_historical_results,
     run_live_backtest,
 )
@@ -366,6 +372,161 @@ def test_build_round_summary_groups_group_stage_totals() -> None:
     assert "round_1 (M001-M016)" in terminal
 
 
+def _sweep_predictions() -> pd.DataFrame:
+    rows: list[dict] = []
+    base_rows = [
+        {
+            "match_id": "M001",
+            "team_a": "Alpha",
+            "team_b": "Beta",
+            "actual_score": "1-1",
+            "predicted_score": "1-0",
+            "realised_points": 1,
+            "model_expected_points": 4.5,
+            "favourite_probability": 0.44,
+            "expected_total_goals": 2.1,
+            "ou_median_total": 2.25,
+            "draw_vs_decisive_gap": -0.20,
+            "best_draw_score": "1-1",
+            "best_draw_ev": 4.1,
+            "modal_score": "1-1",
+            "normal_grid_tail_mass": 0.012,
+            "correct_score_top_scores": "1-0 (0.12)",
+            "has_other_bucket": "no",
+            "correct_score_tail_mass": 0.0,
+        },
+        {
+            "match_id": "M002",
+            "team_a": "Gamma",
+            "team_b": "Delta",
+            "actual_score": "2-0",
+            "predicted_score": "2-0",
+            "realised_points": 10,
+            "model_expected_points": 5.0,
+            "favourite_probability": 0.72,
+            "expected_total_goals": 2.8,
+            "ou_median_total": 2.75,
+            "draw_vs_decisive_gap": -1.20,
+            "best_draw_score": "1-1",
+            "best_draw_ev": 3.2,
+            "modal_score": "2-0",
+            "normal_grid_tail_mass": 0.020,
+            "correct_score_top_scores": "",
+            "has_other_bucket": "no",
+            "correct_score_tail_mass": pd.NA,
+        },
+    ]
+    for row in base_rows:
+        rows.append(
+            {
+                **row,
+                "config": "baseline_ev",
+                "strategy": "ev_default",
+                "is_exact_score": row["realised_points"] == 10,
+                "is_correct_goal_difference": row["realised_points"] in {7, 10},
+                "is_correct_result": row["realised_points"] in {5, 7, 10},
+            }
+        )
+    for weight in ("1_0", "0_85", "0_75", "0_5"):
+        for row in base_rows:
+            predicted = row["predicted_score"]
+            if weight == "0_5" and row["match_id"] == "M001":
+                predicted = "1-1"
+            actual = _parse_score(row["actual_score"])
+            score = _parse_score(predicted)
+            points = score_group_prediction(score[0], score[1], actual[0], actual[1])
+            rows.append(
+                {
+                    **row,
+                    "config": f"cs_weight_{weight}",
+                    "strategy": "ev_default",
+                    "predicted_score": predicted,
+                    "realised_points": points,
+                    "model_expected_points": row["model_expected_points"] - (0.1 if weight != "1_0" else 0.0),
+                    "is_exact_score": points == 10,
+                    "is_correct_goal_difference": points in {7, 10},
+                    "is_correct_result": points in {5, 7, 10},
+                }
+            )
+    for row in base_rows:
+        larger_score = "3-0" if row["match_id"] == "M002" else row["predicted_score"]
+        actual = _parse_score(row["actual_score"])
+        score = _parse_score(larger_score)
+        points = score_group_prediction(score[0], score[1], actual[0], actual[1])
+        rows.append(
+            {
+                **row,
+                "config": "larger_grid_15",
+                "strategy": "ev_default",
+                "predicted_score": larger_score,
+                "realised_points": points,
+                "model_expected_points": row["model_expected_points"],
+                "normal_grid_tail_mass": 0.002,
+                "is_exact_score": points == 10,
+                "is_correct_goal_difference": points in {7, 10},
+                "is_correct_result": points in {5, 7, 10},
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def test_correct_score_blend_sweep_produces_rows_and_all_weights() -> None:
+    summary, matches = _build_correct_score_blend_sweep(_sweep_predictions())
+
+    assert not summary.empty
+    assert not matches.empty
+    assert set(summary["correct_score_poisson_weight"]) == {1.0, 0.85, 0.75, 0.5}
+    assert "changed_predictions_vs_w_1_0" in summary.columns
+    assert "correct_score_data_missing_or_unparsed" in matches["notes_warnings"].values
+
+
+def test_larger_grid_sweep_produces_summary_or_status_rows() -> None:
+    summary, matches = _build_larger_grid_sweep(_sweep_predictions())
+
+    assert not summary.empty
+    assert not matches.empty
+    assert "default_grid" in summary["grid_config"].values
+    assert "larger_grid_15" in summary["grid_config"].values
+    assert matches["changed"].isin(["yes"]).any()
+
+
+def test_larger_grid_sweep_handles_missing_tail_columns() -> None:
+    predictions = _sweep_predictions().drop(
+        columns=["normal_grid_tail_mass"],
+        errors="ignore",
+    )
+
+    summary, matches = _build_larger_grid_sweep(predictions)
+
+    assert not summary.empty
+    assert not matches.empty
+    assert "tail_diagnostics_missing" in summary["larger_grid_diagnostics_status"].values
+    assert "tail_diagnostics_missing" in matches["larger_grid_diagnostics_status"].values
+
+
+def test_draw_threshold_sweep_produces_summary_rows() -> None:
+    summary, matches = _build_draw_threshold_sweep(_sweep_predictions())
+
+    assert not summary.empty
+    assert {"favourite_threshold", "draw_gap_threshold", "ou_median_threshold"}.issubset(summary.columns)
+    assert summary["n_flagged"].gt(0).any()
+    assert not matches.empty
+    assert "points_gain" in summary.columns
+
+
+def test_empty_sheet_policy_writes_status_row() -> None:
+    status = _sheet_or_status(
+        pd.DataFrame(),
+        reason="No rows matched.",
+        matches_evaluated=2,
+        filters_applied="demo_filter",
+    )
+
+    assert status.iloc[0]["status"] == "no_rows"
+    assert status.iloc[0]["reason"] == "No rows matched."
+    assert status.iloc[0]["matches_evaluated"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Integration tests: run_live_backtest
 # ---------------------------------------------------------------------------
@@ -375,7 +536,9 @@ def test_backtest_produces_summary_and_predictions_for_single_match(
 ) -> None:
     settings = _simple_settings(tmp_path, ["M001"])
 
-    report = run_live_backtest(settings, export=True, progress=False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report = run_live_backtest(settings, export=True, progress=False)
 
     assert not report.predictions.empty
     assert not report.summary.empty
@@ -411,17 +574,48 @@ def test_backtest_produces_summary_and_predictions_for_single_match(
     assert (tmp_path / "summary.csv").exists()
     assert (tmp_path / "backtest.xlsx").exists()
     workbook = load_workbook(tmp_path / "backtest.xlsx", read_only=True)
-    assert "group_stage_rounds" in workbook.sheetnames
+    assert "group_stage_rounds" not in workbook.sheetnames
     assert "matchday_performance" in workbook.sheetnames
     assert "ev_vs_modal_attribution" in workbook.sheetnames
     assert "draw_prone_matches" in workbook.sheetnames
+    assert "draw_prone_candidates" in workbook.sheetnames
     assert "blowout_risk_matches" in workbook.sheetnames
     assert "btts_conflict_matches" in workbook.sheetnames
     assert "correct_score_blend_sweep" in workbook.sheetnames
+    assert "cs_blend_matches" in workbook.sheetnames
     assert "larger_grid_sweep" in workbook.sheetnames
+    assert "larger_grid_sweep_matches" in workbook.sheetnames
+    assert "draw_threshold_sweep" in workbook.sheetnames
+    assert "draw_threshold_sweep_matches" in workbook.sheetnames
     assert "pattern_flags_summary" in workbook.sheetnames
     assert "favourite_bucket_performance" in workbook.sheetnames
     assert "manual_review_performance" in workbook.sheetnames
+    blend_status = [cell.value for cell in next(workbook["correct_score_blend_sweep"].iter_rows(min_row=2, max_row=2))]
+    assert "no_rows" in blend_status
+    assert all(len(name) <= 31 for name in workbook.sheetnames)
+    assert not any("Title is more than 31 characters" in str(warning.message) for warning in caught)
+
+
+def test_research_mode_backtest_export_completes_on_synthetic_data(tmp_path: Path) -> None:
+    settings = _simple_settings(
+        tmp_path,
+        ["M001"],
+        include_ah=True,
+        configs=RESEARCH_BACKTEST_CONFIGS,
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report = run_live_backtest(settings, export=True, progress=False)
+
+    assert not report.predictions.empty
+    assert (tmp_path / "backtest.xlsx").exists()
+    workbook = load_workbook(tmp_path / "backtest.xlsx", read_only=True)
+    assert all(len(name) <= 31 for name in workbook.sheetnames)
+    assert "cs_blend_matches" in workbook.sheetnames
+    assert not any("Title is more than 31 characters" in str(warning.message) for warning in caught)
+    ev_row = report.predictions[report.predictions["strategy"] == "ev_default"].iloc[0]
+    assert ev_row["predicted_score"] == ev_row["ev_default_score"]
 
 
 def test_backtest_produces_output_for_multiple_matches(tmp_path: Path) -> None:
