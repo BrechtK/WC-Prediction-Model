@@ -588,3 +588,42 @@ negligible when the reported tail is small. Raw non-renormalised grids remain
 available for diagnostics, but the optimiser rejects them because an incomplete
 grid cannot produce internally consistent pool-point EV without modelling its
 tail outcomes.
+
+## Probabilistic Backtest Metrics
+
+Realised pool points evaluate the action chosen under the contest scoring rule.
+They are the correct objective for the entry sheet, but they are noisy at small
+sample sizes such as the combined 2018+2022 group-stage set of 96 matches.
+Probability-quality validation therefore reports proper scoring rules and
+calibration diagnostics alongside realised points.
+
+For 1X2 probabilities `p = (p_A, p_D, p_B)` and realised one-hot vector `y`, the
+multi-class Brier score is:
+
+```text
+Brier = sum_i (p_i - y_i)^2
+```
+
+Clipped log loss uses the realised outcome probability with numerical clipping:
+
+```text
+LogLoss = -log(max(epsilon, min(1 - epsilon, p_realised)))
+```
+
+The Ranked Probability Score treats the ordered outcomes as team-A win, draw,
+team-B win:
+
+```text
+RPS = (1 / (K - 1)) * sum_{k=1}^{K-1}
+      (cumsum(p)_k - cumsum(y)_k)^2
+```
+
+BTTS and O/U line evaluations use the binary Brier/log-loss analogues. Integer
+total-goals lines that land exactly on the realised total are recorded as pushes
+and excluded from binary over/under scoring. Expected-total-goals diagnostics
+report mean error, MAE, RMSE, and bucketed realised average goals.
+
+These metrics do not change calibration, EV optimisation, or the live
+recommendation. They answer a different question: whether the probability
+matrix was honest and sharp, not whether one realised tournament rewarded a
+particular score submission.

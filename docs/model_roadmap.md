@@ -110,6 +110,19 @@ Backtesting should answer:
 - whether market-consistent or Dixon-Coles challenger recommendations add value;
 - whether decision-dashboard manual-review flags identify fragile matches.
 
+The live-paste historical backtest also exports probability-quality validation.
+Realised pool points remain the contest objective, but they are high variance at
+the current combined 2018+2022 sample of 96 matches. Proper scoring rules and
+calibration diagnostics therefore sit beside, not above, the realised-points
+tables:
+
+- 1X2 Brier score, clipped log loss, and Ranked Probability Score;
+- BTTS Brier/log-loss and calibration buckets;
+- O/U line Brier/log-loss and over-probability calibration;
+- expected-total-goals mean error, MAE, RMSE, and bucketed actual goal averages;
+- actual exact-score, result, margin, BTTS-outcome, and total-goals-bucket
+  probability diagnostics.
+
 ## Knockout Scoring Verification
 
 Knockout scoring currently defaults to `unverified`, preserving the existing

@@ -173,6 +173,12 @@ The historical live backtest has an additional `BACKTEST_PROFILE = "research"`
 mode with correct-score blend-weight sweeps, modal/draw threshold sweeps, and a
 larger-grid configuration. Correct-score blend value remains unproven until
 those sweeps are actually run on richer historical data.
+It also exports probability-quality validation alongside realised pool points:
+`probabilistic_backtest_summary.csv`, `calibration_1x2.csv`,
+`calibration_btts.csv`, `calibration_totals.csv`, and
+`scoreline_probability_diagnostics.csv`. These use Brier score, clipped log
+loss, RPS, calibration buckets, expected-total-goals errors, and actual
+score/result/margin probability diagnostics.
 Local live-paste historical folders can follow `input/historical/wc2022/` or
 `input/historical/wc2018/`; the 2018 odds files are templates awaiting manual
 OddsPortal pastes.
@@ -204,6 +210,9 @@ Current 2026 policy from the combined 2018+2022 review:
 - Use `expected_total_goals` for draw-prone/high-total diagnostics. The old
   `ou_median_total` compatibility alias is only an O/U ladder median, not an
   expected-goals estimate.
+- Realised pool points evaluate the contest decision. Proper scoring rules and
+  calibration evaluate probability quality. Both are needed because realised
+  points are high variance at the current 96-match combined sample.
 
 An opt-in advanced modelling layer is also available, all diagnostic-first and
 off by default (see [docs/mathematical_basis.md](docs/mathematical_basis.md)):

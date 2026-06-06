@@ -21,19 +21,28 @@ from wc_predictor.live_backtest import (
     HistoricalResult,
     LiveBacktestSettings,
     _build_correct_score_blend_sweep,
+    _build_calibration_1x2,
+    _build_calibration_btts,
+    _build_calibration_totals,
     _build_draw_threshold_sweep,
     _build_ev_vs_modal_attribution,
     _build_larger_grid_sweep,
+    _build_probabilistic_summary,
     _build_timing_summary,
     _build_round_summary,
     _build_summary,
+    _binary_log_loss,
+    _brier_score,
     _classify_missing_odds,
     _format_expected_vs_actual_summary,
     _format_round_summary,
     _group_stage_playing_round,
+    _log_loss,
+    _ranked_probability_score,
     _ah_main_line_realised_diagnostics,
     _parse_score,
     _score_strategies,
+    _scoreline_probability_diagnostics,
     _sheet_or_status,
     load_historical_results,
     run_combined_live_backtest,
@@ -256,6 +265,109 @@ def test_score_strategies_extracts_ev_default() -> None:
     baseline = next(s for s in strategies if s["strategy"] == "baseline_poisson")
     assert ev["model_expected_points"] == pytest.approx(5.5)
     assert baseline["model_expected_points"] == pytest.approx(5.4)
+
+
+def test_probabilistic_scores_calculate_brier_log_loss_and_rps() -> None:
+    probabilities = [0.7, 0.2, 0.1]
+
+    assert _brier_score(probabilities, 0) == pytest.approx(0.14)
+    assert _log_loss(probabilities, 0) == pytest.approx(0.3566749439)
+    assert _ranked_probability_score(probabilities, 0) == pytest.approx(0.05)
+
+
+def test_log_loss_clips_extreme_probabilities_for_numerical_safety() -> None:
+    assert _log_loss([0.0, 1.0, 0.0], 0) < 40.0
+    assert _binary_log_loss(0.0, 1) < 40.0
+
+
+def test_calibration_bucket_aggregation_for_1x2_and_btts() -> None:
+    diagnostics = pd.DataFrame(
+        [
+            {
+                "tournament": "wc2022",
+                "config": "baseline_ev",
+                "strategy": "ev_default",
+                "predicted_probability_team_a_win": 0.62,
+                "predicted_probability_draw": 0.24,
+                "predicted_probability_team_b_win": 0.14,
+                "realised_outcome": "team_a_win",
+                "predicted_btts_yes_probability": 0.55,
+                "realised_btts": 1,
+            },
+            {
+                "tournament": "wc2022",
+                "config": "baseline_ev",
+                "strategy": "ev_default",
+                "predicted_probability_team_a_win": 0.58,
+                "predicted_probability_draw": 0.27,
+                "predicted_probability_team_b_win": 0.15,
+                "realised_outcome": "draw",
+                "predicted_btts_yes_probability": 0.52,
+                "realised_btts": 0,
+            },
+        ]
+    )
+
+    calibration_1x2 = _build_calibration_1x2(diagnostics)
+    calibration_btts = _build_calibration_btts(diagnostics)
+
+    favourite = calibration_1x2[
+        calibration_1x2["calibration_target"].eq("favourite")
+        & calibration_1x2["probability_bucket"].eq("0.6-0.7")
+    ].iloc[0]
+    btts = calibration_btts[calibration_btts["probability_bucket"].eq("0.5-0.6")].iloc[0]
+    assert favourite["count"] == 1
+    assert favourite["realised_frequency"] == pytest.approx(1.0)
+    assert btts["count"] == 2
+    assert btts["realised_frequency"] == pytest.approx(0.5)
+
+
+def test_expected_goals_and_total_line_calibration_metrics() -> None:
+    scoreline = pd.DataFrame(
+        [
+            {
+                "tournament": "wc2022",
+                "config": "baseline_ev",
+                "strategy": "ev_default",
+                "expected_total_goals_bucket": "2.5-3.0",
+                "matrix_expected_total_goals": 2.8,
+                "actual_total_goals": 3,
+                "expected_total_goals_error": -0.2,
+                "brier_score_1x2": 0.2,
+                "log_loss_1x2": 0.5,
+                "rps_1x2": 0.1,
+            }
+        ]
+    )
+    total_lines = pd.DataFrame(
+        [
+            {
+                "tournament": "wc2022",
+                "config": "baseline_ev",
+                "strategy": "ev_default",
+                "total_goals_line": 2.5,
+                "predicted_over_probability": 0.56,
+                "realised_over": 1,
+                "over_probability_bucket": "0.5-0.6",
+                "brier_score_total_over": (0.56 - 1.0) ** 2,
+                "log_loss_total_over": 0.58,
+            }
+        ]
+    )
+
+    summary = _build_probabilistic_summary(scoreline)
+    calibration_totals = _build_calibration_totals(total_lines, scoreline)
+
+    overall = summary[summary["aggregation_level"].eq("overall")].iloc[0]
+    expected_goals = calibration_totals[
+        calibration_totals["calibration_target"].eq("expected_total_goals")
+    ].iloc[0]
+    total_over = calibration_totals[
+        calibration_totals["calibration_target"].eq("total_goals_over")
+    ].iloc[0]
+    assert overall["expected_total_goals_mae"] == pytest.approx(0.2)
+    assert expected_goals["mean_actual_total_goals"] == pytest.approx(3.0)
+    assert total_over["realised_frequency"] == pytest.approx(1.0)
 
 
 def test_score_strategies_includes_market_consistent_when_mc_ran() -> None:
@@ -682,6 +794,16 @@ def test_backtest_produces_summary_and_predictions_for_single_match(
     assert "inert_feature_note" in report.predictions.columns
     assert "correct_score_poisson_weight" in report.predictions.columns
     assert "grid_max_goals_used" in report.predictions.columns
+    assert "brier_score_1x2" in report.predictions.columns
+    assert "log_loss_1x2" in report.predictions.columns
+    assert "rps_1x2" in report.predictions.columns
+    assert "actual_exact_score_probability" in report.predictions.columns
+    assert "actual_result_probability" in report.predictions.columns
+    assert not report.probabilistic_summary.empty
+    assert not report.calibration_1x2.empty
+    assert not report.calibration_btts.empty
+    assert not report.calibration_totals.empty
+    assert not report.scoreline_probability_diagnostics.empty
     ev_row = report.predictions[report.predictions["strategy"] == "ev_default"].iloc[0]
     assert ev_row["predicted_score"] == ev_row["ev_default_score"]
     assert "total_expected_points" in report.summary.columns
@@ -694,7 +816,17 @@ def test_backtest_produces_summary_and_predictions_for_single_match(
     assert "group_stage_playing_round" in report.round_summary.columns
     assert (tmp_path / "summary.csv").exists()
     assert (tmp_path / "backtest.xlsx").exists()
+    assert (tmp_path / "probabilistic_backtest_summary.csv").exists()
+    assert (tmp_path / "calibration_1x2.csv").exists()
+    assert (tmp_path / "calibration_btts.csv").exists()
+    assert (tmp_path / "calibration_totals.csv").exists()
+    assert (tmp_path / "scoreline_probability_diagnostics.csv").exists()
     workbook = load_workbook(tmp_path / "backtest.xlsx", read_only=True)
+    assert "probabilistic_summary" in workbook.sheetnames
+    assert "calibration_1x2" in workbook.sheetnames
+    assert "calibration_btts" in workbook.sheetnames
+    assert "calibration_totals" in workbook.sheetnames
+    assert "scoreline_diagnostics" in workbook.sheetnames
     assert "group_stage_rounds" not in workbook.sheetnames
     assert "combined_strategy_ranking" in workbook.sheetnames
     assert "strategy_by_tournament" in workbook.sheetnames
@@ -760,6 +892,8 @@ def test_csv_only_export_skips_excel_and_writes_timing_csv(tmp_path: Path) -> No
     timing_csv = tmp_path / "predictions_runtime_timings.csv"
     assert (tmp_path / "summary.csv").exists()
     assert (tmp_path / "predictions.csv").exists()
+    assert (tmp_path / "probabilistic_backtest_summary.csv").exists()
+    assert (tmp_path / "scoreline_probability_diagnostics.csv").exists()
     assert not (tmp_path / "backtest.xlsx").exists()
     assert timing_csv.exists()
     assert "model_run" in set(report.timings["phase"])
@@ -858,6 +992,8 @@ def test_combined_backtest_produces_tournament_labelled_rows(tmp_path: Path) -> 
     )
 
     assert set(report.predictions["tournament"]) == {"wc2018", "wc2022"}
+    assert set(report.scoreline_probability_diagnostics["tournament"]) == {"wc2018", "wc2022"}
+    assert set(report.probabilistic_summary["tournament"]) == {"wc2018", "wc2022"}
     summary_row = report.summary[
         (report.summary["config"] == "baseline_ev")
         & (report.summary["strategy"] == "ev_default")

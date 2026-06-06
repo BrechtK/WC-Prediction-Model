@@ -36,6 +36,7 @@ from wc_predictor.oddsportal import parse_oddsportal_correct_score_folder
 from wc_predictor.oddsportal_asian_handicap import parse_oddsportal_asian_handicap_folder
 from wc_predictor.oddsportal_combined import split_combined_oddsportal_pastes
 from wc_predictor.oddsportal_core import parse_oddsportal_core_odds_folder
+from wc_predictor.probabilities import ScoreProbabilityMatrix
 from wc_predictor.scoring_rules import score_group_prediction
 from wc_predictor.utils import ensure_parent_directory, goal_difference, result_sign
 
@@ -255,6 +256,12 @@ class LiveBacktestReport:
     skipped: pd.DataFrame
     round_summary: pd.DataFrame
     timings: pd.DataFrame = field(default_factory=pd.DataFrame)
+    probabilistic_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
+    calibration_1x2: pd.DataFrame = field(default_factory=pd.DataFrame)
+    calibration_btts: pd.DataFrame = field(default_factory=pd.DataFrame)
+    calibration_totals: pd.DataFrame = field(default_factory=pd.DataFrame)
+    scoreline_probability_diagnostics: pd.DataFrame = field(default_factory=pd.DataFrame)
+    total_goals_probability_diagnostics: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def export(self, settings: LiveBacktestSettings) -> None:
         export_start = time.perf_counter()
@@ -262,6 +269,22 @@ class LiveBacktestReport:
             ensure_parent_directory(path)
         self.summary.to_csv(settings.summary_output_path, index=False)
         self.predictions.to_csv(settings.predictions_output_path, index=False)
+        research_output_dir = settings.predictions_output_path.parent
+        self.probabilistic_summary.to_csv(
+            research_output_dir / "probabilistic_backtest_summary.csv",
+            index=False,
+        )
+        self.calibration_1x2.to_csv(research_output_dir / "calibration_1x2.csv", index=False)
+        self.calibration_btts.to_csv(research_output_dir / "calibration_btts.csv", index=False)
+        self.calibration_totals.to_csv(research_output_dir / "calibration_totals.csv", index=False)
+        self.scoreline_probability_diagnostics.to_csv(
+            research_output_dir / "scoreline_probability_diagnostics.csv",
+            index=False,
+        )
+        self.total_goals_probability_diagnostics.to_csv(
+            research_output_dir / "total_goals_probability_diagnostics.csv",
+            index=False,
+        )
         timings_output_path = settings.predictions_output_path.with_name(
             f"{settings.predictions_output_path.stem}_runtime_timings.csv"
         )
@@ -279,6 +302,36 @@ class LiveBacktestReport:
         with pd.ExcelWriter(settings.excel_output_path, engine="openpyxl") as writer:
             self.summary.to_excel(writer, index=False, sheet_name="summary")
             self.predictions.to_excel(writer, index=False, sheet_name="predictions")
+            _sheet_or_status(
+                self.probabilistic_summary,
+                reason="No probabilistic scoring rows were produced.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="strategy probability diagnostics",
+            ).to_excel(writer, index=False, sheet_name="probabilistic_summary")
+            _sheet_or_status(
+                self.calibration_1x2,
+                reason="No 1X2 calibration rows were produced.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="1X2 probability buckets",
+            ).to_excel(writer, index=False, sheet_name="calibration_1x2")
+            _sheet_or_status(
+                self.calibration_btts,
+                reason="No BTTS calibration rows were produced.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="BTTS probability buckets",
+            ).to_excel(writer, index=False, sheet_name="calibration_btts")
+            _sheet_or_status(
+                self.calibration_totals,
+                reason="No totals calibration rows were produced.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="O/U and expected-total-goals buckets",
+            ).to_excel(writer, index=False, sheet_name="calibration_totals")
+            _sheet_or_status(
+                self.scoreline_probability_diagnostics,
+                reason="No scoreline probability diagnostics were produced.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="actual score/result/margin probabilities",
+            ).to_excel(writer, index=False, sheet_name="scoreline_diagnostics")
             _sheet_or_status(
                 self.timings,
                 reason="No runtime timing rows were captured.",
@@ -605,6 +658,232 @@ def _parse_score(value: object) -> tuple[int, int] | None:
         return None
 
 
+def _clip_probability(value: float, epsilon: float = 1e-15) -> float:
+    """Clip probabilities before log-loss calculations."""
+
+    if not np.isfinite(value):
+        return float(epsilon)
+    return float(min(max(value, epsilon), 1.0 - epsilon))
+
+
+def _brier_score(probabilities: Sequence[float], actual_index: int) -> float:
+    """Multi-class Brier score using a one-hot realised outcome."""
+
+    probs = np.asarray(probabilities, dtype=float)
+    if probs.ndim != 1 or len(probs) == 0:
+        return np.nan
+    actual = np.zeros(len(probs), dtype=float)
+    actual[int(actual_index)] = 1.0
+    return float(np.sum((probs - actual) ** 2))
+
+
+def _binary_brier_score(probability: float, realised: int | bool) -> float:
+    return float((float(probability) - float(realised)) ** 2)
+
+
+def _log_loss(probabilities: Sequence[float], actual_index: int, epsilon: float = 1e-15) -> float:
+    probs = np.asarray(probabilities, dtype=float)
+    if probs.ndim != 1 or len(probs) == 0:
+        return np.nan
+    return float(-np.log(_clip_probability(float(probs[int(actual_index)]), epsilon)))
+
+
+def _binary_log_loss(probability: float, realised: int | bool, epsilon: float = 1e-15) -> float:
+    p = _clip_probability(float(probability), epsilon)
+    y = float(realised)
+    return float(-(y * np.log(p) + (1.0 - y) * np.log(1.0 - p)))
+
+
+def _ranked_probability_score(probabilities: Sequence[float], actual_index: int) -> float:
+    """Ranked Probability Score for ordered classes.
+
+    The 1X2 order used by the project is team A win, draw, team B win.
+    """
+
+    probs = np.asarray(probabilities, dtype=float)
+    actual = np.zeros(len(probs), dtype=float)
+    actual[int(actual_index)] = 1.0
+    if len(probs) <= 1:
+        return 0.0
+    cumulative_error = np.cumsum(probs) - np.cumsum(actual)
+    return float(np.sum(cumulative_error[:-1] ** 2) / (len(probs) - 1))
+
+
+def _probability_bucket(probability: object, width: float = 0.10) -> str:
+    value = pd.to_numeric(probability, errors="coerce")
+    if pd.isna(value):
+        return "missing"
+    value = float(min(max(float(value), 0.0), 1.0))
+    if np.isclose(value, 1.0):
+        lower = 1.0 - width
+        upper = 1.0
+    else:
+        lower = np.floor(value / width) * width
+        upper = lower + width
+    return f"{lower:.1f}-{upper:.1f}"
+
+
+def _expected_total_goals_bucket(value: object) -> str:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric):
+        return "missing"
+    total = float(numeric)
+    if total < 2.0:
+        return "<2.0"
+    if total < 2.5:
+        return "2.0-2.5"
+    if total < 3.0:
+        return "2.5-3.0"
+    if total < 3.5:
+        return "3.0-3.5"
+    return "3.5+"
+
+
+def _matrix_over_probability(matrix: ScoreProbabilityMatrix, line: float) -> float:
+    scores_a, scores_b = np.indices(matrix.probabilities.shape)
+    return float(matrix.probabilities[scores_a + scores_b > float(line)].sum())
+
+
+def _matrix_total_bucket_probability(matrix: ScoreProbabilityMatrix, total_goals: int) -> tuple[str, float]:
+    scores_a, scores_b = np.indices(matrix.probabilities.shape)
+    totals = scores_a + scores_b
+    if total_goals >= 4:
+        return "4_plus", float(matrix.probabilities[totals >= 4].sum())
+    return str(total_goals), float(matrix.probabilities[totals == total_goals].sum())
+
+
+def _matrix_expected_total_goals(matrix: ScoreProbabilityMatrix) -> float:
+    scores_a, scores_b = np.indices(matrix.probabilities.shape)
+    return float(((scores_a + scores_b) * matrix.probabilities).sum())
+
+
+def _actual_probability_diagnostics(
+    matrix: ScoreProbabilityMatrix,
+    actual_a: int,
+    actual_b: int,
+) -> dict[str, object]:
+    actual_sign = result_sign(actual_a, actual_b)
+    actual_margin = goal_difference(actual_a, actual_b)
+    actual_btts = int(actual_a > 0 and actual_b > 0)
+    actual_total = int(actual_a + actual_b)
+    actual_total_bucket, actual_total_bucket_probability = _matrix_total_bucket_probability(matrix, actual_total)
+    outcomes = matrix.outcome_probabilities()
+    btts_yes = matrix.btts_yes_probability()
+    probabilities_1x2 = [outcomes["a_win"], outcomes["draw"], outcomes["b_win"]]
+    actual_1x2_index = {1: 0, 0: 1, -1: 2}[actual_sign]
+    exact_probability = matrix.exact_score_probability(actual_a, actual_b)
+    result_probability = matrix.result_probability(actual_sign)
+    margin_probability = matrix.goal_difference_probability(actual_margin)
+    btts_outcome_probability = btts_yes if actual_btts else 1.0 - btts_yes
+    return {
+        "predicted_probability_team_a_win": outcomes["a_win"],
+        "predicted_probability_draw": outcomes["draw"],
+        "predicted_probability_team_b_win": outcomes["b_win"],
+        "realised_outcome": {1: "team_a_win", 0: "draw", -1: "team_b_win"}[actual_sign],
+        "realised_outcome_index": actual_1x2_index,
+        "brier_score_1x2": _brier_score(probabilities_1x2, actual_1x2_index),
+        "log_loss_1x2": _log_loss(probabilities_1x2, actual_1x2_index),
+        "rps_1x2": _ranked_probability_score(probabilities_1x2, actual_1x2_index),
+        "predicted_btts_yes_probability": btts_yes,
+        "realised_btts": actual_btts,
+        "brier_score_btts": _binary_brier_score(btts_yes, actual_btts),
+        "log_loss_btts": _binary_log_loss(btts_yes, actual_btts),
+        "actual_total_goals": actual_total,
+        "matrix_expected_total_goals": _matrix_expected_total_goals(matrix),
+        "expected_total_goals_error": _matrix_expected_total_goals(matrix) - actual_total,
+        "expected_total_goals_bucket": _expected_total_goals_bucket(_matrix_expected_total_goals(matrix)),
+        "actual_exact_score_probability": exact_probability,
+        "actual_exact_score_log_loss": -np.log(_clip_probability(exact_probability)),
+        "actual_result_probability": result_probability,
+        "actual_margin_probability": margin_probability,
+        "actual_btts_outcome_probability": btts_outcome_probability,
+        "actual_total_goals_bucket": actual_total_bucket,
+        "actual_total_goals_bucket_probability": actual_total_bucket_probability,
+    }
+
+
+def _strategy_probability_diagnostics(
+    workflow_result: object,
+    match_id: str,
+    actual_a: int,
+    actual_b: int,
+) -> dict[str, dict[str, object]]:
+    challengers = workflow_result.challenger_score_matrices.get(match_id, {})
+    matrices: dict[str, ScoreProbabilityMatrix | None] = {
+        "ev_default": workflow_result.score_matrices.get(match_id),
+        "most_likely": workflow_result.score_matrices.get(match_id),
+        "baseline_poisson": workflow_result.baseline_score_matrices.get(match_id),
+        "dixon_coles": challengers.get("dixon_coles"),
+        "market_consistent": challengers.get("market_consistent_matrix"),
+    }
+    return {
+        strategy: _actual_probability_diagnostics(matrix, actual_a, actual_b)
+        for strategy, matrix in matrices.items()
+        if matrix is not None
+    }
+
+
+def _total_goals_probability_rows(
+    workflow_result: object,
+    match_id: str,
+    actual_a: int,
+    actual_b: int,
+) -> list[dict[str, object]]:
+    totals = workflow_result.aggregated_total_goals_probabilities
+    if totals.empty or "match_id" not in totals:
+        return []
+    match_totals = totals[totals["match_id"].astype(str).eq(str(match_id))]
+    if match_totals.empty:
+        return []
+    challengers = workflow_result.challenger_score_matrices.get(match_id, {})
+    matrices: dict[str, ScoreProbabilityMatrix | None] = {
+        "ev_default": workflow_result.score_matrices.get(match_id),
+        "most_likely": workflow_result.score_matrices.get(match_id),
+        "baseline_poisson": workflow_result.baseline_score_matrices.get(match_id),
+        "dixon_coles": challengers.get("dixon_coles"),
+        "market_consistent": challengers.get("market_consistent_matrix"),
+    }
+    actual_total = int(actual_a + actual_b)
+    rows: list[dict[str, object]] = []
+    for strategy, matrix in matrices.items():
+        if matrix is None:
+            continue
+        for _, total_row in match_totals.iterrows():
+            line = pd.to_numeric(total_row.get("line"), errors="coerce")
+            if pd.isna(line):
+                continue
+            line_value = float(line)
+            predicted_over = _matrix_over_probability(matrix, line_value)
+            if np.isclose(actual_total, line_value):
+                realised_over: object = pd.NA
+                result = "push"
+                brier = np.nan
+                log_loss = np.nan
+            else:
+                realised_over = int(actual_total > line_value)
+                result = "over" if realised_over else "under"
+                brier = _binary_brier_score(predicted_over, int(realised_over))
+                log_loss = _binary_log_loss(predicted_over, int(realised_over))
+            rows.append(
+                {
+                    "match_id": match_id,
+                    "strategy": strategy,
+                    "total_goals_line": line_value,
+                    "line_kind": total_row.get("line_kind", ""),
+                    "used_for_calibration": total_row.get("used_for_calibration", pd.NA),
+                    "market_fair_over_probability": total_row.get("fair_over", pd.NA),
+                    "predicted_over_probability": predicted_over,
+                    "actual_total_goals": actual_total,
+                    "realised_over": realised_over,
+                    "realised_total_result": result,
+                    "brier_score_total_over": brier,
+                    "log_loss_total_over": log_loss,
+                    "over_probability_bucket": _probability_bucket(predicted_over),
+                }
+            )
+    return rows
+
+
 def _ah_realised_cover_diagnostics(
     report_row: pd.Series,
     actual_a: int,
@@ -725,6 +1004,7 @@ def _score_strategies(
     report_row: pd.Series,
     actual_a: int,
     actual_b: int,
+    probability_diagnostics_by_strategy: dict[str, dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     """Extract every candidate strategy score from one workflow report row and
     score it against the actual result."""
@@ -885,6 +1165,11 @@ def _score_strategies(
             and str(report_row.get("mc_ah_challenger_available", "no")).lower() == "yes"
             else pd.NA
         )
+        probability_diagnostics = (
+            probability_diagnostics_by_strategy.get(strategy_name, {})
+            if probability_diagnostics_by_strategy is not None
+            else {}
+        )
         rows.append(
             {
                 "strategy": strategy_name,
@@ -910,6 +1195,7 @@ def _score_strategies(
                 **shared_diagnostics,
                 **ah_cover,
                 **ah_main,
+                **probability_diagnostics,
                 "mc_ah_points_backtest": mc_ah_points,
             }
         )
@@ -990,6 +1276,326 @@ def _build_summary(predictions: pd.DataFrame) -> pd.DataFrame:
         .astype(int)
     )
     return summary
+
+
+def _scoreline_probability_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Per-match probability-quality diagnostics derived from strategy matrices."""
+
+    required = {
+        "predicted_probability_team_a_win",
+        "predicted_probability_draw",
+        "predicted_probability_team_b_win",
+        "actual_exact_score_probability",
+    }
+    if predictions.empty or not required.issubset(predictions.columns):
+        return pd.DataFrame()
+    columns = [
+        "tournament",
+        "config",
+        "strategy",
+        "match_id",
+        "date",
+        "stage",
+        "group_stage_playing_round",
+        "round_match_range",
+        "team_a",
+        "team_b",
+        "actual_score",
+        "predicted_score",
+        "realised_points",
+        "model_expected_points",
+        "favourite_probability",
+        "favourite_bucket",
+        "draw_prone_flag",
+        "blowout_risk_flag",
+        "manual_review_flag",
+        "predicted_probability_team_a_win",
+        "predicted_probability_draw",
+        "predicted_probability_team_b_win",
+        "realised_outcome",
+        "brier_score_1x2",
+        "log_loss_1x2",
+        "rps_1x2",
+        "predicted_btts_yes_probability",
+        "realised_btts",
+        "brier_score_btts",
+        "log_loss_btts",
+        "matrix_expected_total_goals",
+        "actual_total_goals",
+        "expected_total_goals_error",
+        "expected_total_goals_bucket",
+        "actual_exact_score_probability",
+        "actual_exact_score_log_loss",
+        "actual_result_probability",
+        "actual_margin_probability",
+        "actual_btts_outcome_probability",
+        "actual_total_goals_bucket",
+        "actual_total_goals_bucket_probability",
+    ]
+    return predictions[[column for column in columns if column in predictions.columns]].copy()
+
+
+def _mean_numeric(group: pd.DataFrame, column: str) -> float:
+    if column not in group:
+        return np.nan
+    values = pd.to_numeric(group[column], errors="coerce")
+    return float(values.mean()) if values.notna().any() else np.nan
+
+
+def _rmse_numeric(group: pd.DataFrame, column: str) -> float:
+    if column not in group:
+        return np.nan
+    values = pd.to_numeric(group[column], errors="coerce").dropna()
+    if values.empty:
+        return np.nan
+    return float(np.sqrt(np.mean(values ** 2)))
+
+
+def _probabilistic_summary_row(group: pd.DataFrame, extra: dict[str, object]) -> dict[str, object]:
+    errors = pd.to_numeric(group.get("expected_total_goals_error", pd.Series(dtype=float)), errors="coerce")
+    return {
+        **extra,
+        "matches_used": int(len(group)),
+        "mean_brier_1x2": _mean_numeric(group, "brier_score_1x2"),
+        "mean_log_loss_1x2": _mean_numeric(group, "log_loss_1x2"),
+        "mean_rps_1x2": _mean_numeric(group, "rps_1x2"),
+        "mean_brier_btts": _mean_numeric(group, "brier_score_btts"),
+        "mean_log_loss_btts": _mean_numeric(group, "log_loss_btts"),
+        "mean_actual_exact_score_probability": _mean_numeric(group, "actual_exact_score_probability"),
+        "mean_actual_result_probability": _mean_numeric(group, "actual_result_probability"),
+        "mean_actual_margin_probability": _mean_numeric(group, "actual_margin_probability"),
+        "mean_actual_btts_outcome_probability": _mean_numeric(group, "actual_btts_outcome_probability"),
+        "mean_expected_total_goals": _mean_numeric(group, "matrix_expected_total_goals"),
+        "mean_actual_total_goals": _mean_numeric(group, "actual_total_goals"),
+        "expected_total_goals_mean_error": float(errors.mean()) if errors.notna().any() else np.nan,
+        "expected_total_goals_mae": float(errors.abs().mean()) if errors.notna().any() else np.nan,
+        "expected_total_goals_rmse": _rmse_numeric(group, "expected_total_goals_error"),
+        "average_realised_points": _mean_numeric(group, "realised_points"),
+    }
+
+
+def _build_probabilistic_summary(scoreline_diagnostics: pd.DataFrame) -> pd.DataFrame:
+    if scoreline_diagnostics.empty:
+        return pd.DataFrame()
+    grouping_levels = [
+        ("overall", ["tournament", "config", "strategy"]),
+        ("by_round", ["tournament", "config", "strategy", "group_stage_playing_round"]),
+        ("by_favourite_bucket", ["tournament", "config", "strategy", "favourite_bucket"]),
+        ("by_expected_total_bucket", ["tournament", "config", "strategy", "expected_total_goals_bucket"]),
+        ("by_draw_prone_flag", ["tournament", "config", "strategy", "draw_prone_flag"]),
+        ("by_blowout_risk_flag", ["tournament", "config", "strategy", "blowout_risk_flag"]),
+    ]
+    rows: list[dict[str, object]] = []
+    for level_name, columns in grouping_levels:
+        if any(column not in scoreline_diagnostics for column in columns):
+            continue
+        for keys, group in scoreline_diagnostics.groupby(columns, dropna=False, sort=True):
+            if not isinstance(keys, tuple):
+                keys = (keys,)
+            rows.append(
+                _probabilistic_summary_row(
+                    group,
+                    {
+                        "aggregation_level": level_name,
+                        **dict(zip(columns, keys, strict=True)),
+                    },
+                )
+            )
+    return pd.DataFrame(rows)
+
+
+def _calibration_rows(
+    rows: list[dict[str, object]],
+    *,
+    group_columns: list[str],
+    probability_column: str,
+    realised_column: str,
+    bucket_column: str,
+    target_name: str,
+) -> pd.DataFrame:
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    output_rows: list[dict[str, object]] = []
+    for keys, group in frame.groupby([*group_columns, bucket_column], dropna=False, sort=True):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        key_values = dict(zip([*group_columns, bucket_column], keys, strict=True))
+        predicted = pd.to_numeric(group[probability_column], errors="coerce")
+        realised = pd.to_numeric(group[realised_column], errors="coerce")
+        valid = predicted.notna() & realised.notna()
+        if not valid.any():
+            continue
+        predicted_mean = float(predicted[valid].mean())
+        realised_frequency = float(realised[valid].mean())
+        output_rows.append(
+            {
+                **key_values,
+                "calibration_target": target_name,
+                "count": int(valid.sum()),
+                "predicted_probability_mean": predicted_mean,
+                "realised_frequency": realised_frequency,
+                "calibration_error": predicted_mean - realised_frequency,
+            }
+        )
+    return pd.DataFrame(output_rows)
+
+
+def _build_calibration_1x2(scoreline_diagnostics: pd.DataFrame) -> pd.DataFrame:
+    required = {
+        "predicted_probability_team_a_win",
+        "predicted_probability_draw",
+        "predicted_probability_team_b_win",
+        "realised_outcome",
+    }
+    if scoreline_diagnostics.empty or not required.issubset(scoreline_diagnostics.columns):
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for _, row in scoreline_diagnostics.iterrows():
+        p_a = float(row["predicted_probability_team_a_win"])
+        p_draw = float(row["predicted_probability_draw"])
+        p_b = float(row["predicted_probability_team_b_win"])
+        realised = str(row["realised_outcome"])
+        if p_a >= p_b:
+            favourite_probability = p_a
+            underdog_probability = p_b
+            favourite_realised = int(realised == "team_a_win")
+            underdog_realised = int(realised == "team_b_win")
+        else:
+            favourite_probability = p_b
+            underdog_probability = p_a
+            favourite_realised = int(realised == "team_b_win")
+            underdog_realised = int(realised == "team_a_win")
+        base = {
+            "tournament": row.get("tournament", ""),
+            "config": row.get("config", ""),
+            "strategy": row.get("strategy", ""),
+        }
+        for target, probability, realised_value in (
+            ("favourite", favourite_probability, favourite_realised),
+            ("draw", p_draw, int(realised == "draw")),
+            ("underdog", underdog_probability, underdog_realised),
+        ):
+            rows.append(
+                {
+                    **base,
+                    "target": target,
+                    "probability": probability,
+                    "realised": realised_value,
+                    "probability_bucket": _probability_bucket(probability),
+                }
+            )
+    frames = [
+        _calibration_rows(
+            [row for row in rows if row["target"] == target],
+            group_columns=["tournament", "config", "strategy"],
+            probability_column="probability",
+            realised_column="realised",
+            bucket_column="probability_bucket",
+            target_name=target,
+        )
+        for target in ("favourite", "draw", "underdog")
+    ]
+    frames = [frame for frame in frames if not frame.empty]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _build_calibration_btts(scoreline_diagnostics: pd.DataFrame) -> pd.DataFrame:
+    if scoreline_diagnostics.empty or not {"predicted_btts_yes_probability", "realised_btts"}.issubset(scoreline_diagnostics.columns):
+        return pd.DataFrame()
+    rows = [
+        {
+            "tournament": row.get("tournament", ""),
+            "config": row.get("config", ""),
+            "strategy": row.get("strategy", ""),
+            "probability": row.get("predicted_btts_yes_probability", np.nan),
+            "realised": row.get("realised_btts", np.nan),
+            "probability_bucket": _probability_bucket(row.get("predicted_btts_yes_probability", np.nan)),
+        }
+        for _, row in scoreline_diagnostics.iterrows()
+    ]
+    return _calibration_rows(
+        rows,
+        group_columns=["tournament", "config", "strategy"],
+        probability_column="probability",
+        realised_column="realised",
+        bucket_column="probability_bucket",
+        target_name="btts_yes",
+    )
+
+
+def _build_calibration_totals(
+    total_goals_diagnostics: pd.DataFrame,
+    scoreline_diagnostics: pd.DataFrame,
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    if not total_goals_diagnostics.empty:
+        grouped_rows: list[dict[str, object]] = []
+        for keys, group in total_goals_diagnostics.groupby(
+            ["tournament", "config", "strategy", "total_goals_line", "over_probability_bucket"],
+            dropna=False,
+            sort=True,
+        ):
+            predicted = pd.to_numeric(group["predicted_over_probability"], errors="coerce")
+            realised = pd.to_numeric(group["realised_over"], errors="coerce")
+            valid = predicted.notna() & realised.notna()
+            if not valid.any():
+                continue
+            predicted_mean = float(predicted[valid].mean())
+            realised_frequency = float(realised[valid].mean())
+            grouped_rows.append(
+                {
+                    **dict(
+                        zip(
+                            ["tournament", "config", "strategy", "total_goals_line", "probability_bucket"],
+                            keys,
+                            strict=True,
+                        )
+                    ),
+                    "calibration_target": "total_goals_over",
+                    "count": int(valid.sum()),
+                    "predicted_probability_mean": predicted_mean,
+                    "realised_frequency": realised_frequency,
+                    "calibration_error": predicted_mean - realised_frequency,
+                    "mean_brier_score": _mean_numeric(group[valid], "brier_score_total_over"),
+                    "mean_log_loss": _mean_numeric(group[valid], "log_loss_total_over"),
+                }
+            )
+        frames.append(pd.DataFrame(grouped_rows))
+    if not scoreline_diagnostics.empty and {"matrix_expected_total_goals", "actual_total_goals", "expected_total_goals_bucket"}.issubset(scoreline_diagnostics.columns):
+        rows: list[dict[str, object]] = []
+        for keys, group in scoreline_diagnostics.groupby(
+            ["tournament", "config", "strategy", "expected_total_goals_bucket"],
+            dropna=False,
+            sort=True,
+        ):
+            predicted = pd.to_numeric(group["matrix_expected_total_goals"], errors="coerce")
+            actual = pd.to_numeric(group["actual_total_goals"], errors="coerce")
+            valid = predicted.notna() & actual.notna()
+            if not valid.any():
+                continue
+            error = predicted[valid] - actual[valid]
+            rows.append(
+                {
+                    **dict(
+                        zip(
+                            ["tournament", "config", "strategy", "expected_total_goals_bucket"],
+                            keys,
+                            strict=True,
+                        )
+                    ),
+                    "calibration_target": "expected_total_goals",
+                    "count": int(valid.sum()),
+                    "mean_expected_total_goals": float(predicted[valid].mean()),
+                    "mean_actual_total_goals": float(actual[valid].mean()),
+                    "mean_error": float(error.mean()),
+                    "mae": float(error.abs().mean()),
+                    "rmse": float(np.sqrt(np.mean(error ** 2))),
+                }
+            )
+        frames.append(pd.DataFrame(rows))
+    frames = [frame for frame in frames if not frame.empty]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def _build_round_summary(predictions: pd.DataFrame) -> pd.DataFrame:
@@ -2200,6 +2806,7 @@ def run_live_backtest(
 
     # 5. Run all configs for every match that has core odds and a result
     prediction_rows: list[dict[str, object]] = []
+    total_goals_probability_rows: list[dict[str, object]] = []
     skipped_rows: list[dict[str, object]] = []
     template_count = 0
     missing_count = 0
@@ -2292,8 +2899,23 @@ def run_live_backtest(
 
             phase_start = time.perf_counter()
             report_row = workflow_result.match_report.iloc[0]
+            probability_diagnostics = _strategy_probability_diagnostics(
+                workflow_result,
+                match_id,
+                result.actual_score_a,
+                result.actual_score_b,
+            )
             strategies = _score_strategies(
-                report_row, result.actual_score_a, result.actual_score_b
+                report_row,
+                result.actual_score_a,
+                result.actual_score_b,
+                probability_diagnostics,
+            )
+            total_rows = _total_goals_probability_rows(
+                workflow_result,
+                match_id,
+                result.actual_score_a,
+                result.actual_score_b,
             )
             record_timing("strategy_scoring", phase_start, config=config_entry.name, match_id=match_id)
             for strat_row in strategies:
@@ -2311,6 +2933,22 @@ def run_live_backtest(
                     }
                 )
                 prediction_rows.append(strat_row)
+            for total_row in total_rows:
+                if total_row["strategy"] == "market_consistent" and str(report_row.get("market_consistent_status", "skipped")).lower() in {"skipped", ""}:
+                    continue
+                total_row.update(
+                    {
+                        "config": config_entry.name,
+                        "tournament": tournament_label,
+                        "date": result.date,
+                        "stage": result.stage,
+                        "team_a": result.team_a,
+                        "team_b": result.team_b,
+                        "group_stage_playing_round": playing_round,
+                        "round_match_range": _round_match_range(playing_round),
+                    }
+                )
+                total_goals_probability_rows.append(total_row)
 
         if progress:
             ev_score_row = next(
@@ -2328,9 +2966,18 @@ def run_live_backtest(
             )
 
     predictions = pd.DataFrame(prediction_rows)
+    total_goals_probability_diagnostics = pd.DataFrame(total_goals_probability_rows)
     skipped = pd.DataFrame(skipped_rows)
     summary = _build_summary(predictions)
     round_summary = _build_round_summary(predictions)
+    scoreline_probability_diagnostics = _scoreline_probability_diagnostics(predictions)
+    probabilistic_summary = _build_probabilistic_summary(scoreline_probability_diagnostics)
+    calibration_1x2 = _build_calibration_1x2(scoreline_probability_diagnostics)
+    calibration_btts = _build_calibration_btts(scoreline_probability_diagnostics)
+    calibration_totals = _build_calibration_totals(
+        total_goals_probability_diagnostics,
+        scoreline_probability_diagnostics,
+    )
 
     matches_scored = predictions["match_id"].nunique() if not predictions.empty else 0
     if progress and (template_count or missing_count):
@@ -2341,7 +2988,19 @@ def run_live_backtest(
             print(f"  ({missing_count} matches skipped: no paste file)")
 
     timings = pd.DataFrame(timing_rows)
-    report = LiveBacktestReport(summary, predictions, skipped, round_summary, timings)
+    report = LiveBacktestReport(
+        summary,
+        predictions,
+        skipped,
+        round_summary,
+        timings,
+        probabilistic_summary,
+        calibration_1x2,
+        calibration_btts,
+        calibration_totals,
+        scoreline_probability_diagnostics,
+        total_goals_probability_diagnostics,
+    )
     report._append_timing("total_before_export", time.perf_counter() - overall_start)
     if export:
         report.export(settings)
@@ -2402,6 +3061,7 @@ def run_combined_live_backtest(
     all_predictions: list[pd.DataFrame] = []
     all_skipped: list[pd.DataFrame] = []
     all_timings: list[pd.DataFrame] = []
+    all_total_goals_probability_diagnostics: list[pd.DataFrame] = []
     for folder in folders:
         label = folder.name
         if progress:
@@ -2428,13 +3088,40 @@ def run_combined_live_backtest(
             all_skipped.append(report.skipped)
         if not report.timings.empty:
             all_timings.append(report.timings)
+        if not report.total_goals_probability_diagnostics.empty:
+            all_total_goals_probability_diagnostics.append(report.total_goals_probability_diagnostics)
 
     predictions = pd.concat(all_predictions, ignore_index=True) if all_predictions else pd.DataFrame()
     skipped = pd.concat(all_skipped, ignore_index=True) if all_skipped else pd.DataFrame()
     timings = pd.concat(all_timings, ignore_index=True) if all_timings else pd.DataFrame()
+    total_goals_probability_diagnostics = (
+        pd.concat(all_total_goals_probability_diagnostics, ignore_index=True)
+        if all_total_goals_probability_diagnostics
+        else pd.DataFrame()
+    )
     summary = _build_summary(predictions)
     round_summary = _build_round_summary(predictions)
-    combined = LiveBacktestReport(summary, predictions, skipped, round_summary, timings)
+    scoreline_probability_diagnostics = _scoreline_probability_diagnostics(predictions)
+    probabilistic_summary = _build_probabilistic_summary(scoreline_probability_diagnostics)
+    calibration_1x2 = _build_calibration_1x2(scoreline_probability_diagnostics)
+    calibration_btts = _build_calibration_btts(scoreline_probability_diagnostics)
+    calibration_totals = _build_calibration_totals(
+        total_goals_probability_diagnostics,
+        scoreline_probability_diagnostics,
+    )
+    combined = LiveBacktestReport(
+        summary,
+        predictions,
+        skipped,
+        round_summary,
+        timings,
+        probabilistic_summary,
+        calibration_1x2,
+        calibration_btts,
+        calibration_totals,
+        scoreline_probability_diagnostics,
+        total_goals_probability_diagnostics,
+    )
 
     if export:
         output_settings = LiveBacktestSettings(
