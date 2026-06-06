@@ -150,6 +150,39 @@ recommendation, and `final_decision_score` defaults to that same score. The
 dashboard highlights manual-review and override-candidate situations so a human
 can make the final submission decision under tournament pressure.
 
+### Modal / Draw Challenger
+
+The WC 2022 group-stage backtest exposed a decision-rule issue worth monitoring:
+the EV optimiser often selected narrow decisive no-BTTS scores such as `1-0` or
+`0-1`, while the modal scoreline was sometimes `1-1`. In that 48-match sample the
+modal challenger outscored default EV, mostly because realised draws were costly
+for decisive EV picks.
+
+This is not enough evidence to change the live default. The new
+`modal_draw_challenger` is diagnostic-only: it flags balanced matches where the
+EV pick is decisive, the modal score is a draw, the draw-vs-decisive EV gap is
+small, and the favourite probability is low. It sets manual-review fields and
+adds context to the decision note, but it never changes `recommended_score`.
+
+The second-pass pattern review narrowed the practical flags:
+
+- `draw_prone_flag` is the cleaner draw signal: low O/U median total and a
+  balanced favourite probability.
+- `btts_conflict_flag` is intentionally narrow. BTTS was not broadly
+  under-calibrated in the 2022 sample, so elevated BTTS alone is not a warning;
+  it must overlap with a balanced/draw-prone context and a close BTTS-compatible
+  alternative.
+- `blowout_risk_flag` is diagnostic-only for strong-favourite, high-total
+  matches where higher-margin alternatives deserve review.
+
+Correct-score blend value is still unanswered until the research blend-weight
+sweeps are run with real correct-score coverage. Do not infer value from a
+backtest where all configs used `correct_score_poisson_weight = 1.0`.
+
+Future validation should replay the same diagnostics on 2018/2014 World Cup
+group-stage odds and monitor live 2026 matches before any default strategy
+change is considered.
+
 ## Priority 6: Own Challenger Models
 
 Only after the market baseline is robust:

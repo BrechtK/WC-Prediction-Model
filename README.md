@@ -139,6 +139,22 @@ When it says `no`, the compact terminal output is usually enough.
 `alternatives` show the main nearby score to consider if a match is flagged for
 review.
 
+Pattern flags are diagnostic-only. The WC 2022 group-stage review suggested the
+main live risk is decision-rule fragility under the `10/7/5/1` scoring rule, not
+a broad probability calibration failure. In particular, BTTS was not materially
+under-calibrated in that sample, so broad BTTS warnings are not treated as a
+reason to change the default score.
+
+The current manual-review flags are:
+
+- `draw_prone_flag`: low O/U median total plus balanced favourite probability.
+- `btts_conflict_flag`: narrow only; no-BTTS EV pick, elevated BTTS probability,
+  balanced/draw-prone context, and a close BTTS-compatible alternative.
+- `blowout_risk_flag`: strong favourite plus high O/U median total, used to
+  surface higher-margin alternatives.
+
+All of these leave `recommended_score` unchanged.
+
 ## Research Mode / Advanced Diagnostics
 
 Use research mode when you want slower diagnostic workbooks and fuller terminal
@@ -152,6 +168,11 @@ TERMINAL_VERBOSITY = "debug"
 Research mode enables margin-method comparison, market-consistent challenger
 diagnostics, and correct-score weight sensitivity. These are for investigation;
 they do not change the default live recommendation by themselves.
+
+The historical live backtest has an additional `BACKTEST_PROFILE = "research"`
+mode with correct-score blend-weight sweeps, modal/draw threshold sweeps, and a
+larger-grid configuration. Correct-score blend value remains unproven until
+those sweeps are actually run on richer historical data.
 
 Public strategy remains diagnostic. Use `PUBLIC_STRATEGY_TARGET` /
 `public_strategy_target` values such as `friends`, `balanced`, or `national`

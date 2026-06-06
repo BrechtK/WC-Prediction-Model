@@ -22,14 +22,19 @@ from wc_predictor.world_cup import (
     run_world_cup_predictions,
 )
 from wc_predictor.workflow import (
+    _btts_conflict_diagnostic,
     _btts_warning_flags,
     _build_final_decision_dashboard,
     _decision_aid,
+    _blowout_risk_diagnostic,
+    _draw_prone_diagnostic,
     _ev_explanation,
+    _modal_draw_challenger_diagnostic,
     _plausible_alternative_decision_layer,
     _should_run_market_consistent_challenger,
     run_prediction_workflow,
 )
+from wc_predictor.optimiser import GroupPredictionEvaluation, GroupPredictionRecommendation
 
 
 EXAMPLES = Path("data/examples")
@@ -367,6 +372,145 @@ def test_plausible_alternatives_keep_clean_sheet_scores_for_extreme_favourites()
     assert layer["suppressed_ev_candidates"] == ""
 
 
+def _sample_ev_modal_recommendation() -> GroupPredictionRecommendation:
+    return GroupPredictionRecommendation(
+        best=GroupPredictionEvaluation((1, 0), 4.20, 0.12, 0.24, 0.42, 0.58),
+        alternatives=(
+            GroupPredictionEvaluation((1, 1), 3.80, 0.11, 0.26, 0.30, 0.70),
+        ),
+        most_likely_scoreline=(1, 1),
+        differs_from_most_likely=True,
+    )
+
+
+def test_modal_draw_challenger_triggers_for_balanced_modal_draw_setup() -> None:
+    diagnostic = _modal_draw_challenger_diagnostic(
+        recommendation=_sample_ev_modal_recommendation(),
+        favourite_probability=0.42,
+        draw_decisive={"draw_vs_decisive_gap": -0.25},
+        ev_minus_modal_expected_gap=0.40,
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["modal_draw_challenger_flag"] == "yes"
+    assert diagnostic["modal_draw_challenger_score"] == "1-1"
+    assert diagnostic["ev_score"] == "1-0"
+    assert diagnostic["modal_score"] == "1-1"
+
+
+def test_modal_draw_challenger_does_not_trigger_for_strong_favourite() -> None:
+    diagnostic = _modal_draw_challenger_diagnostic(
+        recommendation=_sample_ev_modal_recommendation(),
+        favourite_probability=0.78,
+        draw_decisive={"draw_vs_decisive_gap": -0.25},
+        ev_minus_modal_expected_gap=0.40,
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["modal_draw_challenger_flag"] == "no"
+    assert diagnostic["modal_draw_challenger_score"] == ""
+
+
+def test_modal_draw_challenger_does_not_override_recommended_score() -> None:
+    recommendation = _sample_ev_modal_recommendation()
+    diagnostic = _modal_draw_challenger_diagnostic(
+        recommendation=recommendation,
+        favourite_probability=0.42,
+        draw_decisive={"draw_vs_decisive_gap": -0.25},
+        ev_minus_modal_expected_gap=0.40,
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["modal_draw_challenger_flag"] == "yes"
+    assert diagnostic["modal_draw_challenger_score"] != f"{recommendation.best.predicted_score[0]}-{recommendation.best.predicted_score[1]}"
+    assert recommendation.best.predicted_score == (1, 0)
+
+
+def test_draw_prone_flag_triggers_for_low_total_balanced_match() -> None:
+    diagnostic = _draw_prone_diagnostic(
+        ou_median_total=2.0,
+        favourite_probability=0.46,
+        market_draw_probability=0.31,
+        recommendation=_sample_ev_modal_recommendation(),
+        draw_decisive={"draw_vs_decisive_gap": -0.20},
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["draw_prone_flag"] == "yes"
+    assert "Draw-prone market profile" in diagnostic["draw_prone_reason"]
+
+
+def test_draw_prone_flag_does_not_trigger_for_strong_favourite() -> None:
+    diagnostic = _draw_prone_diagnostic(
+        ou_median_total=2.0,
+        favourite_probability=0.72,
+        market_draw_probability=0.20,
+        recommendation=_sample_ev_modal_recommendation(),
+        draw_decisive={"draw_vs_decisive_gap": -0.20},
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["draw_prone_flag"] == "no"
+
+
+def test_broad_btts_probability_alone_does_not_trigger_conflict_flag() -> None:
+    evaluations = (
+        GroupPredictionEvaluation((1, 0), 4.20, 0.12, 0.24, 0.42, 0.58),
+        GroupPredictionEvaluation((1, 1), 4.05, 0.11, 0.26, 0.30, 0.70),
+    )
+
+    diagnostic = _btts_conflict_diagnostic(
+        recommended_score=(1, 0),
+        recommended_expected_points=4.20,
+        market_btts_yes=0.49,
+        model_btts_yes=0.47,
+        favourite_probability=0.70,
+        draw_prone_flag=False,
+        evaluations=evaluations,
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["btts_conflict_flag"] == "no"
+
+
+def test_btts_conflict_flag_triggers_for_close_btts_alternative() -> None:
+    evaluations = (
+        GroupPredictionEvaluation((1, 0), 4.20, 0.12, 0.24, 0.42, 0.58),
+        GroupPredictionEvaluation((1, 1), 4.05, 0.11, 0.26, 0.30, 0.70),
+    )
+
+    diagnostic = _btts_conflict_diagnostic(
+        recommended_score=(1, 0),
+        recommended_expected_points=4.20,
+        market_btts_yes=0.49,
+        model_btts_yes=0.47,
+        favourite_probability=0.52,
+        draw_prone_flag=False,
+        evaluations=evaluations,
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["btts_conflict_flag"] == "yes"
+    assert diagnostic["best_btts_alternative_score"] == "1-1"
+    assert "No-BTTS EV pick conflicts" in diagnostic["btts_conflict_note"]
+
+
+def test_blowout_risk_flag_triggers_for_strong_favourite_high_total() -> None:
+    diagnostic = _blowout_risk_diagnostic(
+        favourite_probability=0.74,
+        ou_median_total=2.75,
+        high_margin_alternatives="2-0 (4.800); 3-0 (4.700)",
+        high_score_tail_mass=0.012,
+        larger_grid_recommendation="3-0",
+        current_recommendation="2-0",
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["blowout_risk_flag"] == "yes"
+    assert diagnostic["larger_grid_recommended"] == "yes"
+    assert "Blowout-risk profile" in diagnostic["blowout_risk_reason"]
+
+
 def _dashboard_match_report(**overrides) -> pd.DataFrame:
     row = {
         "match_id": "M001",
@@ -621,6 +765,40 @@ def test_final_decision_dashboard_flags_extreme_favourite_cluster() -> None:
     assert dashboard["manual_review_flag"] == "yes"
     assert dashboard["main_alternative_score"] == "4-0"
     assert "High-score cluster" in dashboard["decision_note"]
+
+
+def test_final_decision_dashboard_flags_modal_draw_challenger_for_manual_review() -> None:
+    dashboard = _build_final_decision_dashboard(
+        _dashboard_match_report(
+            modal_draw_challenger_flag="yes",
+            modal_draw_challenger_score="1-1",
+            btts_conflict_flag="no",
+        ),
+        _dashboard_margin_rows(),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).iloc[0]
+
+    assert dashboard["final_decision_score"] == "1-0"
+    assert dashboard["modal_draw_challenger_flag"] == "yes"
+    assert dashboard["manual_review_flag"] == "yes"
+    assert "WC 2022 backtest" in dashboard["decision_note"]
+
+
+def test_pattern_flags_do_not_override_final_decision_score() -> None:
+    dashboard = _build_final_decision_dashboard(
+        _dashboard_match_report(
+            recommended_score="1-0",
+            draw_prone_flag="yes",
+            draw_prone_reason="Draw-prone market profile",
+            blowout_risk_flag="no",
+        ),
+        _dashboard_margin_rows(),
+        ProjectConfig(enable_margin_method_comparison=False),
+    ).iloc[0]
+
+    assert dashboard["final_decision_score"] == "1-0"
+    assert dashboard["manual_review_flag"] == "yes"
+    assert "Draw-prone market profile" in dashboard["decision_note"]
 
 
 def test_btts_warning_appears_for_recommendation_conflicting_with_strong_market_signal() -> None:

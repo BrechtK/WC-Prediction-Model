@@ -511,6 +511,228 @@ def _btts_warning_flags(
     return flags
 
 
+def _modal_draw_challenger_diagnostic(
+    *,
+    recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    favourite_probability: float,
+    draw_decisive: Mapping[str, object],
+    ev_minus_modal_expected_gap: float,
+    config: ProjectConfig,
+) -> dict[str, object]:
+    """Flag balanced matches where modal draw is a plausible manual-review challenger."""
+
+    ev_score = recommendation.best.predicted_score
+    modal_score = recommendation.most_likely_scoreline
+    draw_vs_decisive_gap = draw_decisive.get("draw_vs_decisive_gap", pd.NA)
+    flag = (
+        ev_score[0] != ev_score[1]
+        and modal_score[0] == modal_score[1]
+        and favourite_probability < config.strategies.modal_draw_favourite_probability_threshold
+        and pd.notna(draw_vs_decisive_gap)
+        and float(draw_vs_decisive_gap) > config.strategies.modal_draw_gap_threshold
+        and ev_minus_modal_expected_gap <= config.strategies.modal_draw_ev_gap_threshold
+    )
+    reason = ""
+    if flag:
+        reason = (
+            "Balanced draw-regime diagnostic: EV score is decisive while the modal score is a draw; "
+            "WC 2022 backtest showed EV may over-select narrow decisive no-BTTS scores when the draw "
+            "candidate is close in expected points."
+        )
+    return {
+        "modal_draw_challenger_flag": "yes" if flag else "no",
+        "modal_draw_challenger_score": _score_label(modal_score) if flag else "",
+        "modal_draw_challenger_reason": reason,
+        "ev_score": _score_label(ev_score),
+        "modal_score": _score_label(modal_score),
+        "ev_minus_modal_expected_gap": ev_minus_modal_expected_gap,
+    }
+
+
+def _btts_conflict_diagnostic(
+    *,
+    recommended_score: tuple[int, int],
+    recommended_expected_points: float,
+    market_btts_yes: float | object,
+    model_btts_yes: float,
+    favourite_probability: float,
+    draw_prone_flag: bool,
+    evaluations: tuple[GroupPredictionEvaluation | KnockoutPredictionEvaluation, ...],
+    config: ProjectConfig,
+) -> dict[str, object]:
+    """Flag no-BTTS EV picks when BTTS signal and a close BTTS alternative coexist."""
+
+    best_btts = next((item for item in evaluations if _score_has_btts(item.predicted_score)), None)
+    market_signal = float(market_btts_yes) if pd.notna(market_btts_yes) else np.nan
+    signal = np.nanmax([market_signal, float(model_btts_yes)])
+    ev_gap_to_btts = (
+        float(recommended_expected_points - best_btts.expected_points)
+        if best_btts is not None
+        else pd.NA
+    )
+    balanced_context = (
+        draw_prone_flag
+        or favourite_probability < config.strategies.btts_conflict_favourite_probability_threshold
+    )
+    flag = (
+        not _score_has_btts(recommended_score)
+        and np.isfinite(signal)
+        and signal >= config.strategies.btts_conflict_probability_threshold
+        and balanced_context
+        and best_btts is not None
+        and pd.notna(ev_gap_to_btts)
+        and float(ev_gap_to_btts) <= config.strategies.btts_conflict_ev_gap_threshold
+    )
+    reason = ""
+    if flag:
+        reason = (
+            f"No-BTTS EV pick conflicts with BTTS probability {signal:.3f}; "
+            f"best close BTTS alternative is {_score_label(best_btts.predicted_score)} "
+            f"({float(ev_gap_to_btts):.3f} EV behind)."
+        )
+    return {
+        "btts_conflict_flag": "yes" if flag else "no",
+        "btts_conflict_reason": reason,
+        "btts_conflict_note": reason,
+        "btts_probability": signal if np.isfinite(signal) else pd.NA,
+        "best_btts_alternative_score": _score_label(best_btts.predicted_score) if best_btts is not None else "",
+        "ev_gap_to_btts_alternative": ev_gap_to_btts,
+        "ev_gap_to_best_btts_alternative": ev_gap_to_btts,
+    }
+
+
+def _median_total_goals_line(
+    calibratable_total_goals: pd.DataFrame,
+    match_total_goals: pd.DataFrame,
+    fallback_over_2_5: object,
+) -> object:
+    rows = calibratable_total_goals if not calibratable_total_goals.empty else match_total_goals
+    if not rows.empty and "line" in rows:
+        lines = pd.to_numeric(rows["line"], errors="coerce").dropna()
+        if not lines.empty:
+            return float(lines.median())
+    return 2.5 if pd.notna(fallback_over_2_5) else pd.NA
+
+
+def _draw_prone_diagnostic(
+    *,
+    ou_median_total: object,
+    favourite_probability: float,
+    market_draw_probability: float,
+    recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
+    draw_decisive: Mapping[str, object],
+    config: ProjectConfig,
+) -> dict[str, object]:
+    flag = (
+        pd.notna(ou_median_total)
+        and float(ou_median_total) < config.strategies.draw_prone_ou_median_total_threshold
+        and favourite_probability < config.strategies.draw_prone_favourite_probability_threshold
+    )
+    soft_reasons: list[str] = []
+    if market_draw_probability >= 0.28:
+        soft_reasons.append(f"market draw {market_draw_probability:.3f}")
+    if recommendation.best.predicted_score[0] != recommendation.best.predicted_score[1]:
+        soft_reasons.append("EV score decisive")
+    if recommendation.most_likely_scoreline[0] == recommendation.most_likely_scoreline[1]:
+        soft_reasons.append("modal score draw")
+    if pd.notna(draw_decisive.get("draw_vs_decisive_gap")):
+        soft_reasons.append(f"draw gap {float(draw_decisive['draw_vs_decisive_gap']):+.3f}")
+    reason = ""
+    if flag:
+        reason = (
+            "Draw-prone market profile: low total and balanced favourite probability. "
+            "Review best draw/modal alternative."
+        )
+        if soft_reasons:
+            reason += " Signals: " + ", ".join(soft_reasons) + "."
+    return {
+        "draw_prone_flag": "yes" if flag else "no",
+        "draw_prone_reason": reason,
+        "market_draw_probability": market_draw_probability,
+    }
+
+
+def _format_high_margin_alternatives(
+    evaluations: tuple[GroupPredictionEvaluation | KnockoutPredictionEvaluation, ...],
+    *,
+    favourite_is_team_a: bool,
+    limit: int = 5,
+) -> str:
+    alternatives: list[str] = []
+    for evaluation in evaluations:
+        score = evaluation.predicted_score
+        margin = score[0] - score[1] if favourite_is_team_a else score[1] - score[0]
+        if margin >= 2:
+            alternatives.append(f"{_score_label(score)} ({evaluation.expected_points:.3f})")
+        if len(alternatives) >= limit:
+            break
+    return "; ".join(alternatives)
+
+
+def _blowout_risk_diagnostic(
+    *,
+    favourite_probability: float,
+    ou_median_total: object,
+    high_margin_alternatives: str,
+    high_score_tail_mass: float,
+    larger_grid_recommendation: object,
+    current_recommendation: str,
+    config: ProjectConfig,
+) -> dict[str, object]:
+    flag = (
+        pd.notna(ou_median_total)
+        and favourite_probability > config.strategies.blowout_favourite_probability_threshold
+        and float(ou_median_total) > config.strategies.blowout_ou_median_total_threshold
+    )
+    reason = ""
+    if flag:
+        reason = (
+            "Blowout-risk profile: strong favourite and high total. "
+            "Review higher-margin alternatives."
+        )
+    larger_grid_recommended = (
+        "yes"
+        if pd.notna(larger_grid_recommendation)
+        and str(larger_grid_recommendation)
+        and str(larger_grid_recommendation) != str(current_recommendation)
+        else "no"
+    )
+    return {
+        "blowout_risk_flag": "yes" if flag else "no",
+        "blowout_risk_reason": reason,
+        "best_high_margin_alternatives": high_margin_alternatives,
+        "high_score_tail_mass": high_score_tail_mass,
+        "larger_grid_recommended": larger_grid_recommended,
+    }
+
+
+def _asian_handicap_favourite_summary(
+    match_asian_handicap: pd.DataFrame,
+    *,
+    favourite_is_team_a: bool,
+) -> dict[str, object]:
+    if match_asian_handicap.empty or "handicap" not in match_asian_handicap:
+        return {"ah_implied_favourite_margin": pd.NA, "favourite_covered_ah": pd.NA}
+    rows = match_asian_handicap.copy()
+    if "selected_for_market_consistent" in rows:
+        selected = rows[rows["selected_for_market_consistent"].astype(str).str.lower().eq("yes")]
+        if not selected.empty:
+            rows = selected
+    direction_rows = rows[pd.to_numeric(rows["handicap"], errors="coerce").lt(0 if favourite_is_team_a else np.inf)]
+    if not favourite_is_team_a:
+        direction_rows = rows[pd.to_numeric(rows["handicap"], errors="coerce").gt(0)]
+    if direction_rows.empty:
+        direction_rows = rows
+    if "bookmakers_count" in direction_rows:
+        direction_rows = direction_rows.sort_values(["bookmakers_count", "handicap"], ascending=[False, True])
+    row = direction_rows.iloc[0]
+    probability_column = "fair_team_a" if favourite_is_team_a else "fair_team_b"
+    return {
+        "ah_implied_favourite_margin": abs(float(row["handicap"])) if pd.notna(row.get("handicap")) else pd.NA,
+        "favourite_covered_ah": row.get(probability_column, pd.NA),
+    }
+
+
 def _format_probability_items(items: list[tuple[str, float]], limit: int = 5) -> str:
     return "; ".join(f"{label}: {probability:.4f}" for label, probability in items[:limit])
 
@@ -1208,6 +1430,10 @@ def _dashboard_risk_notes(
     dixon_coles_differs: bool,
     public_strategy_differs: bool,
     high_score_cluster: bool,
+    modal_draw_challenger: bool,
+    btts_conflict: bool,
+    draw_prone: bool,
+    blowout_risk: bool,
     warning_flags: str,
 ) -> str:
     notes: list[str] = []
@@ -1223,6 +1449,14 @@ def _dashboard_risk_notes(
         notes.append("public strategy suggests a different score")
     if high_score_cluster:
         notes.append("high-score cluster present")
+    if modal_draw_challenger:
+        notes.append("modal/draw challenger flagged")
+    if btts_conflict:
+        notes.append("BTTS conflict warning")
+    if draw_prone:
+        notes.append("draw-prone market profile")
+    if blowout_risk:
+        notes.append("blowout-risk market profile")
     severe_flags = [
         flag
         for flag in str(warning_flags or "").split("; ")
@@ -1251,7 +1485,31 @@ def _dashboard_decision_note(
     risk_notes: str,
     main_alternative_score: str,
     high_score_cluster: bool,
+    modal_draw_challenger: bool,
+    modal_draw_challenger_score: str,
+    draw_prone: bool,
+    blowout_risk: bool,
 ) -> str:
+    if draw_prone:
+        return (
+            "Draw-prone market profile: low total and balanced favourite probability. "
+            "Review best draw/modal alternative."
+        )
+    if blowout_risk:
+        return (
+            "Blowout-risk profile: strong favourite and high total. "
+            "Review higher-margin alternatives."
+        )
+    if modal_draw_challenger:
+        challenger_text = (
+            f" Consider {modal_draw_challenger_score} for manual review."
+            if modal_draw_challenger_score
+            else ""
+        )
+        return (
+            f"Default remains {default_score}.{challenger_text} WC 2022 backtest showed EV may "
+            "over-select narrow decisive no-BTTS scores in balanced draw regimes."
+        )
     if not risk_notes and model_consensus == "strong_consensus" and confidence_level == "high":
         return "Default recommendation supported by all challenger diagnostics."
     if high_score_cluster and main_alternative_score:
@@ -1315,6 +1573,11 @@ def _build_final_decision_dashboard(
             and float(row["ev_gap_to_second"]) < config.strategies.low_confidence_ev_gap_threshold
         )
         high_score_cluster = str(row.get("high_score_cluster", "no")).lower() == "yes"
+        modal_draw_challenger = str(row.get("modal_draw_challenger_flag", "no")).lower() == "yes"
+        btts_conflict = str(row.get("btts_conflict_flag", "no")).lower() == "yes"
+        draw_prone = str(row.get("draw_prone_flag", "no")).lower() == "yes"
+        blowout_risk = str(row.get("blowout_risk_flag", "no")).lower() == "yes"
+        modal_draw_challenger_score = str(row.get("modal_draw_challenger_score", ""))
         market_consistent_differs = market_consistent_score not in {"", default_score}
         dixon_coles_differs = dixon_coles_score not in {"", default_score}
         public_strategy_differs = public_strategy_score not in {"", default_score}
@@ -1347,6 +1610,10 @@ def _build_final_decision_dashboard(
             dixon_coles_differs=dixon_coles_differs,
             public_strategy_differs=public_strategy_differs,
             high_score_cluster=high_score_cluster,
+            modal_draw_challenger=modal_draw_challenger,
+            btts_conflict=btts_conflict,
+            draw_prone=draw_prone,
+            blowout_risk=blowout_risk,
             warning_flags=str(row.get("warning_flags", "")),
         )
         if asian_handicap_shift:
@@ -1359,6 +1626,10 @@ def _build_final_decision_dashboard(
                 dixon_coles_differs,
                 bool(strategic_alternative_score),
                 high_score_cluster,
+                modal_draw_challenger,
+                btts_conflict,
+                draw_prone,
+                blowout_risk,
                 bool(risk_notes),
             ]
         )
@@ -1370,6 +1641,10 @@ def _build_final_decision_dashboard(
             risk_notes=risk_notes,
             main_alternative_score=main_alternative_score,
             high_score_cluster=high_score_cluster,
+            modal_draw_challenger=modal_draw_challenger,
+            modal_draw_challenger_score=modal_draw_challenger_score,
+            draw_prone=draw_prone,
+            blowout_risk=blowout_risk,
         )
         rows.append(
             {
@@ -1394,6 +1669,16 @@ def _build_final_decision_dashboard(
                 "strategic_alternative_score": strategic_alternative_score,
                 "override_candidate": "yes" if override_candidate else "no",
                 "high_score_cluster": "yes" if high_score_cluster else "no",
+                "modal_draw_challenger_flag": "yes" if modal_draw_challenger else "no",
+                "modal_draw_challenger_score": modal_draw_challenger_score,
+                "btts_conflict_flag": "yes" if btts_conflict else "no",
+                "btts_conflict_note": row.get("btts_conflict_note", ""),
+                "best_btts_alternative_score": row.get("best_btts_alternative_score", ""),
+                "draw_prone_flag": "yes" if draw_prone else "no",
+                "draw_prone_reason": row.get("draw_prone_reason", ""),
+                "blowout_risk_flag": "yes" if blowout_risk else "no",
+                "blowout_risk_reason": row.get("blowout_risk_reason", ""),
+                "best_high_margin_alternatives": row.get("best_high_margin_alternatives", ""),
                 "margin_method_sensitive": margin_method_sensitive_value,
                 "market_consistent_differs": "yes" if market_consistent_differs else "no",
                 "dixon_coles_differs": "yes" if dixon_coles_differs else "no",
@@ -1730,6 +2015,12 @@ def run_prediction_workflow(
             for _, total_row in calibratable_total_goals.iterrows()
         )
         legacy_over_2_5 = _optional_probability(row, "fair_over_2_5") if not total_goals_targets else None
+        ou_median_total = _median_total_goals_line(
+            calibratable_total_goals,
+            match_total_goals,
+            row.get("fair_over_2_5", pd.NA),
+        )
+        market_total_line_used = _format_total_goals_lines(calibratable_total_goals)
         targets = CalibrationTargets(
             float(row["fair_a_win"]),
             float(row["fair_draw"]),
@@ -1805,6 +2096,19 @@ def run_prediction_workflow(
             correct_score_market_top_10 = format_top_scorelines(correct_score_matrix)
             correct_score_blended_top_10 = format_top_scorelines(score_matrix)
             correct_score_kl_divergence = market_to_poisson_kl_divergence(poisson_matrix, correct_score_matrix)
+            has_other_bucket = (
+                "yes"
+                if "has_other_bucket" in correct_score_rows
+                and correct_score_rows["has_other_bucket"]
+                .fillna(False)
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .isin({"true", "1", "yes"})
+                .any()
+                else "no"
+            )
+            correct_score_tail_mass = float(correct_score_matrix.tail_probability)
             has_correct_score_market = True
         else:
             correct_score_coverage = summarise_correct_score_coverage(correct_score_rows)
@@ -1823,6 +2127,8 @@ def run_prediction_workflow(
             correct_score_market_top_10 = ""
             correct_score_blended_top_10 = ""
             correct_score_kl_divergence = pd.NA
+            has_other_bucket = "no"
+            correct_score_tail_mass = pd.NA
             has_correct_score_market = False
         matrices[match_id] = score_matrix
         if config.enable_dixon_coles_rho_estimation:
@@ -2122,6 +2428,11 @@ def run_prediction_workflow(
             total_goals_targets,
         )
         favourite_probability = max(targets.a_win, targets.b_win)
+        favourite_is_team_a = targets.a_win >= targets.b_win
+        ah_favourite_summary = _asian_handicap_favourite_summary(
+            match_asian_handicap,
+            favourite_is_team_a=favourite_is_team_a,
+        )
         bucket = favourite_strength_bucket(favourite_probability)
         ev_gap_best_vs_second = _ev_gap_best_vs_second(recommendation)
         ev_gap_best_vs_modal = _ev_gap_vs_modal(
@@ -2130,6 +2441,7 @@ def run_prediction_workflow(
             qualification.get(match_id),
             config,
         )
+        most_likely_expected_points = recommendation.best.expected_points - ev_gap_best_vs_modal
         baseline_poisson_recommended_score = baseline_recommendation.best.predicted_score
         correct_score_blended_recommended_score = correct_score_blended_recommendation.best.predicted_score
         final_live_recommended_score = recommendation.best.predicted_score
@@ -2167,6 +2479,13 @@ def run_prediction_workflow(
         )
         ev_decomposition_records = _ev_decomposition_records(match_id, recommendation, config)
         top_10_evaluations = _top_ev_evaluations(score_matrix, knockout, qualifier_probabilities, config, 10)
+        all_candidate_evaluations = _top_ev_evaluations(
+            score_matrix,
+            knockout,
+            qualifier_probabilities,
+            config,
+            (config.max_candidate_goals + 1) ** 2,
+        )
         top_10_ev_decomposition_records = _ev_decomposition_records_from_evaluations(
             match_id,
             top_10_evaluations,
@@ -2281,7 +2600,6 @@ def run_prediction_workflow(
             favourite_probability > EXTREME_FAVOURITE_PROBABILITY_THRESHOLD
             or normal_grid_tail_mass > HIGH_TAIL_MASS_THRESHOLD
         )
-        favourite_is_team_a = targets.a_win >= targets.b_win
         market_consistent_high_score_comparison = (
             _market_consistent_high_score_comparison(
                 poisson_matrix=poisson_matrix,
@@ -2468,6 +2786,50 @@ def run_prediction_workflow(
                 else None
             ),
         )
+        modal_draw_challenger = _modal_draw_challenger_diagnostic(
+            recommendation=recommendation,
+            favourite_probability=favourite_probability,
+            draw_decisive=draw_decisive,
+            ev_minus_modal_expected_gap=ev_gap_best_vs_modal,
+            config=config,
+        )
+        draw_prone = _draw_prone_diagnostic(
+            ou_median_total=ou_median_total,
+            favourite_probability=favourite_probability,
+            market_draw_probability=targets.draw,
+            recommendation=recommendation,
+            draw_decisive=draw_decisive,
+            config=config,
+        )
+        high_margin_alternatives = _format_high_margin_alternatives(
+            all_candidate_evaluations,
+            favourite_is_team_a=favourite_is_team_a,
+        )
+        blowout_risk = _blowout_risk_diagnostic(
+            favourite_probability=favourite_probability,
+            ou_median_total=ou_median_total,
+            high_margin_alternatives=high_margin_alternatives,
+            high_score_tail_mass=float(normal_grid_tail_mass),
+            larger_grid_recommendation=larger_grid_sensitivity.get("larger_grid_poisson_recommendation", ""),
+            current_recommendation=_score_label(final_live_recommended_score),
+            config=config,
+        )
+        btts_conflict = _btts_conflict_diagnostic(
+            recommended_score=final_live_recommended_score,
+            recommended_expected_points=recommendation.best.expected_points,
+            market_btts_yes=market_btts_yes,
+            model_btts_yes=score_audit["model_implied_btts_yes_probability"],
+            favourite_probability=favourite_probability,
+            draw_prone_flag=draw_prone["draw_prone_flag"] == "yes",
+            evaluations=all_candidate_evaluations,
+            config=config,
+        )
+        if draw_prone["draw_prone_flag"] == "yes":
+            warning_flags = "; ".join(filter(None, [warning_flags, "draw_prone_profile"]))
+        if blowout_risk["blowout_risk_flag"] == "yes":
+            warning_flags = "; ".join(filter(None, [warning_flags, "blowout_risk_profile"]))
+        if btts_conflict["btts_conflict_flag"] == "yes":
+            warning_flags = "; ".join(filter(None, [warning_flags, "btts_conflict"]))
         (
             market_consistent_active_constraint_groups,
             market_consistent_constraint_correlation_note,
@@ -2487,6 +2849,7 @@ def run_prediction_workflow(
                 "market_draw": targets.draw,
                 "market_b_win": targets.b_win,
                 "favourite_probability": favourite_probability,
+                "favourite_team": row["team_a"] if targets.a_win >= targets.b_win else row["team_b"],
                 "favourite_bucket": bucket,
                 "odds_timestamp_min": metadata["odds_timestamp_min"],
                 "odds_timestamp_max": metadata["odds_timestamp_max"],
@@ -2516,6 +2879,8 @@ def run_prediction_workflow(
                 "has_over_under": has_over_under,
                 "total_goals_lines_available": _format_total_goals_lines(match_total_goals),
                 "total_goals_lines_used_for_calibration": _format_total_goals_lines(calibratable_total_goals),
+                "market_total_line_used": market_total_line_used,
+                "ou_median_total": ou_median_total,
                 "total_goals_lines_skipped_for_calibration": _format_total_goals_lines(skipped_total_goals),
                 "total_goals_lines_skipped": _format_total_goals_lines(skipped_total_goals),
                 "total_goals_line_fit_error": total_goals_line_fit_error,
@@ -2541,6 +2906,9 @@ def run_prediction_workflow(
                 **correct_score_aggregation_diagnostics,
                 "correct_score_bookmaker_diagnostics": correct_score_bookmaker_diagnostics,
                 "correct_score_market_top_10": correct_score_market_top_10,
+                "correct_score_top_scores": correct_score_market_top_10,
+                "has_other_bucket": has_other_bucket,
+                "correct_score_tail_mass": correct_score_tail_mass,
                 "correct_score_blended_top_10": correct_score_blended_top_10,
                 "correct_score_kl_divergence": correct_score_kl_divergence,
                 "top_10_market_scorelines": correct_score_market_top_10,
@@ -2556,13 +2924,19 @@ def run_prediction_workflow(
                 **score_audit,
                 "calibration_loss": calibration.loss,
                 "recommended_score": f"{recommendation.best.predicted_score[0]}-{recommendation.best.predicted_score[1]}",
+                "ev_default_score": _score_label(final_live_recommended_score),
+                "most_likely_score": _score_label(recommendation.most_likely_scoreline),
                 "recommended_qualifier": recommended_qualifier,
                 "best_expected_points": recommendation.best.expected_points,
+                "ev_expected_points": recommendation.best.expected_points,
+                "modal_expected_points": most_likely_expected_points,
                 "ev_gap_best_vs_second": ev_gap_best_vs_second,
                 "ev_gap_best_vs_modal": ev_gap_best_vs_modal,
                 "baseline_poisson_recommended_score": f"{baseline_poisson_recommended_score[0]}-{baseline_poisson_recommended_score[1]}",
+                "baseline_poisson_best_expected_points": baseline_recommendation.best.expected_points,
                 "baseline_poisson_ev_gap_best_vs_second": _ev_gap_best_vs_second(baseline_recommendation),
                 "correct_score_blended_recommended_score": f"{correct_score_blended_recommended_score[0]}-{correct_score_blended_recommended_score[1]}",
+                "correct_score_blended_best_expected_points": correct_score_blended_recommendation.best.expected_points,
                 "correct_score_blended_ev_gap_best_vs_second": _ev_gap_best_vs_second(
                     correct_score_blended_recommendation
                 ),
@@ -2603,6 +2977,7 @@ def run_prediction_workflow(
                 "market_consistent_top_10_ev_decomposition_json": market_consistent_top_10_ev_decomposition_json,
                 "market_consistent_top_10_probability_scorelines": market_consistent_top_10_probability_scorelines,
                 **market_consistent_result.diagnostics,
+                "market_consistent_warning_flags": "; ".join(market_consistent_warning_flags),
                 "market_consistent_differs_from_default": (
                     "yes"
                     if market_consistent_differs_from_default
@@ -2620,6 +2995,7 @@ def run_prediction_workflow(
                 ),
                 "asian_handicap_orientation_reason": asian_handicap_orientation_reason,
                 "asian_handicap_shift_recommendation": "yes" if asian_handicap_shift_recommendation else "no",
+                **ah_favourite_summary,
                 "margin_ev_gap": margin_ev_gap,
                 "margin_diagnostic_note": margin_diagnostic_note,
                 **draw_decisive,
@@ -2628,7 +3004,13 @@ def run_prediction_workflow(
                 "correct_goal_difference_probability": recommendation.best.correct_goal_difference_probability,
                 "correct_result_probability": getattr(recommendation.best, "correct_result_probability", pd.NA),
                 "most_likely_scoreline": f"{recommendation.most_likely_scoreline[0]}-{recommendation.most_likely_scoreline[1]}",
+                "most_likely_expected_points": most_likely_expected_points,
                 "ev_optimal_differs_from_most_likely": recommendation.differs_from_most_likely,
+                "ev_vs_modal_differs": "yes" if final_live_recommended_score != recommendation.most_likely_scoreline else "no",
+                **modal_draw_challenger,
+                **draw_prone,
+                **blowout_risk,
+                **btts_conflict,
                 "top_5_ev_predictions": _format_top_ev_predictions(recommendation),
                 "top_5_ev_decomposition": _format_ev_decomposition(ev_decomposition_records),
                 "top_5_ev_decomposition_json": ev_decomposition_json,
@@ -2714,6 +3096,16 @@ def run_prediction_workflow(
             "plausible_alternatives",
             "strategic_alternative_score",
             "override_candidate",
+            "modal_draw_challenger_flag",
+            "modal_draw_challenger_score",
+            "btts_conflict_flag",
+            "btts_conflict_note",
+            "best_btts_alternative_score",
+            "draw_prone_flag",
+            "draw_prone_reason",
+            "blowout_risk_flag",
+            "blowout_risk_reason",
+            "best_high_margin_alternatives",
             "risk_notes",
             "decision_note",
             "asian_handicap_shift_recommendation",

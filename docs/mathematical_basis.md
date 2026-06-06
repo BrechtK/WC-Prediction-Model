@@ -276,6 +276,50 @@ and warning flags. Manual-review and override-candidate labels are decision
 support only; they do not alter calibration, score probabilities, or EV
 optimisation.
 
+The modal/draw challenger is another reporting-only layer. It compares the EV
+scoreline with the matrix modal scoreline:
+
+```text
+modal_score = argmax_{a,b} P(X=a,Y=b)
+```
+
+It flags a match when the EV score is decisive, the modal score is a draw, the
+favourite probability is below the configured threshold, and the best draw EV is
+close to the best decisive EV:
+
+```text
+draw_vs_decisive_gap = EV(best_draw_score) - EV(best_decisive_score)
+```
+
+The WC 2022 group-stage backtest suggests the EV rule may over-select narrow
+decisive no-BTTS scores in balanced draw regimes, but that sample is too small
+to justify changing the default. The challenger therefore only updates
+diagnostic/manual-review fields; `recommended_score` remains `argmax_s EV(s)`.
+
+The BTTS conflict diagnostic similarly flags no-BTTS EV picks when market or
+model BTTS probability is elevated, the match is balanced or draw-prone, and a
+BTTS-compatible alternative is close in EV. It is intentionally narrow: the WC
+2022 review did not show broad BTTS under-calibration, so BTTS probability alone
+is not treated as a manual-review reason.
+
+The draw-prone diagnostic uses a market profile rather than a new probability
+model:
+
+```text
+draw_prone = (median_OU_total < 2.25)
+             and (favourite_probability < 0.50)
+```
+
+The blowout-risk diagnostic similarly flags strong-favourite, high-total
+matches:
+
+```text
+blowout_risk = (favourite_probability > 0.70)
+               and (median_OU_total > 2.60)
+```
+
+Both diagnostics surface alternatives and set manual-review fields only.
+
 ## Expected Pool Points
 
 For a group-stage score prediction `(a,b)`:

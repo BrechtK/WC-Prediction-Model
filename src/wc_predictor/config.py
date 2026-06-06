@@ -176,6 +176,16 @@ class StrategyConfig:
     low_confidence_ev_gap_threshold: float = 0.07
     high_confidence_ev_gap_threshold: float = 0.15
     high_score_cluster_ev_gap_threshold: float = 0.10
+    modal_draw_favourite_probability_threshold: float = 0.45
+    modal_draw_gap_threshold: float = -0.70
+    modal_draw_ev_gap_threshold: float = 0.70
+    btts_conflict_probability_threshold: float = 0.45
+    btts_conflict_favourite_probability_threshold: float = 0.60
+    btts_conflict_ev_gap_threshold: float = 0.70
+    draw_prone_ou_median_total_threshold: float = 2.25
+    draw_prone_favourite_probability_threshold: float = 0.50
+    blowout_favourite_probability_threshold: float = 0.70
+    blowout_ou_median_total_threshold: float = 2.60
 
     def __post_init__(self) -> None:
         if self.top_alternatives <= 0:
@@ -186,10 +196,21 @@ class StrategyConfig:
             "low_confidence_ev_gap_threshold",
             "high_confidence_ev_gap_threshold",
             "high_score_cluster_ev_gap_threshold",
+            "modal_draw_ev_gap_threshold",
+            "btts_conflict_probability_threshold",
+            "btts_conflict_favourite_probability_threshold",
+            "btts_conflict_ev_gap_threshold",
+            "draw_prone_ou_median_total_threshold",
+            "draw_prone_favourite_probability_threshold",
+            "blowout_favourite_probability_threshold",
+            "blowout_ou_median_total_threshold",
         ):
             value = float(getattr(self, name))
             if not np.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
+        modal_draw_gap = float(self.modal_draw_gap_threshold)
+        if not np.isfinite(modal_draw_gap):
+            raise ValueError("modal_draw_gap_threshold must be finite")
         for name in ("plausible_total_goals_limit", "plausible_alternative_max_total_goals"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")

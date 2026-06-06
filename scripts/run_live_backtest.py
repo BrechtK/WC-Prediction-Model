@@ -46,8 +46,10 @@ HOW TO USE
 
        output/research/live_backtest.xlsx
 
-   The "summary" sheet ranks every config × strategy combination by
-   average realised pool points. The "predictions" sheet has per-match detail.
+   The "summary" sheet ranks every config x strategy combination by
+   average realised pool points. The "group_stage_rounds" sheet groups totals
+   by group-stage playing round: M001-M016, M017-M032, and M033-M048. The
+   "predictions" sheet has per-match detail.
 
 WHAT IS COMPARED
 ----------------
@@ -75,6 +77,7 @@ from pathlib import Path
 from wc_predictor.live_backtest import (
     DEFAULT_BACKTEST_CONFIGS,
     QUICK_BACKTEST_CONFIGS,
+    RESEARCH_BACKTEST_CONFIGS,
     BacktestConfigEntry,
     LiveBacktestSettings,
     run_live_backtest,
@@ -96,6 +99,7 @@ ODDS_SUBFOLDER = "odds"
 
 # "standard" tests 5 configs (recommended for first run)
 # "quick"    tests 2 configs: baseline + MC-with-AH (fastest)
+# "research" adds blend-weight, modal/draw-threshold, and larger-grid sweeps
 # "custom"   uses CUSTOM_CONFIGS below
 BACKTEST_PROFILE = "standard"
 
@@ -140,6 +144,8 @@ def main() -> None:
         configs = DEFAULT_BACKTEST_CONFIGS
     elif BACKTEST_PROFILE == "quick":
         configs = QUICK_BACKTEST_CONFIGS
+    elif BACKTEST_PROFILE == "research":
+        configs = RESEARCH_BACKTEST_CONFIGS
     elif BACKTEST_PROFILE == "custom":
         try:
             configs = CUSTOM_CONFIGS  # type: ignore[name-defined]
@@ -151,7 +157,7 @@ def main() -> None:
     else:
         raise ValueError(
             f"Unknown BACKTEST_PROFILE {BACKTEST_PROFILE!r}. "
-            "Use 'standard', 'quick', or 'custom'."
+            "Use 'standard', 'quick', 'research', or 'custom'."
         )
 
     odds_folder = TOURNAMENT_FOLDER / ODDS_SUBFOLDER
