@@ -429,6 +429,7 @@ def test_modal_draw_challenger_does_not_override_recommended_score() -> None:
 def test_draw_prone_flag_triggers_for_low_total_balanced_match() -> None:
     diagnostic = _draw_prone_diagnostic(
         ou_median_total=2.0,
+        expected_total_goals=2.1,
         favourite_probability=0.46,
         market_draw_probability=0.31,
         recommendation=_sample_ev_modal_recommendation(),
@@ -438,11 +439,28 @@ def test_draw_prone_flag_triggers_for_low_total_balanced_match() -> None:
 
     assert diagnostic["draw_prone_flag"] == "yes"
     assert "Draw-prone market profile" in diagnostic["draw_prone_reason"]
+    assert "expected_total_goals" in diagnostic["total_signal_used_for_draw_prone"]
+
+
+def test_draw_prone_flag_uses_expected_total_not_ou_median() -> None:
+    diagnostic = _draw_prone_diagnostic(
+        ou_median_total=3.5,
+        expected_total_goals=2.1,
+        favourite_probability=0.46,
+        market_draw_probability=0.31,
+        recommendation=_sample_ev_modal_recommendation(),
+        draw_decisive={"draw_vs_decisive_gap": -0.20},
+        config=ProjectConfig(enable_margin_method_comparison=False),
+    )
+
+    assert diagnostic["draw_prone_flag"] == "yes"
+    assert diagnostic["total_signal_used_for_draw_prone"] == "expected_total_goals=2.100"
 
 
 def test_draw_prone_flag_does_not_trigger_for_strong_favourite() -> None:
     diagnostic = _draw_prone_diagnostic(
         ou_median_total=2.0,
+        expected_total_goals=2.1,
         favourite_probability=0.72,
         market_draw_probability=0.20,
         recommendation=_sample_ev_modal_recommendation(),
@@ -484,7 +502,7 @@ def test_btts_conflict_flag_triggers_for_close_btts_alternative() -> None:
         recommended_expected_points=4.20,
         market_btts_yes=0.49,
         model_btts_yes=0.47,
-        favourite_probability=0.52,
+        favourite_probability=0.48,
         draw_prone_flag=False,
         evaluations=evaluations,
         config=ProjectConfig(enable_margin_method_comparison=False),

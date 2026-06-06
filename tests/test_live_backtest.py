@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import warnings
 
@@ -11,6 +12,7 @@ from openpyxl import load_workbook
 
 from wc_predictor.scoring_rules import score_group_prediction
 from wc_predictor.live_backtest import (
+    BLEND_DRAW_RESEARCH_CONFIGS,
     DEFAULT_BACKTEST_CONFIGS,
     QUICK_BACKTEST_CONFIGS,
     RESEARCH_BACKTEST_CONFIGS,
@@ -18,7 +20,9 @@ from wc_predictor.live_backtest import (
     LiveBacktestSettings,
     _build_correct_score_blend_sweep,
     _build_draw_threshold_sweep,
+    _build_ev_vs_modal_attribution,
     _build_larger_grid_sweep,
+    _build_timing_summary,
     _build_round_summary,
     _build_summary,
     _classify_missing_odds,
@@ -29,7 +33,9 @@ from wc_predictor.live_backtest import (
     _score_strategies,
     _sheet_or_status,
     load_historical_results,
+    run_combined_live_backtest,
     run_live_backtest,
+    without_market_consistent_configs,
 )
 
 CORE_FIXTURES = Path("tests/fixtures/oddsportal_core_pastes")
@@ -124,6 +130,30 @@ def _simple_settings(
         excel_output_path=tmp_path / "backtest.xlsx",
         configs=configs,
     )
+
+
+def _write_tournament_folder(root: Path, label: str, match_ids: list[str]) -> Path:
+    tournament = root / label
+    odds_folder = tournament / "odds"
+    for match_id in match_ids:
+        _write_combined_paste(odds_folder, match_id)
+    _write_results_csv(
+        tournament / "results.csv",
+        [
+            {
+                "match_id": match_id,
+                "date": "2022-11-20",
+                "stage": "group stage",
+                "group": "A",
+                "team_a": "Team A",
+                "team_b": "Team B",
+                "actual_score_a": 1,
+                "actual_score_b": 0,
+            }
+            for match_id in match_ids
+        ],
+    )
+    return tournament
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +279,37 @@ def test_score_strategies_includes_market_consistent_when_mc_ran() -> None:
     assert mc["model_expected_points"] == pytest.approx(5.8)
     ev = next(s for s in strategies if s["strategy"] == "ev_default")
     assert ev["realised_points"] == 5  # correct result only (1-0 vs 2-0: different gd)
+
+
+def test_score_strategies_exports_realised_ah_cover_fields() -> None:
+    row = pd.Series({
+        "recommended_score": "2-0",
+        "baseline_poisson_recommended_score": "2-0",
+        "most_likely_scoreline": "2-0",
+        "dixon_coles_recommended_score": "2-0",
+        "market_consistent_status": "skipped",
+        "best_expected_points": 5.5,
+        "baseline_poisson_best_expected_points": 5.5,
+        "most_likely_expected_points": 5.0,
+        "dixon_coles_best_expected_points": 5.5,
+        "team_a": "Team A",
+        "team_b": "Team B",
+        "favourite_team": "Team A",
+        "selected_ah_line": -1.5,
+        "representative_ah_line": -1.5,
+        "ah_implied_favourite_cover_probability": 0.60,
+        "ah_line_kind": "half_goal",
+        "ah_selected_skipped_reason": "selected_near_money",
+    })
+
+    strategies = _score_strategies(row, actual_a=2, actual_b=0)
+
+    ev = next(s for s in strategies if s["strategy"] == "ev_default")
+    assert ev["ah_implied_favourite_cover_probability"] == pytest.approx(0.60)
+    assert ev["realised_favourite_cover"] == "yes"
+    assert ev["favourite_covered_ah"] == "yes"
+    assert ev["realised_cover_margin"] == pytest.approx(0.5)
+    assert ev["ah_cover_error"] == pytest.approx(0.40)
 
 
 def test_build_summary_adds_expected_and_actual_point_totals() -> None:
@@ -508,10 +569,11 @@ def test_draw_threshold_sweep_produces_summary_rows() -> None:
     summary, matches = _build_draw_threshold_sweep(_sweep_predictions())
 
     assert not summary.empty
-    assert {"favourite_threshold", "draw_gap_threshold", "ou_median_threshold"}.issubset(summary.columns)
+    assert {"favourite_threshold", "draw_gap_threshold", "expected_total_goals_threshold"}.issubset(summary.columns)
     assert summary["n_flagged"].gt(0).any()
     assert not matches.empty
     assert "points_gain" in summary.columns
+    assert "total_signal_used_for_draw_prone" in matches.columns
 
 
 def test_empty_sheet_policy_writes_status_row() -> None:
@@ -575,6 +637,16 @@ def test_backtest_produces_summary_and_predictions_for_single_match(
     assert (tmp_path / "backtest.xlsx").exists()
     workbook = load_workbook(tmp_path / "backtest.xlsx", read_only=True)
     assert "group_stage_rounds" not in workbook.sheetnames
+    assert "combined_strategy_ranking" in workbook.sheetnames
+    assert "strategy_by_tournament" in workbook.sheetnames
+    assert "strategy_by_round" in workbook.sheetnames
+    assert "ev_vs_modal_combined" in workbook.sheetnames
+    assert "mc_ah_attribution" in workbook.sheetnames
+    assert "ah_cover_calibration" in workbook.sheetnames
+    assert "draw_prone_diagnostics" in workbook.sheetnames
+    assert "larger_grid_diagnostics" in workbook.sheetnames
+    assert "flag_frequency_and_performance" in workbook.sheetnames
+    assert "cs_weight_sweep_combined" in workbook.sheetnames
     assert "matchday_performance" in workbook.sheetnames
     assert "ev_vs_modal_attribution" in workbook.sheetnames
     assert "draw_prone_matches" in workbook.sheetnames
@@ -616,6 +688,112 @@ def test_research_mode_backtest_export_completes_on_synthetic_data(tmp_path: Pat
     assert not any("Title is more than 31 characters" in str(warning.message) for warning in caught)
     ev_row = report.predictions[report.predictions["strategy"] == "ev_default"].iloc[0]
     assert ev_row["predicted_score"] == ev_row["ev_default_score"]
+
+
+def test_csv_only_export_skips_excel_and_writes_timing_csv(tmp_path: Path) -> None:
+    settings = replace(
+        _simple_settings(tmp_path, ["M001"]),
+        export_csv_only=True,
+    )
+
+    report = run_live_backtest(settings, export=True, progress=False)
+
+    timing_csv = tmp_path / "predictions_runtime_timings.csv"
+    assert (tmp_path / "summary.csv").exists()
+    assert (tmp_path / "predictions.csv").exists()
+    assert not (tmp_path / "backtest.xlsx").exists()
+    assert timing_csv.exists()
+    assert "model_run" in set(report.timings["phase"])
+    assert "export_csv" in set(report.timings["phase"])
+
+
+def test_timing_summary_groups_by_phase_and_config() -> None:
+    timings = pd.DataFrame(
+        [
+            {"tournament": "wc2018", "phase": "model_run", "config": "baseline_ev", "seconds": 1.0},
+            {"tournament": "wc2018", "phase": "model_run", "config": "baseline_ev", "seconds": 2.0},
+            {"tournament": "wc2018", "phase": "core_odds_parse", "config": "", "seconds": 0.5},
+        ]
+    )
+
+    summary = _build_timing_summary(timings)
+
+    model = summary[
+        (summary["phase"] == "model_run")
+        & (summary["config"] == "baseline_ev")
+    ].iloc[0]
+    assert model["calls"] == 2
+    assert model["total_seconds"] == pytest.approx(3.0)
+
+
+def test_second_backtest_run_uses_parsed_odds_cache(tmp_path: Path) -> None:
+    settings = _simple_settings(tmp_path, ["M001"])
+
+    first = run_live_backtest(settings, export=False, progress=False)
+    second = run_live_backtest(settings, export=False, progress=False)
+
+    assert not first.predictions.empty
+    assert not second.predictions.empty
+    notes = set(second.timings["notes"].astype(str))
+    assert "cache_hit" in notes
+
+
+def test_calibration_cache_reuses_baseline_matrix_across_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wc_predictor import workflow as workflow_module
+
+    calls = 0
+    original = workflow_module.calibrate_poisson_model
+
+    def wrapped_calibrate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(workflow_module, "calibrate_poisson_model", wrapped_calibrate)
+    settings = _simple_settings(
+        tmp_path,
+        ["M001"],
+        configs=(DEFAULT_BACKTEST_CONFIGS[0], BLEND_DRAW_RESEARCH_CONFIGS[1]),
+    )
+
+    report = run_live_backtest(settings, export=False, progress=False)
+
+    assert not report.predictions.empty
+    assert calls == 1
+
+
+def test_combined_backtest_produces_tournament_labelled_rows(tmp_path: Path) -> None:
+    tournament_2018 = _write_tournament_folder(tmp_path, "wc2018", ["M001"])
+    tournament_2022 = _write_tournament_folder(tmp_path, "wc2022", ["M001"])
+
+    report = run_combined_live_backtest(
+        (tournament_2018, tournament_2022),
+        cache_folder=tmp_path / "cache",
+        summary_output_path=tmp_path / "combined" / "summary.csv",
+        predictions_output_path=tmp_path / "combined" / "predictions.csv",
+        excel_output_path=tmp_path / "combined" / "backtest.xlsx",
+        configs=(DEFAULT_BACKTEST_CONFIGS[0],),
+        export=True,
+        progress=False,
+    )
+
+    assert set(report.predictions["tournament"]) == {"wc2018", "wc2022"}
+    summary_row = report.summary[
+        (report.summary["config"] == "baseline_ev")
+        & (report.summary["strategy"] == "ev_default")
+    ].iloc[0]
+    assert summary_row["matches_used"] == 2
+    assert len(_build_ev_vs_modal_attribution(report.predictions)) == 2
+    assert (tmp_path / "cache" / "wc2018" / "split_pastes").exists()
+    assert (tmp_path / "cache" / "wc2022" / "split_pastes").exists()
+    assert (tmp_path / "combined" / "backtest.xlsx").exists()
+    workbook = load_workbook(tmp_path / "combined" / "backtest.xlsx", read_only=True)
+    assert "strategy_by_tournament" in workbook.sheetnames
+    assert "combined_strategy_ranking" in workbook.sheetnames
+    assert not report.timings.empty
 
 
 def test_backtest_produces_output_for_multiple_matches(tmp_path: Path) -> None:
@@ -722,3 +900,13 @@ def test_research_configs_include_requested_sweeps() -> None:
     assert "cs_weight_0_5" in names
     assert "modal_draw_fav_0_45_gap_m0_7" in names
     assert "larger_grid_15" in names
+
+
+def test_blend_draw_research_configs_disable_mc_configs() -> None:
+    names = {c.name for c in BLEND_DRAW_RESEARCH_CONFIGS}
+
+    assert "baseline_ev" in names
+    assert "cs_weight_0_85" in names
+    assert "modal_draw_fav_0_45_gap_m0_7" in names
+    assert not any("mc" in name for name in names)
+    assert {c.name for c in without_market_consistent_configs(RESEARCH_BACKTEST_CONFIGS)}.issuperset(names)

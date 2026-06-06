@@ -173,6 +173,9 @@ The historical live backtest has an additional `BACKTEST_PROFILE = "research"`
 mode with correct-score blend-weight sweeps, modal/draw threshold sweeps, and a
 larger-grid configuration. Correct-score blend value remains unproven until
 those sweeps are actually run on richer historical data.
+Local live-paste historical folders can follow `input/historical/wc2022/` or
+`input/historical/wc2018/`; the 2018 odds files are templates awaiting manual
+OddsPortal pastes.
 
 Public strategy remains diagnostic. Use `PUBLIC_STRATEGY_TARGET` /
 `public_strategy_target` values such as `friends`, `balanced`, or `national`

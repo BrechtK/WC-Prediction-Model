@@ -617,18 +617,30 @@ def _median_total_goals_line(
 def _draw_prone_diagnostic(
     *,
     ou_median_total: object,
+    expected_total_goals: object,
     favourite_probability: float,
     market_draw_probability: float,
     recommendation: GroupPredictionRecommendation | KnockoutPredictionRecommendation,
     draw_decisive: Mapping[str, object],
     config: ProjectConfig,
 ) -> dict[str, object]:
+    draw_vs_decisive_gap = draw_decisive.get("draw_vs_decisive_gap", pd.NA)
+    best_draw_score = str(draw_decisive.get("best_draw_score", "") or "")
+    modal_is_draw = recommendation.most_likely_scoreline[0] == recommendation.most_likely_scoreline[1]
+    draw_alternative_exists = bool(best_draw_score) or modal_is_draw
     flag = (
-        pd.notna(ou_median_total)
-        and float(ou_median_total) < config.strategies.draw_prone_ou_median_total_threshold
+        pd.notna(expected_total_goals)
+        and float(expected_total_goals) <= config.strategies.draw_prone_expected_total_goals_threshold
         and favourite_probability < config.strategies.draw_prone_favourite_probability_threshold
+        and recommendation.best.predicted_score[0] != recommendation.best.predicted_score[1]
+        and draw_alternative_exists
+        and pd.notna(draw_vs_decisive_gap)
+        and float(draw_vs_decisive_gap) > config.strategies.modal_draw_gap_threshold
     )
     soft_reasons: list[str] = []
+    soft_reasons.append(f"expected total {float(expected_total_goals):.3f}" if pd.notna(expected_total_goals) else "expected total unavailable")
+    if pd.notna(ou_median_total):
+        soft_reasons.append(f"O/U median line {float(ou_median_total):.2f}")
     if market_draw_probability >= 0.28:
         soft_reasons.append(f"market draw {market_draw_probability:.3f}")
     if recommendation.best.predicted_score[0] != recommendation.best.predicted_score[1]:
@@ -648,6 +660,11 @@ def _draw_prone_diagnostic(
     return {
         "draw_prone_flag": "yes" if flag else "no",
         "draw_prone_reason": reason,
+        "total_signal_used_for_draw_prone": (
+            f"expected_total_goals={float(expected_total_goals):.3f}"
+            if pd.notna(expected_total_goals)
+            else "expected_total_goals_unavailable"
+        ),
         "market_draw_probability": market_draw_probability,
     }
 
@@ -712,7 +729,14 @@ def _asian_handicap_favourite_summary(
     favourite_is_team_a: bool,
 ) -> dict[str, object]:
     if match_asian_handicap.empty or "handicap" not in match_asian_handicap:
-        return {"ah_implied_favourite_margin": pd.NA, "favourite_covered_ah": pd.NA}
+        return {
+            "selected_ah_line": pd.NA,
+            "representative_ah_line": pd.NA,
+            "ah_implied_favourite_margin": pd.NA,
+            "ah_implied_favourite_cover_probability": pd.NA,
+            "ah_line_kind": "",
+            "ah_selected_skipped_reason": "",
+        }
     rows = match_asian_handicap.copy()
     if "selected_for_market_consistent" in rows:
         selected = rows[rows["selected_for_market_consistent"].astype(str).str.lower().eq("yes")]
@@ -727,9 +751,14 @@ def _asian_handicap_favourite_summary(
         direction_rows = direction_rows.sort_values(["bookmakers_count", "handicap"], ascending=[False, True])
     row = direction_rows.iloc[0]
     probability_column = "fair_team_a" if favourite_is_team_a else "fair_team_b"
+    selected_reason = str(row.get("selection_reason", row.get("warnings", "")) or "")
     return {
+        "selected_ah_line": float(row["handicap"]) if pd.notna(row.get("handicap")) else pd.NA,
+        "representative_ah_line": float(row["handicap"]) if pd.notna(row.get("handicap")) else pd.NA,
         "ah_implied_favourite_margin": abs(float(row["handicap"])) if pd.notna(row.get("handicap")) else pd.NA,
-        "favourite_covered_ah": row.get(probability_column, pd.NA),
+        "ah_implied_favourite_cover_probability": row.get(probability_column, pd.NA),
+        "ah_line_kind": row.get("line_kind", ""),
+        "ah_selected_skipped_reason": selected_reason,
     }
 
 
@@ -1618,6 +1647,21 @@ def _build_final_decision_dashboard(
         )
         if asian_handicap_shift:
             risk_notes = "; ".join(filter(None, [risk_notes, "asian_handicap_shifts_market_consistent_score"]))
+        severe_warning = any(
+            flag
+            for flag in str(row.get("warning_flags", "")).split("; ")
+            if flag
+            and (
+                "poor_calibration" in flag
+                or "high_tail_mass" in flag
+                or "larger_grid_sensitivity" in flag
+                or "stale_odds" in flag
+                or "market_consistent_optimisation_failed" in flag
+                or "market_consistent_constraint_fit_poor" in flag
+                or "knockout_scoring_unverified" in flag
+                or "asian_handicap_orientation_suspicious" in flag
+            )
+        )
         manual_review = any(
             [
                 ev_gap_small,
@@ -1630,7 +1674,7 @@ def _build_final_decision_dashboard(
                 btts_conflict,
                 draw_prone,
                 blowout_risk,
-                bool(risk_notes),
+                severe_warning,
             ]
         )
         override_candidate = bool(main_alternative_score and manual_review)
@@ -1908,6 +1952,30 @@ def _warning_flags(
     return "; ".join(flags)
 
 
+def _calibration_cache_key(
+    match_id: str,
+    targets: CalibrationTargets,
+    config: ProjectConfig,
+) -> tuple[object, ...]:
+    weights = config.calibration_weights
+    return (
+        match_id,
+        round(float(targets.a_win), 12),
+        round(float(targets.draw), 12),
+        round(float(targets.b_win), 12),
+        None if targets.over_2_5 is None or pd.isna(targets.over_2_5) else round(float(targets.over_2_5), 12),
+        None if targets.btts_yes is None or pd.isna(targets.btts_yes) else round(float(targets.btts_yes), 12),
+        tuple((round(float(line), 4), round(float(probability), 12)) for line, probability in targets.total_goals_over),
+        int(config.max_goals_score_matrix),
+        bool(config.renormalise_score_matrix),
+        round(float(config.poor_calibration_loss_threshold), 12),
+        round(float(weights.one_x_two), 12),
+        round(float(weights.over_under_2_5), 12),
+        round(float(weights.total_goals_lines), 12),
+        round(float(weights.btts), 12),
+    )
+
+
 def run_prediction_workflow(
     odds: pd.DataFrame,
     predictions: pd.DataFrame | None = None,
@@ -1917,6 +1985,7 @@ def run_prediction_workflow(
     asian_handicap_odds: pd.DataFrame | None = None,
     runtime_timings: dict[str, float] | None = None,
     extra_warning_flags_by_match: Mapping[str, Sequence[str]] | None = None,
+    calibration_cache: dict[tuple[object, ...], object] | None = None,
 ) -> PredictionWorkflowResult:
     """Produce market-implied score recommendations and optional friend EV analysis."""
 
@@ -2029,13 +2098,19 @@ def run_prediction_workflow(
             _optional_probability(row, "fair_btts_yes"),
             total_goals_targets,
         )
-        calibration = calibrate_poisson_model(
-            targets,
-            config.max_goals_score_matrix,
-            config.calibration_weights,
-            config.renormalise_score_matrix,
-            config.poor_calibration_loss_threshold,
-        )
+        calibration_cache_key = _calibration_cache_key(match_id, targets, config)
+        if calibration_cache is not None and calibration_cache_key in calibration_cache:
+            calibration = calibration_cache[calibration_cache_key]
+        else:
+            calibration = calibrate_poisson_model(
+                targets,
+                config.max_goals_score_matrix,
+                config.calibration_weights,
+                config.renormalise_score_matrix,
+                config.poor_calibration_loss_threshold,
+            )
+            if calibration_cache is not None:
+                calibration_cache[calibration_cache_key] = calibration
         poisson_matrix = calibration.score_matrix
         match_asian_handicap = select_asian_handicap_constraints(
             match_asian_handicap,
@@ -2795,6 +2870,7 @@ def run_prediction_workflow(
         )
         draw_prone = _draw_prone_diagnostic(
             ou_median_total=ou_median_total,
+            expected_total_goals=score_audit["expected_total_goals"],
             favourite_probability=favourite_probability,
             market_draw_probability=targets.draw,
             recommendation=recommendation,

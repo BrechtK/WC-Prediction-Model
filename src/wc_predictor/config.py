@@ -180,9 +180,10 @@ class StrategyConfig:
     modal_draw_gap_threshold: float = -0.70
     modal_draw_ev_gap_threshold: float = 0.70
     btts_conflict_probability_threshold: float = 0.45
-    btts_conflict_favourite_probability_threshold: float = 0.60
+    btts_conflict_favourite_probability_threshold: float = 0.50
     btts_conflict_ev_gap_threshold: float = 0.70
     draw_prone_ou_median_total_threshold: float = 2.25
+    draw_prone_expected_total_goals_threshold: float = 2.35
     draw_prone_favourite_probability_threshold: float = 0.50
     blowout_favourite_probability_threshold: float = 0.70
     blowout_ou_median_total_threshold: float = 2.60
@@ -201,6 +202,7 @@ class StrategyConfig:
             "btts_conflict_favourite_probability_threshold",
             "btts_conflict_ev_gap_threshold",
             "draw_prone_ou_median_total_threshold",
+            "draw_prone_expected_total_goals_threshold",
             "draw_prone_favourite_probability_threshold",
             "blowout_favourite_probability_threshold",
             "blowout_ou_median_total_threshold",

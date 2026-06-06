@@ -75,12 +75,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from wc_predictor.live_backtest import (
+    BLEND_DRAW_RESEARCH_CONFIGS,
     DEFAULT_BACKTEST_CONFIGS,
     QUICK_BACKTEST_CONFIGS,
     RESEARCH_BACKTEST_CONFIGS,
     BacktestConfigEntry,
     LiveBacktestSettings,
+    run_combined_live_backtest,
     run_live_backtest,
+    without_market_consistent_configs,
 )
 from wc_predictor.config import DevigConfig, MarketConsistentGroupWeights, ProjectConfig
 
@@ -89,7 +92,29 @@ from wc_predictor.config import DevigConfig, MarketConsistentGroupWeights, Proje
 # ============================================================
 
 # Path to the folder that contains results.csv and the odds/ subfolder.
-TOURNAMENT_FOLDER = Path("input/historical/wc2022")
+# Used only when running a single tournament.
+TOURNAMENT_FOLDER = Path("input/historical/wc2018")
+
+# Set multiple folders to produce a combined tournament-labelled workbook.
+TOURNAMENT_FOLDERS = (
+    Path("input/historical/wc2018"),
+    Path("input/historical/wc2022"),
+)
+
+# "quick" tests 2 configs: baseline + MC-with-AH
+# "standard" tests 5 configs: baseline, devig, MC, MC+AH, MC+DC+AH
+# "research_fast" tests baseline + blend-weight + modal/draw-threshold sweeps (no MC)
+# "research" adds full blend-weight, modal/draw-threshold, larger-grid, and MC configs
+# "custom" uses CUSTOM_CONFIGS below
+BACKTEST_PROFILE = "research_fast"
+
+# Fast iteration switches.
+EXPORT_CSV_ONLY = True
+ENABLE_PARSED_ODDS_CACHE = True
+ENABLE_CALIBRATION_CACHE = True
+
+# Useful when focusing only on blend weights/draw thresholds.
+DISABLE_MARKET_CONSISTENT_CONFIGS = False
 
 # Filename of the results CSV inside TOURNAMENT_FOLDER.
 RESULTS_FILENAME = "results.csv"
@@ -97,16 +122,14 @@ RESULTS_FILENAME = "results.csv"
 # Subfolder (inside TOURNAMENT_FOLDER) that contains the combined paste files.
 ODDS_SUBFOLDER = "odds"
 
-# "standard" tests 5 configs (recommended for first run)
-# "quick"    tests 2 configs: baseline + MC-with-AH (fastest)
-# "research" adds blend-weight, modal/draw-threshold, and larger-grid sweeps
-# "custom"   uses CUSTOM_CONFIGS below
-BACKTEST_PROFILE = "research"
-
 # Output paths (relative to project root).
 SUMMARY_OUTPUT = Path("output/research/live_backtest_summary.csv")
 PREDICTIONS_OUTPUT = Path("output/research/live_backtest_predictions.csv")
 EXCEL_OUTPUT = Path("output/research/live_backtest.xlsx")
+
+COMBINED_SUMMARY_OUTPUT = Path("output/research/combined_backtest/live_backtest_summary.csv")
+COMBINED_PREDICTIONS_OUTPUT = Path("output/research/combined_backtest/live_backtest_predictions.csv")
+COMBINED_EXCEL_OUTPUT = Path("output/research/combined_backtest/live_backtest.xlsx")
 
 # Cache folder for split paste files.
 CACHE_FOLDER = Path("cache/live_backtest/split_pastes")
@@ -144,6 +167,8 @@ def main() -> None:
         configs = DEFAULT_BACKTEST_CONFIGS
     elif BACKTEST_PROFILE == "quick":
         configs = QUICK_BACKTEST_CONFIGS
+    elif BACKTEST_PROFILE == "research_fast":
+        configs = BLEND_DRAW_RESEARCH_CONFIGS
     elif BACKTEST_PROFILE == "research":
         configs = RESEARCH_BACKTEST_CONFIGS
     elif BACKTEST_PROFILE == "custom":
@@ -157,35 +182,74 @@ def main() -> None:
     else:
         raise ValueError(
             f"Unknown BACKTEST_PROFILE {BACKTEST_PROFILE!r}. "
-            "Use 'standard', 'quick', 'research', or 'custom'."
+            "Use 'quick', 'standard', 'research_fast', 'research', or 'custom'."
         )
 
-    odds_folder = TOURNAMENT_FOLDER / ODDS_SUBFOLDER
-    results_path = TOURNAMENT_FOLDER / RESULTS_FILENAME
+    if DISABLE_MARKET_CONSISTENT_CONFIGS:
+        configs = without_market_consistent_configs(configs)
 
-    if not results_path.exists():
-        raise SystemExit(
-            f"\n{results_path} not found.\n\n"
-            "Create it from the template:\n"
-            "  templates/historical_results_template.csv\n\n"
-            "Required columns: match_id, team_a, team_b, actual_score_a, actual_score_b\n"
-            "Optional columns: date, stage, group"
-        )
+    tournament_folders = tuple(TOURNAMENT_FOLDERS)
+    if not tournament_folders:
+        raise SystemExit("TOURNAMENT_FOLDERS must contain at least one tournament folder.")
 
-    if not odds_folder.exists() or not any(odds_folder.glob("*.txt")):
-        raise SystemExit(
-            f"\nNo .txt paste files found in {odds_folder}.\n\n"
-            "Create combined paste files using the same format as the live tool:\n"
-            f"  {odds_folder}/M001.txt\n"
-            f"  {odds_folder}/M002.txt\n\n"
-            "Each file needs at minimum:\n"
-            "  ### MATCH\n"
-            "  Team A vs Team B\n\n"
-            "  ### 1X2\n"
-            "  <paste OddsPortal 1X2 table>\n\n"
-            "Optional sections:\n"
-            "  ### OVER_UNDER   ### BTTS   ### CORRECT_SCORE   ### ASIAN_HANDICAP"
+    for tournament_folder in tournament_folders:
+        odds_folder = tournament_folder / ODDS_SUBFOLDER
+        results_path = tournament_folder / RESULTS_FILENAME
+
+        if not results_path.exists():
+            raise SystemExit(
+                f"\n{results_path} not found.\n\n"
+                "Create it from the template:\n"
+                "  templates/historical_results_template.csv\n\n"
+                "Required columns: match_id, team_a, team_b, actual_score_a, actual_score_b\n"
+                "Optional columns: date, stage, group"
+            )
+
+        if not odds_folder.exists() or not any(odds_folder.glob("*.txt")):
+            raise SystemExit(
+                f"\nNo .txt paste files found in {odds_folder}.\n\n"
+                "Create combined paste files using the same format as the live tool:\n"
+                f"  {odds_folder}/M001.txt\n"
+                f"  {odds_folder}/M002.txt\n\n"
+                "Each file needs at minimum:\n"
+                "  ### MATCH\n"
+                "  Team A vs Team B\n\n"
+                "  ### 1X2\n"
+                "  <paste OddsPortal 1X2 table>\n\n"
+                "Optional sections:\n"
+                "  ### OVER_UNDER   ### BTTS   ### CORRECT_SCORE   ### ASIAN_HANDICAP"
+            )
+
+    if len(tournament_folders) > 1:
+        print("=" * 60)
+        print("Combined Live-Pipeline Historical Backtest")
+        print(f"  Tournaments: {', '.join(str(folder) for folder in tournament_folders)}")
+        print(f"  Profile    : {BACKTEST_PROFILE} ({len(configs)} configs)")
+        print(f"  CSV only   : {EXPORT_CSV_ONLY}")
+        print(f"  Output     : {COMBINED_EXCEL_OUTPUT}")
+        print("=" * 60)
+        print()
+
+        run_combined_live_backtest(
+            tournament_folders,
+            results_filename=RESULTS_FILENAME,
+            odds_subfolder=ODDS_SUBFOLDER,
+            cache_folder=CACHE_FOLDER / "combined",
+            summary_output_path=COMBINED_SUMMARY_OUTPUT,
+            predictions_output_path=COMBINED_PREDICTIONS_OUTPUT,
+            excel_output_path=COMBINED_EXCEL_OUTPUT,
+            configs=configs,
+            export_csv_only=EXPORT_CSV_ONLY,
+            enable_parsed_odds_cache=ENABLE_PARSED_ODDS_CACHE,
+            enable_calibration_cache=ENABLE_CALIBRATION_CACHE,
+            export=True,
+            progress=SHOW_PROGRESS,
         )
+        return
+
+    tournament_folder = tournament_folders[0]
+    odds_folder = tournament_folder / ODDS_SUBFOLDER
+    results_path = tournament_folder / RESULTS_FILENAME
 
     settings = LiveBacktestSettings(
         historical_odds_folder=odds_folder,
@@ -194,13 +258,18 @@ def main() -> None:
         summary_output_path=SUMMARY_OUTPUT,
         predictions_output_path=PREDICTIONS_OUTPUT,
         excel_output_path=EXCEL_OUTPUT,
+        tournament_label=tournament_folder.name,
+        export_csv_only=EXPORT_CSV_ONLY,
+        enable_parsed_odds_cache=ENABLE_PARSED_ODDS_CACHE,
+        enable_calibration_cache=ENABLE_CALIBRATION_CACHE,
         configs=configs,
     )
 
     print("=" * 60)
     print("Live-Pipeline Historical Backtest")
-    print(f"  Tournament : {TOURNAMENT_FOLDER}")
+    print(f"  Tournament : {tournament_folder}")
     print(f"  Profile    : {BACKTEST_PROFILE} ({len(configs)} configs)")
+    print(f"  CSV only   : {EXPORT_CSV_ONLY}")
     print(f"  Output     : {EXCEL_OUTPUT}")
     print("=" * 60)
     print()

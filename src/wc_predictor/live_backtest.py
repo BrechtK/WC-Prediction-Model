@@ -21,9 +21,11 @@ market-consistent matrices, Dixon-Coles or bivariate priors, etc.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import re
+import time
 
 import numpy as np
 import pandas as pd
@@ -204,6 +206,25 @@ RESEARCH_BACKTEST_CONFIGS: tuple[BacktestConfigEntry, ...] = (
     *LARGER_GRID_SWEEP_CONFIGS,
 )
 
+BLEND_DRAW_RESEARCH_CONFIGS: tuple[BacktestConfigEntry, ...] = (
+    DEFAULT_BACKTEST_CONFIGS[0],
+    *CORRECT_SCORE_BLEND_SWEEP_CONFIGS,
+    *MODAL_DRAW_THRESHOLD_SWEEP_CONFIGS,
+)
+
+
+def without_market_consistent_configs(
+    configs: Sequence[BacktestConfigEntry],
+) -> tuple[BacktestConfigEntry, ...]:
+    """Drop expensive market-consistent configs for focused research sweeps."""
+
+    return tuple(
+        config
+        for config in configs
+        if not bool(config.config.enable_market_consistent_challenger)
+        and "mc" not in config.name.lower()
+    )
+
 
 @dataclass(frozen=True)
 class LiveBacktestSettings:
@@ -215,6 +236,10 @@ class LiveBacktestSettings:
     summary_output_path: Path = field(default_factory=lambda: _DEFAULT_SUMMARY)
     predictions_output_path: Path = field(default_factory=lambda: _DEFAULT_PREDICTIONS)
     excel_output_path: Path = field(default_factory=lambda: _DEFAULT_EXCEL)
+    tournament_label: str = ""
+    export_csv_only: bool = False
+    enable_parsed_odds_cache: bool = True
+    enable_calibration_cache: bool = True
     configs: tuple[BacktestConfigEntry, ...] = field(
         default_factory=lambda: DEFAULT_BACKTEST_CONFIGS
     )
@@ -228,19 +253,97 @@ class LiveBacktestReport:
     predictions: pd.DataFrame
     skipped: pd.DataFrame
     round_summary: pd.DataFrame
+    timings: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def export(self, settings: LiveBacktestSettings) -> None:
-        for path in (
-            settings.summary_output_path,
-            settings.predictions_output_path,
-            settings.excel_output_path,
-        ):
+        export_start = time.perf_counter()
+        for path in (settings.summary_output_path, settings.predictions_output_path):
             ensure_parent_directory(path)
         self.summary.to_csv(settings.summary_output_path, index=False)
         self.predictions.to_csv(settings.predictions_output_path, index=False)
+        timings_output_path = settings.predictions_output_path.with_name(
+            f"{settings.predictions_output_path.stem}_runtime_timings.csv"
+        )
+        if settings.export_csv_only:
+            self._append_timing(
+                "export_csv",
+                time.perf_counter() - export_start,
+                notes="Excel export skipped by export_csv_only",
+            )
+            self.timings.to_csv(timings_output_path, index=False)
+            return
+
+        ensure_parent_directory(settings.excel_output_path)
+        excel_start = time.perf_counter()
         with pd.ExcelWriter(settings.excel_output_path, engine="openpyxl") as writer:
             self.summary.to_excel(writer, index=False, sheet_name="summary")
             self.predictions.to_excel(writer, index=False, sheet_name="predictions")
+            _sheet_or_status(
+                self.timings,
+                reason="No runtime timing rows were captured.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="phase timing instrumentation",
+            ).to_excel(writer, index=False, sheet_name="runtime_timings")
+            _sheet_or_status(
+                _build_timing_summary(self.timings),
+                reason="No runtime timing summary could be produced.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="group timings by phase/config",
+            ).to_excel(writer, index=False, sheet_name="runtime_summary")
+            _sheet_or_status(
+                _build_combined_strategy_ranking(self.predictions),
+                reason="No strategy ranking rows could be produced.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="group by config,strategy across all tournaments",
+            ).to_excel(writer, index=False, sheet_name="combined_strategy_ranking")
+            _sheet_or_status(
+                _build_grouped_performance(self.predictions, ["tournament", "config", "strategy"]),
+                reason="Tournament-labelled strategy rows were unavailable.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="group by tournament,config,strategy",
+            ).to_excel(writer, index=False, sheet_name="strategy_by_tournament")
+            _sheet_or_status(
+                _build_grouped_performance(self.predictions, ["tournament", "config", "strategy", "group_stage_playing_round"]),
+                reason="Round-labelled strategy rows were unavailable.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="group by tournament,config,strategy,group_stage_playing_round",
+            ).to_excel(writer, index=False, sheet_name="strategy_by_round")
+            _sheet_or_status(
+                _build_ev_vs_modal_attribution(self.predictions),
+                reason="EV and modal strategy rows were unavailable.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="strategy in {ev_default, most_likely}",
+            ).to_excel(writer, index=False, sheet_name="ev_vs_modal_combined")
+            _sheet_or_status(
+                _build_mc_ah_attribution(self.predictions),
+                reason="Market-consistent AH rows were unavailable.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="config contains mc and ah; strategy=market_consistent",
+            ).to_excel(writer, index=False, sheet_name="mc_ah_attribution")
+            _sheet_or_status(
+                _build_ah_cover_calibration(self.predictions),
+                reason="Asian-handicap cover diagnostics were unavailable.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="rows with selected_ah_line and realised_favourite_cover",
+            ).to_excel(writer, index=False, sheet_name="ah_cover_calibration")
+            _sheet_or_status(
+                _build_draw_prone_diagnostics(self.predictions),
+                reason="EV-default rows were unavailable for draw-prone diagnostics.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="strategy=ev_default",
+            ).to_excel(writer, index=False, sheet_name="draw_prone_diagnostics")
+            _sheet_or_status(
+                _build_larger_grid_diagnostics(self.predictions),
+                reason="Larger-grid diagnostics were unavailable.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="strategy=ev_default; larger grid/tail columns",
+            ).to_excel(writer, index=False, sheet_name="larger_grid_diagnostics")
+            _sheet_or_status(
+                _build_flag_frequency_and_performance(self.predictions),
+                reason="No flag-frequency rows could be produced.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="strategy=ev_default; known flag columns",
+            ).to_excel(writer, index=False, sheet_name="flag_frequency_and_performance")
             _sheet_or_status(
                 self.round_summary,
                 reason="No group-stage round rows were produced.",
@@ -305,6 +408,12 @@ class LiveBacktestReport:
                 reason="No cs_weight_* configs were run. Use BACKTEST_PROFILE = 'research'.",
                 matches_evaluated=_matches_evaluated(self.predictions),
                 filters_applied="config starts with cs_weight_; strategy=ev_default",
+            ).to_excel(writer, index=False, sheet_name="cs_weight_sweep_combined")
+            _sheet_or_status(
+                cs_summary,
+                reason="No cs_weight_* configs were run. Use BACKTEST_PROFILE = 'research'.",
+                matches_evaluated=_matches_evaluated(self.predictions),
+                filters_applied="config starts with cs_weight_; strategy=ev_default",
             ).to_excel(writer, index=False, sheet_name="correct_score_blend_sweep")
             _sheet_or_status(
                 cs_matches,
@@ -358,6 +467,32 @@ class LiveBacktestReport:
             ).to_excel(writer, index=False, sheet_name="manual_review_performance")
             if not self.skipped.empty:
                 self.skipped.to_excel(writer, index=False, sheet_name="skipped")
+        self._append_timing("export_excel", time.perf_counter() - excel_start)
+        self.timings.to_csv(timings_output_path, index=False)
+
+    def _append_timing(
+        self,
+        phase: str,
+        seconds: float,
+        *,
+        config: str = "",
+        match_id: str = "",
+        tournament: str = "",
+        notes: str = "",
+    ) -> None:
+        row = pd.DataFrame(
+            [
+                {
+                    "phase": phase,
+                    "config": config,
+                    "match_id": match_id,
+                    "tournament": tournament,
+                    "seconds": float(seconds),
+                    "notes": notes,
+                }
+            ]
+        )
+        object.__setattr__(self, "timings", pd.concat([self.timings, row], ignore_index=True))
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +561,7 @@ def _inject_match_metadata(
     for col in ("date", "stage", "group", "team_a", "team_b"):
         if col not in odds.columns:
             odds[col] = ""
+        odds[col] = odds[col].astype(object)
     for match_id, row_meta in meta.items():
         mask = odds["match_id"].astype(str) == match_id
         if not mask.any():
@@ -466,6 +602,41 @@ def _parse_score(value: object) -> tuple[int, int] | None:
         return int(parts[0]), int(parts[1])
     except (ValueError, IndexError):
         return None
+
+
+def _ah_realised_cover_diagnostics(
+    report_row: pd.Series,
+    actual_a: int,
+    actual_b: int,
+) -> dict[str, object]:
+    line = pd.to_numeric(report_row.get("selected_ah_line", pd.NA), errors="coerce")
+    probability = pd.to_numeric(report_row.get("ah_implied_favourite_cover_probability", pd.NA), errors="coerce")
+    if pd.isna(line):
+        return {
+            "realised_favourite_cover": "",
+            "realised_cover_margin": pd.NA,
+            "favourite_covered_ah": "",
+            "ah_cover_error": pd.NA,
+        }
+    favourite_team = str(report_row.get("favourite_team", ""))
+    team_a = str(report_row.get("team_a", ""))
+    team_b = str(report_row.get("team_b", ""))
+    if favourite_team == team_b:
+        cover_margin = float(actual_b - actual_a - line)
+    else:
+        cover_margin = float(actual_a - actual_b + line)
+    realised = "push" if np.isclose(cover_margin, 0.0) else "yes" if cover_margin > 0 else "no"
+    realised_value = 0.5 if realised == "push" else 1.0 if realised == "yes" else 0.0
+    return {
+        "realised_favourite_cover": realised,
+        "realised_cover_margin": cover_margin,
+        "favourite_covered_ah": realised,
+        "ah_cover_error": (
+            realised_value - float(probability)
+            if pd.notna(probability)
+            else pd.NA
+        ),
+    }
 
 
 def _match_number(match_id: object) -> int | None:
@@ -569,6 +740,7 @@ def _score_strategies(
         "ev_gap_to_best_btts_alternative",
         "draw_prone_flag",
         "draw_prone_reason",
+        "total_signal_used_for_draw_prone",
         "market_draw_probability",
         "blowout_risk_flag",
         "blowout_risk_reason",
@@ -581,8 +753,16 @@ def _score_strategies(
         "tail_mass_before_grid_extension",
         "tail_mass_after_grid_extension",
         "recommendation_changed_due_to_larger_grid",
+        "selected_ah_line",
+        "representative_ah_line",
         "ah_implied_favourite_margin",
+        "ah_implied_favourite_cover_probability",
+        "realised_favourite_cover",
+        "realised_cover_margin",
         "favourite_covered_ah",
+        "ah_cover_error",
+        "ah_line_kind",
+        "ah_selected_skipped_reason",
         "correct_score_top_scores",
         "has_other_bucket",
         "correct_score_tail_mass",
@@ -614,6 +794,7 @@ def _score_strategies(
             continue
         pred_a, pred_b = score
         points = score_group_prediction(pred_a, pred_b, actual_a, actual_b)
+        ah_cover = _ah_realised_cover_diagnostics(report_row, actual_a, actual_b)
         rows.append(
             {
                 "strategy": strategy_name,
@@ -637,6 +818,7 @@ def _score_strategies(
                 "calibration_loss": report_row.get("calibration_loss", np.nan),
                 "warning_flags": str(report_row.get("warning_flags", "")),
                 **shared_diagnostics,
+                **ah_cover,
             }
         )
     return rows
@@ -738,8 +920,23 @@ def _build_round_summary(predictions: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+def _match_key_columns(frame: pd.DataFrame) -> list[str]:
+    if "tournament" in frame.columns and frame["tournament"].astype(str).str.strip().any():
+        return ["tournament", "match_id"]
+    return ["match_id"]
+
+
+def _row_key(row: pd.Series, key_columns: list[str]) -> object:
+    if len(key_columns) == 1:
+        return row.get(key_columns[0])
+    return tuple(row.get(column) for column in key_columns)
+
+
 def _matches_evaluated(predictions: pd.DataFrame) -> int:
-    return int(predictions["match_id"].nunique()) if not predictions.empty and "match_id" in predictions else 0
+    if predictions.empty or "match_id" not in predictions:
+        return 0
+    key_columns = _match_key_columns(predictions)
+    return int(predictions[key_columns].drop_duplicates().shape[0])
 
 
 def _status_frame(reason: str, *, matches_evaluated: int, filters_applied: str) -> pd.DataFrame:
@@ -765,6 +962,38 @@ def _sheet_or_status(
     if frame is not None and not frame.empty:
         return frame
     return _status_frame(reason, matches_evaluated=matches_evaluated, filters_applied=filters_applied)
+
+
+def _latest_mtime(paths: Sequence[Path]) -> float | None:
+    existing = [path.stat().st_mtime for path in paths if path.exists()]
+    return max(existing) if existing else None
+
+
+def _folder_files(folder: Path, pattern: str = "*.txt") -> list[Path]:
+    if not folder.exists():
+        return []
+    return list(folder.glob(pattern))
+
+
+def _outputs_are_fresh(outputs: Sequence[Path], sources: Sequence[Path]) -> bool:
+    if not outputs or any(not output.exists() for output in outputs):
+        return False
+    output_mtime = _latest_mtime(outputs)
+    source_mtime = _latest_mtime(sources)
+    if output_mtime is None:
+        return False
+    if source_mtime is None:
+        return True
+    return output_mtime >= source_mtime
+
+
+def _read_cached_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 def _ev_default_rows(predictions: pd.DataFrame) -> pd.DataFrame:
@@ -830,6 +1059,58 @@ def _build_grouped_performance(predictions: pd.DataFrame, group_columns: list[st
     return pd.DataFrame(rows).sort_values(group_columns, kind="stable").reset_index(drop=True)
 
 
+def _build_combined_strategy_ranking(predictions: pd.DataFrame) -> pd.DataFrame:
+    ranking = _build_grouped_performance(predictions, ["config", "strategy"])
+    if ranking.empty:
+        return ranking
+    ranking = ranking.sort_values(
+        ["average_realised_points", "actual_points_sum", "average_expected_points"],
+        ascending=[False, False, False],
+        kind="stable",
+    ).reset_index(drop=True)
+    ranking.insert(0, "rank", range(1, len(ranking) + 1))
+    return ranking
+
+
+def _build_timing_summary(timings: pd.DataFrame) -> pd.DataFrame:
+    if timings.empty or "phase" not in timings or "seconds" not in timings:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    group_columns = [column for column in ("tournament", "phase", "config") if column in timings.columns]
+    for keys, group in timings.groupby(group_columns, dropna=False, sort=True):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        seconds = pd.to_numeric(group["seconds"], errors="coerce").fillna(0.0)
+        rows.append(
+            {
+                **dict(zip(group_columns, keys, strict=True)),
+                "calls": len(group),
+                "total_seconds": float(seconds.sum()),
+                "average_seconds": float(seconds.mean()),
+                "max_seconds": float(seconds.max()),
+            }
+        )
+    summary = pd.DataFrame(rows)
+    return summary.sort_values(["total_seconds"], ascending=False, kind="stable").reset_index(drop=True)
+
+
+def _format_timing_summary(timings: pd.DataFrame, *, limit: int = 12) -> str:
+    summary = _build_timing_summary(timings)
+    if summary.empty:
+        return ""
+    lines = ["Runtime timing summary:"]
+    for _, row in summary.head(limit).iterrows():
+        config = str(row.get("config", "") or "")
+        config_text = f" / {config}" if config else ""
+        tournament = str(row.get("tournament", "") or "")
+        tournament_text = f"{tournament} / " if tournament else ""
+        lines.append(
+            f"  {tournament_text}{row['phase']}{config_text}: "
+            f"{float(row['total_seconds']):.2f}s over {int(row['calls'])} calls"
+        )
+    return "\n".join(lines)
+
+
 def _build_named_config_summary(predictions: pd.DataFrame, *, prefix: str) -> pd.DataFrame:
     if predictions.empty or "config" not in predictions:
         return pd.DataFrame()
@@ -852,7 +1133,8 @@ def _build_correct_score_blend_sweep(predictions: pd.DataFrame) -> tuple[pd.Data
     sweep = ev[ev["config"].astype(str).str.startswith("cs_weight_")].copy()
     if sweep.empty:
         return pd.DataFrame(), pd.DataFrame()
-    baseline = sweep[sweep["config"].astype(str).eq("cs_weight_1_0")].set_index("match_id")
+    key_columns = _match_key_columns(sweep)
+    baseline = sweep[sweep["config"].astype(str).eq("cs_weight_1_0")].set_index(key_columns)
     rows: list[dict[str, object]] = []
     match_rows: list[dict[str, object]] = []
     for config_name, group in sweep.groupby("config", sort=True):
@@ -862,7 +1144,10 @@ def _build_correct_score_blend_sweep(predictions: pd.DataFrame) -> tuple[pd.Data
         ev_costs: list[float] = []
         missing_cs = 0
         for _, row in group.iterrows():
-            base_row = baseline.loc[row["match_id"]] if row["match_id"] in baseline.index else pd.Series(dtype=object)
+            key = _row_key(row, key_columns)
+            base_row = baseline.loc[key] if key in baseline.index else pd.Series(dtype=object)
+            if isinstance(base_row, pd.DataFrame):
+                base_row = base_row.iloc[0]
             default_score = str(base_row.get("predicted_score", row.get("predicted_score", "")))
             changed_vs_w1 = str(row.get("predicted_score", "")) != default_score
             changed += int(changed_vs_w1)
@@ -875,6 +1160,7 @@ def _build_correct_score_blend_sweep(predictions: pd.DataFrame) -> tuple[pd.Data
             missing_cs += 0 if has_cs else 1
             match_rows.append(
                 {
+                    "tournament": row.get("tournament", ""),
                     "match_id": row.get("match_id", ""),
                     "team_a": row.get("team_a", ""),
                     "team_b": row.get("team_b", ""),
@@ -936,7 +1222,8 @@ def _build_larger_grid_sweep(predictions: pd.DataFrame) -> tuple[pd.DataFrame, p
             "tail_mass_before_grid_extension",
         )
     )
-    baseline_by_match = baseline.set_index("match_id")
+    key_columns = _match_key_columns(ev)
+    baseline_by_match = baseline.set_index(key_columns)
     summary_rows: list[dict[str, object]] = []
     match_rows: list[dict[str, object]] = []
 
@@ -975,9 +1262,12 @@ def _build_larger_grid_sweep(predictions: pd.DataFrame) -> tuple[pd.DataFrame, p
         changed = 0
         high_tail = 0
         for _, row in group.iterrows():
-            if row["match_id"] not in baseline_by_match.index:
+            key = _row_key(row, key_columns)
+            if key not in baseline_by_match.index:
                 continue
-            base = baseline_by_match.loc[row["match_id"]]
+            base = baseline_by_match.loc[key]
+            if isinstance(base, pd.DataFrame):
+                base = base.iloc[0]
             default_score = str(base.get("predicted_score", ""))
             larger_score = str(row.get("predicted_score", ""))
             changed_flag = default_score != larger_score
@@ -997,6 +1287,7 @@ def _build_larger_grid_sweep(predictions: pd.DataFrame) -> tuple[pd.DataFrame, p
             high_tail += int(pd.notna(tail_default) and float(tail_default) > 0.01)
             match_rows.append(
                 {
+                    "tournament": row.get("tournament", ""),
                     "match_id": row.get("match_id", ""),
                     "teams": f"{row.get('team_a', '')} vs {row.get('team_b', '')}",
                     "team_a": row.get("team_a", ""),
@@ -1046,23 +1337,23 @@ def _first_existing_numeric_series(frame: pd.DataFrame, columns: tuple[str, ...]
     return pd.Series(default, index=frame.index, dtype=float)
 
 
-def _draw_threshold_trigger(row: pd.Series, fav_threshold: float, gap_threshold: float, ou_threshold: float) -> bool:
+def _draw_threshold_trigger(row: pd.Series, fav_threshold: float, gap_threshold: float, total_threshold: float) -> bool:
     fav = _safe_float(row.get("favourite_probability"))
     gap = _safe_float(row.get("draw_vs_decisive_gap"))
-    ou = _safe_float(row.get("ou_median_total"))
+    expected_total = _safe_float(row.get("expected_total_goals"))
     default_score = _parse_score(row.get("predicted_score"))
     challenger_score = _parse_score(row.get("best_draw_score")) or _parse_score(row.get("modal_score"))
     return (
         fav is not None
         and gap is not None
-        and ou is not None
+        and expected_total is not None
         and default_score is not None
         and challenger_score is not None
         and default_score[0] != default_score[1]
         and challenger_score[0] == challenger_score[1]
         and fav < fav_threshold
         and gap > gap_threshold
-        and ou <= ou_threshold
+        and expected_total <= total_threshold
     )
 
 
@@ -1073,19 +1364,19 @@ def _build_draw_threshold_sweep(predictions: pd.DataFrame) -> tuple[pd.DataFrame
         return pd.DataFrame(), pd.DataFrame()
     fav_thresholds = (0.40, 0.45, 0.50)
     gap_thresholds = (-0.30, -0.50, -0.70, -1.00)
-    ou_thresholds = (2.0, 2.25, 2.5)
+    total_thresholds = (2.15, 2.35, 2.55)
     summary_rows: list[dict[str, object]] = []
     match_rows: list[dict[str, object]] = []
     for fav_threshold in fav_thresholds:
         for gap_threshold in gap_thresholds:
-            for ou_threshold in ou_thresholds:
+            for total_threshold in total_thresholds:
                 threshold_config = (
-                    f"fav<{fav_threshold:g}; draw_gap>{gap_threshold:g}; ou<={ou_threshold:g}"
+                    f"fav<{fav_threshold:g}; draw_gap>{gap_threshold:g}; expected_total<={total_threshold:g}"
                 )
                 flagged_rows: list[pd.Series] = [
                     row
                     for _, row in baseline.iterrows()
-                    if _draw_threshold_trigger(row, fav_threshold, gap_threshold, ou_threshold)
+                    if _draw_threshold_trigger(row, fav_threshold, gap_threshold, total_threshold)
                 ]
                 default_points_total = 0
                 challenger_points_total = 0
@@ -1124,6 +1415,7 @@ def _build_draw_threshold_sweep(predictions: pd.DataFrame) -> tuple[pd.DataFrame
                     pseudo_rows.append(pseudo)
                     match_rows.append(
                         {
+                            "tournament": row.get("tournament", ""),
                             "match_id": row.get("match_id", ""),
                             "teams": f"{row.get('team_a', '')} vs {row.get('team_b', '')}",
                             "team_a": row.get("team_a", ""),
@@ -1138,6 +1430,8 @@ def _build_draw_threshold_sweep(predictions: pd.DataFrame) -> tuple[pd.DataFrame
                             "ev_challenger": ev_challenger,
                             "ev_cost": ev_cost,
                             "draw_vs_decisive_gap": row.get("draw_vs_decisive_gap", np.nan),
+                            "expected_total_goals": row.get("expected_total_goals", np.nan),
+                            "total_signal_used_for_draw_prone": row.get("total_signal_used_for_draw_prone", ""),
                             "ou_median_total": row.get("ou_median_total", np.nan),
                             "favourite_probability": row.get("favourite_probability", np.nan),
                         }
@@ -1154,7 +1448,7 @@ def _build_draw_threshold_sweep(predictions: pd.DataFrame) -> tuple[pd.DataFrame
                     {
                         "favourite_threshold": fav_threshold,
                         "draw_gap_threshold": gap_threshold,
-                        "ou_median_threshold": ou_threshold,
+                        "expected_total_goals_threshold": total_threshold,
                         "n_flagged": len(flagged_rows),
                         "total_points_if_override": challenger_points_total,
                         "total_points_default_on_same_matches": default_points_total,
@@ -1227,12 +1521,12 @@ def _caution_label(flag_column: str) -> str:
 
 def _draw_prone_miss_reason(row: pd.Series) -> str:
     reasons: list[str] = []
-    ou = _safe_float(row.get("ou_median_total"))
+    expected_total = _safe_float(row.get("expected_total_goals"))
     fav = _safe_float(row.get("favourite_probability"))
-    if ou is None:
-        reasons.append("ou_median_total_missing")
-    elif ou > 2.25:
-        reasons.append("ou_median_total_above_2_25")
+    if expected_total is None:
+        reasons.append("expected_total_goals_missing")
+    elif expected_total > 2.35:
+        reasons.append("expected_total_goals_above_2_35")
     if fav is None:
         reasons.append("favourite_probability_missing")
     elif fav >= 0.50:
@@ -1250,16 +1544,18 @@ def _build_draw_prone_candidates(predictions: pd.DataFrame, *, limit: int = 20) 
     if rows.empty:
         return pd.DataFrame()
     rows["reason_not_flagged"] = rows.apply(_draw_prone_miss_reason, axis=1)
-    ou_numeric = pd.to_numeric(rows.get("ou_median_total", np.nan), errors="coerce")
+    total_numeric = pd.to_numeric(rows.get("expected_total_goals", np.nan), errors="coerce")
     fav_numeric = pd.to_numeric(rows.get("favourite_probability", np.nan), errors="coerce")
     rows["_draw_prone_distance"] = (
-        (ou_numeric - 2.25).clip(lower=0).fillna(9.0)
+        (total_numeric - 2.35).clip(lower=0).fillna(9.0)
         + (fav_numeric - 0.50).clip(lower=0).fillna(9.0)
     )
     columns = [
         "match_id",
         "team_a",
         "team_b",
+        "expected_total_goals",
+        "total_signal_used_for_draw_prone",
         "ou_median_total",
         "favourite_probability",
         "market_draw_probability",
@@ -1314,6 +1610,190 @@ def _build_pattern_flags_summary(predictions: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).reset_index(drop=True)
 
 
+def _build_flag_frequency_and_performance(predictions: pd.DataFrame) -> pd.DataFrame:
+    ev = _ev_default_rows(predictions)
+    if ev.empty:
+        return pd.DataFrame()
+    flags = ("draw_prone_flag", "modal_draw_challenger_flag", "btts_conflict_flag", "blowout_risk_flag")
+    rows: list[dict[str, object]] = []
+    group_columns = [column for column in ("tournament", "config") if column in ev]
+    for flag in flags:
+        if flag not in ev:
+            continue
+        truthy = ev[flag].astype(str).str.lower().eq("yes")
+        for flag_value, subset in (("yes", ev[truthy]), ("no", ev[~truthy])):
+            if subset.empty:
+                rows.append(
+                    {
+                        **{column: "all" for column in group_columns},
+                        "flag": flag,
+                        "flag_value": flag_value,
+                        "matches_used": 0,
+                        "actual_points_sum": 0,
+                        "average_realised_points": np.nan,
+                        "total_expected_points": np.nan,
+                        "average_expected_points": np.nan,
+                    }
+                )
+                continue
+            if group_columns:
+                for keys, group in subset.groupby(group_columns, dropna=False, sort=True):
+                    if not isinstance(keys, tuple):
+                        keys = (keys,)
+                    rows.append(
+                        _performance_row(
+                            group,
+                            {
+                                **dict(zip(group_columns, keys, strict=True)),
+                                "flag": flag,
+                                "flag_value": flag_value,
+                            },
+                        )
+                    )
+            else:
+                rows.append(_performance_row(subset, {"flag": flag, "flag_value": flag_value}))
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def _build_mc_ah_attribution(predictions: pd.DataFrame) -> pd.DataFrame:
+    if predictions.empty:
+        return pd.DataFrame()
+    subset = predictions[
+        predictions["strategy"].astype(str).eq("market_consistent")
+        & predictions["config"].astype(str).str.contains("ah", case=False, na=False)
+    ].copy()
+    if subset.empty:
+        return pd.DataFrame()
+    subset["mc_convergence_class"] = subset.get(
+        "market_consistent_optimisation_classification",
+        pd.Series("", index=subset.index),
+    ).astype(str).replace("", "unknown")
+    subset["mc_ah_usable"] = subset["mc_convergence_class"].str.lower().isin(
+        {"converged", "acceptable", "not_fully_converged_fit_acceptable"}
+    )
+    group_columns = [column for column in ("tournament", "config", "mc_convergence_class", "mc_ah_usable") if column in subset]
+    summary = _build_grouped_performance(subset, group_columns)
+    if summary.empty:
+        return pd.DataFrame()
+    if "market_consistent_warning_flags" in subset:
+        warning_counts = (
+            subset.groupby(group_columns, dropna=False, sort=True)["market_consistent_warning_flags"]
+            .apply(lambda values: "; ".join(sorted({str(value) for value in values if str(value).strip()})))
+            .reset_index(name="mc_warning_flags_seen")
+        )
+        summary = summary.merge(warning_counts, on=group_columns, how="left")
+    return summary
+
+
+def _build_ah_cover_calibration(predictions: pd.DataFrame) -> pd.DataFrame:
+    if predictions.empty:
+        return pd.DataFrame()
+    required = {"selected_ah_line", "ah_implied_favourite_cover_probability", "realised_favourite_cover"}
+    if not required.issubset(predictions.columns):
+        return pd.DataFrame()
+    rows = predictions.copy()
+    probability = pd.to_numeric(rows["ah_implied_favourite_cover_probability"], errors="coerce")
+    realised_text = rows["realised_favourite_cover"].astype(str).str.lower()
+    rows = rows[pd.notna(probability) & realised_text.isin(["yes", "no", "push"])].copy()
+    if rows.empty:
+        return pd.DataFrame()
+    rows["_ah_implied_prob"] = pd.to_numeric(rows["ah_implied_favourite_cover_probability"], errors="coerce")
+    rows["_ah_realised_value"] = rows["realised_favourite_cover"].astype(str).str.lower().map(
+        {"yes": 1.0, "push": 0.5, "no": 0.0}
+    )
+    group_columns = [
+        column
+        for column in ("tournament", "config", "strategy", "ah_line_kind", "ah_selected_skipped_reason")
+        if column in rows
+    ]
+    summary_rows: list[dict[str, object]] = []
+    for keys, group in rows.groupby(group_columns, dropna=False, sort=True):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        implied = pd.to_numeric(group["_ah_implied_prob"], errors="coerce")
+        realised = pd.to_numeric(group["_ah_realised_value"], errors="coerce")
+        cover_error = pd.to_numeric(group.get("ah_cover_error", pd.Series(index=group.index, dtype=float)), errors="coerce")
+        summary_rows.append(
+            {
+                **dict(zip(group_columns, keys, strict=True)),
+                "matches_used": len(group),
+                "mean_implied_favourite_cover_probability": float(implied.mean()),
+                "realised_favourite_cover_rate": float(realised.mean()),
+                "mean_ah_cover_error": float(cover_error.mean()) if cover_error.notna().any() else float(realised.mean() - implied.mean()),
+                "push_count": int(group["realised_favourite_cover"].astype(str).str.lower().eq("push").sum()),
+            }
+        )
+    return pd.DataFrame(summary_rows).reset_index(drop=True)
+
+
+def _build_draw_prone_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
+    ev = _ev_default_rows(predictions)
+    if ev.empty:
+        return pd.DataFrame()
+    columns = [
+        "tournament",
+        "config",
+        "match_id",
+        "date",
+        "team_a",
+        "team_b",
+        "actual_score",
+        "predicted_score",
+        "realised_points",
+        "expected_total_goals",
+        "total_signal_used_for_draw_prone",
+        "ou_median_total",
+        "favourite_probability",
+        "market_draw_probability",
+        "draw_vs_decisive_gap",
+        "best_draw_score",
+        "best_draw_ev",
+        "best_decisive_score",
+        "best_decisive_ev",
+        "modal_score",
+        "draw_prone_flag",
+        "draw_prone_reason",
+        "modal_draw_challenger_flag",
+        "manual_review_flag",
+        "decision_note",
+    ]
+    existing = [column for column in columns if column in ev]
+    return ev[existing].reset_index(drop=True)
+
+
+def _build_larger_grid_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
+    ev = _ev_default_rows(predictions)
+    if ev.empty:
+        return pd.DataFrame()
+    diagnostic_columns = [
+        "larger_grid_recommended",
+        "normal_grid_tail_mass",
+        "larger_grid_tail_mass",
+        "tail_probability_before_renormalisation",
+        "tail_mass_before_grid_extension",
+        "tail_mass_after_grid_extension",
+        "recommendation_changed_due_to_larger_grid",
+        "grid_max_goals_used",
+    ]
+    if not any(column in ev.columns for column in diagnostic_columns):
+        return pd.DataFrame()
+    columns = [
+        "tournament",
+        "config",
+        "match_id",
+        "team_a",
+        "team_b",
+        "actual_score",
+        "predicted_score",
+        "realised_points",
+        "favourite_probability",
+        "expected_total_goals",
+        *diagnostic_columns,
+    ]
+    existing = [column for column in columns if column in ev]
+    return ev[existing].reset_index(drop=True)
+
+
 def _build_ev_vs_modal_attribution(predictions: pd.DataFrame) -> pd.DataFrame:
     if predictions.empty:
         return pd.DataFrame()
@@ -1325,6 +1805,7 @@ def _build_ev_vs_modal_attribution(predictions: pd.DataFrame) -> pd.DataFrame:
     if ev.empty or modal.empty:
         return pd.DataFrame()
     columns = [
+        "tournament",
         "config",
         "match_id",
         "date",
@@ -1343,12 +1824,13 @@ def _build_ev_vs_modal_attribution(predictions: pd.DataFrame) -> pd.DataFrame:
     ev_columns = [column for column in columns if column in ev.columns]
     modal_columns = [
         column
-        for column in ["config", "match_id", "predicted_score", "realised_points", "model_expected_points"]
+        for column in ["tournament", "config", "match_id", "predicted_score", "realised_points", "model_expected_points"]
         if column in modal.columns
     ]
+    merge_columns = [column for column in ["tournament", "config", "match_id"] if column in ev_columns and column in modal_columns]
     merged = ev[ev_columns].merge(
         modal[modal_columns],
-        on=["config", "match_id"],
+        on=merge_columns,
         how="inner",
         suffixes=("_ev", "_modal"),
     )
@@ -1362,7 +1844,7 @@ def _build_ev_vs_modal_attribution(predictions: pd.DataFrame) -> pd.DataFrame:
         pd.to_numeric(merged["model_expected_points_ev"], errors="coerce")
         - pd.to_numeric(merged["model_expected_points_modal"], errors="coerce")
     )
-    return merged.sort_values(["config", "match_id"], kind="stable").reset_index(drop=True)
+    return merged.sort_values(merge_columns, kind="stable").reset_index(drop=True)
 
 
 def _format_expected_vs_actual_summary(summary: pd.DataFrame, *, limit: int = 8) -> str:
@@ -1430,12 +1912,37 @@ def run_live_backtest(
     """
     from wc_predictor.workflow import run_prediction_workflow
 
+    overall_start = time.perf_counter()
+    timing_rows: list[dict[str, object]] = []
+
+    def record_timing(
+        phase: str,
+        started_at: float,
+        *,
+        config: str = "",
+        match_id: str = "",
+        notes: str = "",
+    ) -> None:
+        timing_rows.append(
+            {
+                "phase": phase,
+                "config": config,
+                "match_id": match_id,
+                "tournament": settings.tournament_label or settings.results_path.parent.name,
+                "seconds": time.perf_counter() - started_at,
+                "notes": notes,
+            }
+        )
+
     # 1. Load results
+    phase_start = time.perf_counter()
     results = load_historical_results(settings.results_path)
+    record_timing("load_results", phase_start)
     if not results:
         raise ValueError(f"No valid historical results found in {settings.results_path}")
     result_by_id = {r.match_id: r for r in results}
     match_ids = tuple(result_by_id)
+    tournament_label = settings.tournament_label or settings.results_path.parent.name
 
     if progress:
         print(f"Loaded {len(results)} historical results")
@@ -1445,54 +1952,129 @@ def run_live_backtest(
 
     # 2. Split combined paste files
     settings.cache_folder.mkdir(parents=True, exist_ok=True)
-    split_result = split_combined_oddsportal_pastes(
-        settings.historical_odds_folder,
-        settings.cache_folder,
-        overwrite=True,
+    raw_paste_files = _folder_files(settings.historical_odds_folder, "*.txt")
+    split_cache_files = _folder_files(settings.cache_folder, "*.txt")
+    split_cache_fresh = settings.enable_parsed_odds_cache and _outputs_are_fresh(
+        split_cache_files,
+        raw_paste_files,
     )
+    phase_start = time.perf_counter()
+    if split_cache_fresh:
+        split_files_processed = len(raw_paste_files)
+        split_files_written = len(split_cache_files)
+        split_warnings: list[str] = []
+        record_timing("combined_paste_split", phase_start, notes="cache_hit")
+    else:
+        split_result = split_combined_oddsportal_pastes(
+            settings.historical_odds_folder,
+            settings.cache_folder,
+            overwrite=True,
+        )
+        split_files_processed = split_result.files_processed
+        split_files_written = split_result.files_written
+        split_warnings = split_result.warnings
+        record_timing("combined_paste_split", phase_start, notes="cache_miss")
     if progress:
         print(
-            f"Paste split: {split_result.files_processed} files -> "
-            f"{split_result.files_written} section files"
+            f"Paste split: {split_files_processed} files -> "
+            f"{split_files_written} section files"
+            f"{' (cached)' if split_cache_fresh else ''}"
         )
-        for warning in split_result.warnings:
+        for warning in split_warnings:
             print(f"  Warning: {warning}")
         print()
 
     # 3. Parse all markets - write to per-backtest cache paths to avoid
     #    colliding with live output files
     cache = settings.cache_folder
-    core_parse = parse_oddsportal_core_odds_folder(
-        cache,
-        output_path=cache.parent / "core_odds.csv",
-        report_path=cache.parent / "core_parse_report.csv",
-        total_goals_output_path=cache.parent / "total_goals_odds.csv",
-        metadata_odds_path=None,   # no live schedule; metadata injected below
-        match_ids=match_ids,
+    section_files = _folder_files(cache, "*.txt")
+    core_output = cache.parent / "core_odds.csv"
+    core_report = cache.parent / "core_parse_report.csv"
+    total_goals_output = cache.parent / "total_goals_odds.csv"
+    phase_start = time.perf_counter()
+    core_cache_hit = settings.enable_parsed_odds_cache and _outputs_are_fresh(
+        (core_output, core_report, total_goals_output),
+        section_files,
     )
-    cs_parse = parse_oddsportal_correct_score_folder(
-        cache,
-        output_path=cache.parent / "correct_score_odds.csv",
-        report_path=cache.parent / "correct_score_parse_report.csv",
-        match_ids=match_ids,
+    if core_cache_hit:
+        raw_core_odds = _read_cached_csv(core_output)
+        total_goals_odds = _read_cached_csv(total_goals_output)
+        record_timing("core_odds_parse", phase_start, notes="cache_hit")
+    else:
+        core_parse = parse_oddsportal_core_odds_folder(
+            cache,
+            output_path=core_output,
+            report_path=core_report,
+            total_goals_output_path=total_goals_output,
+            metadata_odds_path=None,   # no live schedule; metadata injected below
+            match_ids=match_ids,
+        )
+        raw_core_odds = core_parse.odds
+        total_goals_odds = core_parse.total_goals_odds
+        record_timing("core_odds_parse", phase_start, notes="cache_miss")
+
+    cs_output = cache.parent / "correct_score_odds.csv"
+    cs_report = cache.parent / "correct_score_parse_report.csv"
+    phase_start = time.perf_counter()
+    cs_cache_hit = settings.enable_parsed_odds_cache and _outputs_are_fresh(
+        (cs_output, cs_report),
+        section_files,
     )
-    ah_parse = parse_oddsportal_asian_handicap_folder(
-        cache,
-        output_path=cache.parent / "asian_handicap_odds.csv",
-        report_path=cache.parent / "asian_handicap_parse_report.csv",
-        match_ids=match_ids,
+    if cs_cache_hit:
+        correct_score_odds = _read_cached_csv(cs_output)
+        record_timing("correct_score_odds_parse", phase_start, notes="cache_hit")
+    else:
+        cs_parse = parse_oddsportal_correct_score_folder(
+            cache,
+            output_path=cs_output,
+            report_path=cs_report,
+            match_ids=match_ids,
+        )
+        correct_score_odds = cs_parse.odds
+        record_timing("correct_score_odds_parse", phase_start, notes="cache_miss")
+
+    ah_output = cache.parent / "asian_handicap_odds.csv"
+    ah_report = cache.parent / "asian_handicap_parse_report.csv"
+    phase_start = time.perf_counter()
+    ah_cache_hit = settings.enable_parsed_odds_cache and _outputs_are_fresh(
+        (ah_output, ah_report),
+        section_files,
     )
+    if ah_cache_hit:
+        asian_handicap_odds = _read_cached_csv(ah_output)
+        record_timing("asian_handicap_odds_parse", phase_start, notes="cache_hit")
+    else:
+        ah_parse = parse_oddsportal_asian_handicap_folder(
+            cache,
+            output_path=ah_output,
+            report_path=ah_report,
+            match_ids=match_ids,
+        )
+        asian_handicap_odds = ah_parse.odds
+        record_timing("asian_handicap_odds_parse", phase_start, notes="cache_miss")
 
     # 4. Inject metadata (date, stage, team names) from results into core odds
-    core_odds = _inject_match_metadata(core_parse.odds, results)
-    total_goals_odds = core_parse.total_goals_odds
+    phase_start = time.perf_counter()
+    core_odds = _inject_match_metadata(raw_core_odds, results)
+    record_timing("metadata_injection", phase_start)
 
     if progress:
         n_core = core_odds["match_id"].nunique() if not core_odds.empty else 0
-        n_cs = cs_parse.odds["match_id"].nunique() if not cs_parse.odds.empty else 0
-        n_ah = ah_parse.odds["match_id"].nunique() if not ah_parse.odds.empty else 0
+        n_cs = correct_score_odds["match_id"].nunique() if not correct_score_odds.empty else 0
+        n_ah = asian_handicap_odds["match_id"].nunique() if not asian_handicap_odds.empty else 0
         print(f"Parsed odds : {n_core} matches with 1X2/O/U, "
               f"{n_cs} with correct score, {n_ah} with AH")
+        cached_markets = [
+            name
+            for name, hit in (
+                ("core", core_cache_hit),
+                ("correct score", cs_cache_hit),
+                ("AH", ah_cache_hit),
+            )
+            if hit
+        ]
+        if cached_markets:
+            print(f"Cached parse used: {', '.join(cached_markets)}")
         print()
 
     # 5. Run all configs for every match that has core odds and a result
@@ -1500,12 +2082,16 @@ def run_live_backtest(
     skipped_rows: list[dict[str, object]] = []
     template_count = 0
     missing_count = 0
+    calibration_cache: dict[tuple[object, ...], object] | None = (
+        {} if settings.enable_calibration_cache else None
+    )
 
     for match_id, result in result_by_id.items():
         match_core = core_odds[core_odds["match_id"].astype(str) == match_id]
         if match_core.empty:
             reason = _classify_missing_odds(settings.historical_odds_folder, match_id)
             skipped_rows.append({"match_id": match_id, "config": "all", "reason": reason})
+            skipped_rows[-1]["tournament"] = tournament_label
             if reason == "paste_file_not_filled_in_yet":
                 template_count += 1
             elif reason == "no_paste_file":
@@ -1521,13 +2107,13 @@ def run_live_backtest(
             else pd.DataFrame()
         )
         match_cs = (
-            cs_parse.odds[cs_parse.odds["match_id"].astype(str) == match_id]
-            if not cs_parse.odds.empty
+            correct_score_odds[correct_score_odds["match_id"].astype(str) == match_id]
+            if not correct_score_odds.empty
             else pd.DataFrame()
         )
         match_ah = (
-            ah_parse.odds[ah_parse.odds["match_id"].astype(str) == match_id]
-            if not ah_parse.odds.empty
+            asian_handicap_odds[asian_handicap_odds["match_id"].astype(str) == match_id]
+            if not asian_handicap_odds.empty
             else pd.DataFrame()
         )
 
@@ -1538,17 +2124,34 @@ def run_live_backtest(
             playing_round = _group_stage_playing_round(match_id, result.stage)
 
             try:
+                phase_start = time.perf_counter()
                 workflow_result = run_prediction_workflow(
                     match_core,
                     config=config_entry.config,
                     correct_score_odds=cs_input,
                     total_goals_odds=tg_input,
                     asian_handicap_odds=ah_input,
+                    calibration_cache=calibration_cache,
+                )
+                record_timing(
+                    "model_run",
+                    phase_start,
+                    config=config_entry.name,
+                    match_id=match_id,
+                    notes="calibration_cache_on" if settings.enable_calibration_cache else "calibration_cache_off",
                 )
             except (ValueError, RuntimeError) as exc:
+                record_timing(
+                    "model_run",
+                    phase_start,
+                    config=config_entry.name,
+                    match_id=match_id,
+                    notes=f"failed:{exc}",
+                )
                 skipped_rows.append(
                     {
                         "match_id": match_id,
+                        "tournament": tournament_label,
                         "config": config_entry.name,
                         "reason": str(exc),
                     }
@@ -1559,20 +2162,24 @@ def run_live_backtest(
                 skipped_rows.append(
                     {
                         "match_id": match_id,
+                        "tournament": tournament_label,
                         "config": config_entry.name,
                         "reason": "empty_workflow_report",
                     }
                 )
                 continue
 
+            phase_start = time.perf_counter()
             report_row = workflow_result.match_report.iloc[0]
             strategies = _score_strategies(
                 report_row, result.actual_score_a, result.actual_score_b
             )
+            record_timing("strategy_scoring", phase_start, config=config_entry.name, match_id=match_id)
             for strat_row in strategies:
                 strat_row.update(
                     {
                         "config": config_entry.name,
+                        "tournament": tournament_label,
                         "match_id": match_id,
                         "date": result.date,
                         "stage": result.stage,
@@ -1612,7 +2219,9 @@ def run_live_backtest(
         if missing_count:
             print(f"  ({missing_count} matches skipped: no paste file)")
 
-    report = LiveBacktestReport(summary, predictions, skipped, round_summary)
+    timings = pd.DataFrame(timing_rows)
+    report = LiveBacktestReport(summary, predictions, skipped, round_summary, timings)
+    report._append_timing("total_before_export", time.perf_counter() - overall_start)
     if export:
         report.export(settings)
         if progress:
@@ -1629,6 +2238,109 @@ def run_live_backtest(
             if round_totals:
                 print()
                 print(round_totals)
+            timing_summary = _format_timing_summary(report.timings)
+            if timing_summary:
+                print()
+                print(timing_summary)
             print(f"  Summary   : {settings.summary_output_path}")
-            print(f"  Workbook  : {settings.excel_output_path}")
+            if settings.export_csv_only:
+                print("  Workbook  : skipped (export_csv_only=True)")
+            else:
+                print(f"  Workbook  : {settings.excel_output_path}")
     return report
+
+
+def run_combined_live_backtest(
+    tournament_folders: Sequence[str | Path],
+    *,
+    results_filename: str = "results.csv",
+    odds_subfolder: str = "odds",
+    cache_folder: str | Path = Path("cache/live_backtest/combined"),
+    summary_output_path: str | Path = Path("output/research/combined_backtest/live_backtest_summary.csv"),
+    predictions_output_path: str | Path = Path("output/research/combined_backtest/live_backtest_predictions.csv"),
+    excel_output_path: str | Path = Path("output/research/combined_backtest/live_backtest.xlsx"),
+    configs: tuple[BacktestConfigEntry, ...] = DEFAULT_BACKTEST_CONFIGS,
+    export_csv_only: bool = False,
+    enable_parsed_odds_cache: bool = True,
+    enable_calibration_cache: bool = True,
+    export: bool = True,
+    progress: bool = True,
+) -> LiveBacktestReport:
+    """Run the live historical backtest over multiple tournament folders.
+
+    Each tournament is processed with an isolated cache folder and labelled by
+    its directory name. The combined report then rebuilds summary sheets from
+    the concatenated tournament-labelled prediction rows.
+    """
+
+    folders = tuple(Path(folder) for folder in tournament_folders)
+    if not folders:
+        raise ValueError("run_combined_live_backtest requires at least one tournament folder")
+
+    base_cache = Path(cache_folder)
+    all_predictions: list[pd.DataFrame] = []
+    all_skipped: list[pd.DataFrame] = []
+    all_timings: list[pd.DataFrame] = []
+    for folder in folders:
+        label = folder.name
+        if progress:
+            print("=" * 60)
+            print(f"Combined backtest tournament: {label}")
+            print("=" * 60)
+        settings = LiveBacktestSettings(
+            historical_odds_folder=folder / odds_subfolder,
+            results_path=folder / results_filename,
+            cache_folder=base_cache / label / "split_pastes",
+            summary_output_path=Path(summary_output_path),
+            predictions_output_path=Path(predictions_output_path),
+            excel_output_path=Path(excel_output_path),
+            tournament_label=label,
+            export_csv_only=export_csv_only,
+            enable_parsed_odds_cache=enable_parsed_odds_cache,
+            enable_calibration_cache=enable_calibration_cache,
+            configs=configs,
+        )
+        report = run_live_backtest(settings, export=False, progress=progress)
+        if not report.predictions.empty:
+            all_predictions.append(report.predictions)
+        if not report.skipped.empty:
+            all_skipped.append(report.skipped)
+        if not report.timings.empty:
+            all_timings.append(report.timings)
+
+    predictions = pd.concat(all_predictions, ignore_index=True) if all_predictions else pd.DataFrame()
+    skipped = pd.concat(all_skipped, ignore_index=True) if all_skipped else pd.DataFrame()
+    timings = pd.concat(all_timings, ignore_index=True) if all_timings else pd.DataFrame()
+    summary = _build_summary(predictions)
+    round_summary = _build_round_summary(predictions)
+    combined = LiveBacktestReport(summary, predictions, skipped, round_summary, timings)
+
+    if export:
+        output_settings = LiveBacktestSettings(
+            historical_odds_folder=folders[0] / odds_subfolder,
+            results_path=folders[0] / results_filename,
+            cache_folder=base_cache,
+            summary_output_path=Path(summary_output_path),
+            predictions_output_path=Path(predictions_output_path),
+            excel_output_path=Path(excel_output_path),
+            tournament_label="combined",
+            export_csv_only=export_csv_only,
+            enable_parsed_odds_cache=enable_parsed_odds_cache,
+            enable_calibration_cache=enable_calibration_cache,
+            configs=configs,
+        )
+        combined.export(output_settings)
+        if progress:
+            print()
+            print("Combined backtest complete")
+            print(f"  Tournaments: {', '.join(folder.name for folder in folders)}")
+            print(f"  Matches    : {_matches_evaluated(predictions)}")
+            timing_summary = _format_timing_summary(combined.timings)
+            if timing_summary:
+                print()
+                print(timing_summary)
+            if export_csv_only:
+                print("  Workbook   : skipped (export_csv_only=True)")
+            else:
+                print(f"  Workbook   : {excel_output_path}")
+    return combined
