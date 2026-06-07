@@ -4,6 +4,7 @@
 \usepackage{amssymb}
 \usepackage{booktabs}
 \usepackage{graphicx}
+\graphicspath{{figures/}}
 \usepackage[margin=1in]{geometry}
 \usepackage{hyperref}
 \usepackage{parskip}
@@ -20,8 +21,8 @@
 \newcommand{\KL}{D_{\mathrm{KL}}}
 
 \begin{document}
-\author{Brecht Kerckhove\footnote{Email: brechtkerckhove@gmail.com}}
-\date{June 2026}
+\author{Brecht Kerckhove\thanks{Personal project. The views expressed in this paper are solely those of the author and do not represent the views of any employer or affiliated organisation.}}
+\date{\today}
 \maketitle
 
 \begin{abstract}
@@ -43,33 +44,25 @@ a decision model for a scoring-rule contest, not a betting strategy, and we make
 claim of market-beating returns.
 \end{abstract}
 
+\textbf{Keywords:} prediction pool, expected-points optimisation, exact-score prediction, Poisson score model, market-implied probabilities, bookmaker odds
+
+\clearpage
+%########################################################################################
+
 \section{Introduction}
 
-Predicting the exact score of a football match for a prediction pool looks superficially
-like a forecasting task, but it is more precisely a \emph{decision} task. The quantity
-that matters is not the probability that any particular scoreline occurs --- almost all
-scorelines are individually unlikely --- but the expected number of pool points a chosen
-prediction earns under the competition's scoring rule. Because that rule awards partial
-credit for a correct goal difference or a correct result, the optimal prediction depends
-jointly on the full scoreline distribution and on the shape of the payoff. The single
-most likely scoreline is, in general, \emph{not} the expected-points-optimal choice.
+Prediction pools are a familiar part of major sports tournaments such as the FIFA World Cup. Participants submit predictions for a sequence of matches and receive points according to how close those predictions are to the realised outcomes. One common format is an exact-score pool, where the participant predicts the final score of each match. At first sight, this looks like a simple forecasting problem: find the most likely scoreline and submit it. That instinct is not always correct.
+The reason is that an exact-score pool is governed by a payoff table. A score such as 1-0, 1-1, or 2-1 may be the single most likely outcome, but the prediction that maximises expected pool points depends on the full scoring rule. If the pool awards partial credit for the correct winner or the correct goal difference, then a prediction should be judged by the points it earns across all possible outcomes, not only by the probability of hitting the exact score.
+This turns exact-score prediction into a decision problem. The model still needs a probability distribution over scorelines, but the final prediction is chosen by passing that distribution through the pool's payoff function. In that sense, the problem is closer to pricing a payoff than to producing a simple point forecast: the same probability model can lead to different optimal predictions under different scoring rules.
+The next question is where the scoreline probabilities should come from. In this project, the information backbone is the betting market. Bookmaker odds are useful because they compress a large amount of information into one price: historical team strength, current form, injuries, team news, trader judgement, market competition, risk management and betting flow. 
 
-Our information backbone is the betting market. Liquid bookmaker odds on match result,
-total goals, both-teams-to-score (BTTS), Asian handicap, and correct score encode a
-large amount of outcome information, and after \emph{devigging}, i.e. removing the bookmaker margin, they can
-be read as market-implied probabilities. The modelling pipeline therefore mirrors a
-familiar pattern in applied quantitative finance: infer probabilities from market prices,
-calibrate a parametric model to those prices, and then optimise a decision under an
-explicit payoff function. The football literature has long modelled scores with
-Poisson-type count models \cite{maher1982,dixoncoles1997} and has noted both the
-information content and the inefficiencies of betting markets \cite{dixoncoles1997}.
+This approach is consistent with the broader quantitative evolution of football, where data-driven methods have become increasingly embedded in both sporting decisions and betting markets. In football specifically, odds-setters have been studied as forecasters, with bookmaker prices interpreted as implicit probabilistic forecasts of match outcomes \cite{forrest2005}. The same quantitative shift is visible in the betting industry itself: specialist firms such as Starlizard analyse large-scale sporting and betting-market data to produce betting probabilities and compare their real-time prediction systems with market prices.\footnote{Starlizard Integrity Services describes Starlizard's core business as analysing large amounts of sporting and betting-market data, converting this information into betting probabilities, and comparing betting markets with real-time prediction modelling systems.} 
+Therefore, after \emph{devigging}, meaning the removal of the bookmaker margin, bookmaker odds can be interpreted as market-implied probabilities. This does not mean that these probabilities are identical to the true physical probabilities of the match. Like prices in financial markets, they aggregate information but may also contain risk premia, liquidity effects, customer-demand effects and behavioural biases.
+This finance analogy also guides the modelling pipeline: infer probabilities from market prices, calibrate a model to those prices, and optimise a decision under an explicit payoff function. In the present setting, the calibrated object is a scoreline distribution. The football literature has long used Poisson-type count models for this purpose \cite{maher1982,dixoncoles1997}, and has also studied both the information content and possible inefficiencies of betting markets \cite{dixoncoles1997}.
+The aim of this model is to build a disciplined prediction-pool decision model and does not claim a betting edge. In a market where odds are already highly informative, the realistic source of improvement is not necessarily superior probability estimation, but the consistent translation of market-implied probabilities into decisions under the scoring rule.
 
-We deliberately avoid overclaiming. The realistic source of edge in a \emph{pool} is not
-superior probability estimation but disciplined decision-making under the scoring rule,
-together with conservative governance of model variants whose apparent advantages may be
-small-sample artefacts.
 
-\paragraph{Contributions.} This note makes four modest contributions. (i) It gives a formal
+\paragraph{Contributions.} This note makes four contributions. (i) It gives a formal
 expected-points formulation of exact-score prediction under a tiered scoring rule, and a
 closed-form decomposition that explains why the optimal prediction departs from the modal
 scoreline. (ii) It describes a market-implied scoreline probability matrix calibrated to
@@ -131,6 +124,7 @@ denote the probability mass retained on this grid. The working probability matri
 0 \leq x,y \leq G.
 \]
 The omitted tail mass is \(1-S_G\). For ordinary football matches this tail mass is typically negligible, while for extreme-favourite or high-total matches it is monitored through tail-mass and larger-grid diagnostics. In the implementation used for the historical validation below, the default grid is \(G=8\), so the working matrix covers scorelines from \(0\)-\(0\) up to \(8\)-\(8\).
+For notational simplicity, the remainder of the paper writes this working renormalised finite-grid matrix again as \(\pi\), unless the distinction from the infinite-support Poisson distribution is material.
 
 Given a scoring function
 $g(p;X,Y)$ that returns the pool points earned when prediction $p$ meets outcome
@@ -145,10 +139,13 @@ Equation~\eqref{eq:objective} is the core of the project. Everything upstream ex
 estimate $\pi$; everything downstream is a way to compute, explain, or stress-test
 $p^{*}$.
 
+In implementation, both the expectation and the candidate predictions are evaluated on a finite practical score grid; the omitted tail mass is tracked separately as a diagnostic.
+
+%########################################################################################
+
 \section{Scoring rule and expected-points decomposition}
 
-The group-stage pool uses a tiered rule. With the convention used throughout (exact
-score $10$, correct goal difference $7$, correct result $5$, otherwise $1$),
+The scoring rule used in this project follows the \emph{Sporza WK-pronostiek} format,\footnote{The \emph{Sporza WK-pronostiek} is a public World Cup prediction game run by Sporza in which participants predict match scorelines and can compete in private leagues with friends, family or colleagues.} but the model can be applied to any exact-score pool with a known payoff table. The scoring format is as follows:
 \begin{equation}
 g(p;X,Y)=
 \begin{cases}
@@ -237,6 +234,7 @@ probabilities as a strong \emph{prior} rather than as ground truth --- the model
 them, but the validation in Section~\ref{sec:validation} tests the resulting distribution on
 realised outcomes rather than assuming the market was correct.
 
+%#############################################################################################
 \section{Baseline scoreline model}
 
 The baseline distribution treats goals as independent Poisson counts \cite{maher1982},
@@ -273,7 +271,7 @@ Figure~\ref{fig:probability-matrices} shows two reconstructed baseline matrices 
 \centering
 \includegraphics[width=\textwidth]{probability_matrix_balanced.png}
 \end{minipage}
-\caption{Representative exact-score probability matrices from the baseline Poisson pipeline. The left panel shows the highest favourite-probability match in the historical sample, while the right panel shows the most balanced team-A/team-B win-probability match. The red outline marks the expected-points-optimal score; when distinct, the green outline marks the modal scoreline. The balanced example uses the default \(G=8\) grid, while the extreme-favourite example is displayed on the larger diagnostic grid to show high-margin tail mass.}
+\caption{Representative exact-score probability matrices from the baseline Poisson pipeline. The left panel shows the highest favourite-probability match in the historical sample, while the right panel shows the most balanced team A/team B win-probability match. The red outline marks the expected-points-optimal score; when distinct, the green outline marks the modal scoreline. The balanced example uses the default \(G=8\) grid, while the extreme-favourite example is displayed on the larger diagnostic grid to show high-margin tail mass.}
 \label{fig:probability-matrices}
 \end{figure}
 
@@ -320,11 +318,8 @@ Section~\ref{sec:entropy}, which relaxes the strict two-parameter form.
 \section{Correct-score market information}
 
 Correct-score markets price individual cells of $\pi$ directly and therefore look like the
-most informative source of all. In practice they are the least reliable: they carry large
-overrounds, quote only a sparse subset of scorelines (with the residual mass folded into an
-``Other'' bucket that hides the high-scoring tail), and tend to be shaded toward popular,
-public scores. We therefore treat correct-score odds as useful but noisy evidence rather than
-ground truth. In the simplest representation the market and model matrices are blended
+most informative source of all. In practice they are noisy inputs: they often carry large overrounds, quote only a sparse subset of scorelines, and may be affected by demand for salient or popular scores. 
+We therefore treat correct-score odds as useful but noisy evidence rather than ground truth. In the simplest representation the market and model matrices are blended
 schematically as
 \begin{equation}
 \pi^{\mathrm{blend}}_{xy}=w\,\pi^{\mathrm{model}}_{xy}+(1-w)\,\pi^{\mathrm{CS}}_{xy},
@@ -343,7 +338,7 @@ blending remains a research diagnostic.
 
 Asian handicap markets price the realised goal margin $M=X-Y$ (the same quantity used in the
 scoring decomposition) and are structurally aligned with the goal-difference tier. For a
-team-A handicap $h$, define the handicap-adjusted margin $M_h=M+h$. A unit stake on team A at
+team A handicap $h$, define the handicap-adjusted margin $M_h=M+h$. A unit stake on team A at
 decimal odds $O$ then settles as
 \begin{equation}
 \Pi=
@@ -411,7 +406,9 @@ by solving its finite-dimensional convex dual in $\theta$; this is the Gibbs / e
 form familiar from maximum-entropy inference and entropy pooling. The implemented
 soft-constraint version~\eqref{eq:entropy} is a reliability-weighted, regularised analogue of
 this projection: finite weights $\omega_k$ play the role of soft multipliers, trading exact
-moment matching for robustness to noisy or mutually inconsistent market targets. In historical validation the market-consistent matrix \emph{including} Asian-handicap
+moment matching for robustness to noisy or mutually inconsistent market targets. 
+
+In historical validation the market-consistent matrix \emph{including} Asian-handicap
 constraints was mildly positive in both tournaments, but the gains were small and depended on
 the optimiser reaching an acceptable fit. It is therefore used as a \emph{gated} challenger,
 surfaced only when its fit status is acceptable, and never as the silent default.
@@ -661,6 +658,10 @@ market-consistent, Asian-handicap, and correct-score variants serve as challenge
 or gated alternatives. The most durable conclusion is methodological --- in a near-efficient
 market with a small validation sample, careful decision governance is worth more than
 additional model machinery.
+
+\section*{AI assistance statement}
+
+Generative AI tools, including ChatGPT, Claude and Codex, were used as assistants during the development of this project. Their use included code drafting, debugging support, documentation review, and editorial suggestions for this manuscript. All modelling choices, empirical checks, interpretation of results, and final text are the responsibility of the author.
 
 \bibliographystyle{plain}
 \bibliography{references}
