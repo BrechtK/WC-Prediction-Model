@@ -243,6 +243,31 @@ result, totals, and BTTS identities in closed form, and it is straightforward to
 known limitation --- mild dependence between the two scores, especially in low-scoring games
 --- motivates the Dixon--Coles challenger discussed in Section~\ref{sec:challengers}.
 
+Figure~\ref{fig:probability-matrices} shows two reconstructed baseline matrices from the
+combined 2018+2022 historical backtest. In the extreme-favourite example, probability mass is
+pulled into one-sided, mostly clean-sheet Germany-win scorelines. In the balanced example, mass is
+more diffuse around draws and narrow margins; the modal scoreline is $1\text{-}1$, while the
+expected-points optimum is $1\text{-}0$ because the payoff rewards result and goal-difference
+classes as well as exact score.
+
+\begin{figure}[htbp]
+\centering
+\begin{minipage}{0.49\textwidth}
+\centering
+\includegraphics[width=\textwidth]{figures/probability_matrix_extreme_favourite.png}
+\end{minipage}\hfill
+\begin{minipage}{0.49\textwidth}
+\centering
+\includegraphics[width=\textwidth]{figures/probability_matrix_balanced.png}
+\end{minipage}
+\caption{Exact-score probability matrices reconstructed from the representative baseline
+Poisson pipeline. Rows are home/team-A goals and columns are away/team-B goals. The red outline
+marks the expected-points-optimal score; when distinct, the green outline marks the modal
+scoreline. The examples are selected automatically from the historical backtest universe as the
+highest favourite-probability match and the most symmetric home-away win-probability match.}
+\label{fig:probability-matrices}
+\end{figure}
+
 \section{Market calibration targets}
 \label{sec:calibration}
 
@@ -482,8 +507,87 @@ The two layers answer different questions and should be read together: realised 
 the decision taken under the scoring rule, while proper scores and calibration evaluate the
 distribution from which that decision was derived. A variant can improve calibration without
 improving realised points, or win points through variance while being no better calibrated; only
-the combination distinguishes signal from luck. These probabilistic metrics are a planned
-validation extension rather than a result reported here.
+the combination distinguishes signal from luck.
+
+\paragraph{Reported probability quality.} This layer is now implemented, and we report it on the
+same $96$ group-stage matches. Table~\ref{tab:prob} summarises the proper-score and calibration
+results. The combined 1X2 Brier score is $0.578$, log loss $0.987$, and RPS $0.211$. The model is
+sharper in 2018 (Brier $0.546$, RPS $0.195$) than in 2022 (Brier $0.610$, RPS $0.227$): 2018 was
+the easier, more chalk-following tournament, while 2022 was more upset-heavy. Across the combined
+sample the market-implied probabilities are reasonably calibrated within the resolving power of
+$96$ matches.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+Sample & Brier & Log loss & RPS & $\E[\text{goals}]$ & Actual goals & BTTS pred. & BTTS real. \\
+\midrule
+2018     & 0.546 & 0.927 & 0.195 & 2.524 & 2.542 & 0.436 & 0.458 \\
+2022     & 0.610 & 1.046 & 0.227 & 2.611 & 2.500 & 0.454 & 0.417 \\
+Combined & 0.578 & 0.987 & 0.211 & 2.567 & 2.521 & 0.445 & 0.438 \\
+\bottomrule
+\end{tabular}
+\caption{Probabilistic validation on the 2018 and 2022 group stages and their combined sample
+($n=48+48=96$). 1X2 proper scores (Brier, log loss, RPS), mean expected versus realised total
+goals, and pooled both-teams-to-score (BTTS) probability versus realised frequency. All
+differences are small relative to sampling variability at this sample size.}
+\label{tab:prob}
+\end{table}
+
+\paragraph{Calibration of result classes.} Favourite, draw, and underdog probabilities are not
+significantly miscalibrated at $n=96$. There is a directionally classic favourite--longshot
+pattern --- favourites and draws are mildly overstated (predicted minus realised of $+0.042$ and
+$+0.033$ respectively) and underdogs mildly understated ($-0.075$) --- but a paired bootstrap over
+matches yields confidence intervals that include zero for all three classes. We therefore treat
+this pattern as a watch-note rather than an actionable edge. Both-teams-to-score is well
+calibrated, with a pooled predicted probability of $0.445$ against a realised frequency of $0.438$;
+this supports keeping the BTTS-conflict signal as a narrow per-match difficulty note rather than
+promoting it to a broad rule. Expected total goals are essentially unbiased ($2.567$ predicted
+versus $2.521$ realised, a mean bias of $+0.047$), and clean half-line totals are reasonably
+calibrated; aggregates built across integer push lines can introduce definitional artefacts, so
+totals calibration should be read at the half-line level.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.62\textwidth]{figures/calibration_1x2.png}
+\caption{Reliability of the 1X2 probabilities on the combined 2018+2022 group stages. Predicted
+probability bucket means are plotted against realised frequencies for favourite, draw, and underdog
+outcomes, with marker area scaled by bucket sample size. Points lie close to the diagonal; the
+remaining scatter is within sampling noise at $n=96$.}
+\label{fig:calibration}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.7\textwidth]{figures/expected_vs_actual_goals.png}
+\caption{Expected versus realised mean total goals per match, by tournament and combined. The
+expected goal mean tracks the realised mean closely, with a combined bias of $+0.047$ goals.}
+\label{fig:goals}
+\end{figure}
+
+\paragraph{Distribution quality versus decision governance.} The probabilistic layer makes a
+structural point that realised points alone obscure. The probability vectors are almost invariant
+across strategies: \texttt{baseline\_poisson}, \texttt{ev\_default}, \texttt{most\_likely} and
+most baseline configurations produce identical or near-identical distributions, so their
+realised-points differences arise entirely from \emph{scoreline choice and decision rule}, not
+from different probability estimates. Only Dixon--Coles and the market-consistent matrix perturb
+the distribution at all, and their movements in Brier and RPS are negligible. The market-consistent
+matrix with Asian handicap (MC$+$AH) slightly improves realised points but does not materially
+improve probability quality, reinforcing its status as a gated challenger rather than a new
+probability default; the modal/most-likely prediction does not improve probability quality either
+and is a scoreline-selection and variance alternative, consistent with its manual-review role. The
+overall conclusion is that the probabilistic backtest reinforces the main modelling
+interpretation: market-implied probabilities are broadly calibrated, and the main differences
+between strategies arise from decision governance under the payoff function rather than from
+materially superior probability estimation.
+
+\paragraph{Scope caveat.} Two strategies discussed under realised points are \emph{not} covered by
+this probabilistic analysis. Correct-score blend weights were not exercised in the probabilistic
+outputs used here, and power devig was likewise absent from them. The paper's statements about the
+correct-score blend and power devig therefore rest on realised pool-points backtests only and are
+not claimed as probabilistically validated, so as not to overstate the calibration evidence.
 
 \subsection*{Statistical uncertainty}
 
