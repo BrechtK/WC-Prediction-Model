@@ -65,7 +65,7 @@ def _stage_input(root: Path) -> None:
     (dest / "live_backtest_predictions.csv").write_bytes(INPUT.read_bytes())
 
 
-def test_select_examples_prefers_highest_favourite_and_smallest_home_away_gap() -> None:
+def test_select_examples_prefers_highest_favourite_and_smallest_team_a_team_b_gap() -> None:
     module = _load_module()
     predictions = pd.DataFrame(
         [
@@ -104,8 +104,8 @@ def test_generate_writes_expected_files_and_summary(tmp_path: Path) -> None:
         "favourite_probability",
         "draw_probability",
         "underdog_probability",
-        "home_expected_goals",
-        "away_expected_goals",
+        "team_a_expected_goals",
+        "team_b_expected_goals",
         "most_likely_scoreline",
         "ev_optimal_scoreline",
     }.issubset(summary.columns)

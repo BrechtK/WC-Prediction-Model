@@ -6,6 +6,8 @@
 \usepackage{graphicx}
 \usepackage[margin=1in]{geometry}
 \usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{subcaption}
 \hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
 
 \title{A Market-Implied Expected-Points Model for\\ World Cup Exact-Score Prediction}
@@ -112,9 +114,25 @@ p=(a,b)\in\mathbb{N}_0^2 .
 \]
 The model summarises beliefs about the match in a \emph{scoreline probability matrix}
 \[
-\pi_{xy}=\Prob(X=x,\,Y=y),\qquad \pi_{xy}\ge 0,\qquad \sum_{x,y}\pi_{xy}=1 ,
+\pi_{xy}=\Prob(X=x,\,Y=y),\qquad \pi_{xy}\ge 0,\qquad \sum_{x,y}\pi_{xy}=1 .
 \]
-truncated to a finite grid $0\le x,y\le G$ and renormalised. Given a scoring function
+Although the Poisson distribution has infinite support, the model evaluates the scoreline matrix on a finite grid \(0 \leq x,y \leq G\). Let
+\[
+S_G
+=
+\sum_{i=0}^{G}\sum_{j=0}^{G} \pi_{ij}
+\]
+denote the probability mass retained on this grid. The working probability matrix is then the renormalised matrix
+\[
+\tilde{\pi}_{xy}
+=
+\frac{\pi_{xy}}{S_G},
+\qquad
+0 \leq x,y \leq G.
+\]
+The omitted tail mass is \(1-S_G\). For ordinary football matches this tail mass is typically negligible, while for extreme-favourite or high-total matches it is monitored through tail-mass and larger-grid diagnostics. In the implementation used for the historical validation below, the default grid is \(G=8\), so the working matrix covers scorelines from \(0\)-\(0\) up to \(8\)-\(8\).
+
+Given a scoring function
 $g(p;X,Y)$ that returns the pool points earned when prediction $p$ meets outcome
 $(X,Y)$, the optimal prediction maximises expected points:
 \begin{equation}
@@ -243,28 +261,19 @@ result, totals, and BTTS identities in closed form, and it is straightforward to
 known limitation --- mild dependence between the two scores, especially in low-scoring games
 --- motivates the Dixon--Coles challenger discussed in Section~\ref{sec:challengers}.
 
-Figure~\ref{fig:probability-matrices} shows two reconstructed baseline matrices from the
-combined 2018+2022 historical backtest. In the extreme-favourite example, probability mass is
-pulled into one-sided, mostly clean-sheet Germany-win scorelines. In the balanced example, mass is
-more diffuse around draws and narrow margins; the modal scoreline is $1\text{-}1$, while the
-expected-points optimum is $1\text{-}0$ because the payoff rewards result and goal-difference
-classes as well as exact score.
+Figure~\ref{fig:probability-matrices} shows two reconstructed baseline matrices from the combined 2018--2022 historical backtest. In the extreme-favourite example, probability mass is concentrated in one-sided, mostly clean-sheet Germany wins. In the balanced example, the distribution is more symmetric and concentrated around draws and narrow margins. The modal scoreline is \(1\)-\(1\), while the expected-points optimum is \(1\)-\(0\), illustrating that the optimal prediction is shaped by the pool payoff and not only by the most likely scoreline.
 
 \begin{figure}[htbp]
 \centering
 \begin{minipage}{0.49\textwidth}
 \centering
-\includegraphics[width=\textwidth]{figures/probability_matrix_extreme_favourite.png}
+\includegraphics[width=\textwidth]{probability_matrix_extreme_favourite.png}
 \end{minipage}\hfill
 \begin{minipage}{0.49\textwidth}
 \centering
-\includegraphics[width=\textwidth]{figures/probability_matrix_balanced.png}
+\includegraphics[width=\textwidth]{probability_matrix_balanced.png}
 \end{minipage}
-\caption{Exact-score probability matrices reconstructed from the representative baseline
-Poisson pipeline. Rows are home/team-A goals and columns are away/team-B goals. The red outline
-marks the expected-points-optimal score; when distinct, the green outline marks the modal
-scoreline. The examples are selected automatically from the historical backtest universe as the
-highest favourite-probability match and the most symmetric home-away win-probability match.}
+\caption{Representative exact-score probability matrices from the baseline Poisson pipeline. The left panel shows the highest favourite-probability match in the historical sample, while the right panel shows the most balanced team-A/team-B win-probability match. The red outline marks the expected-points-optimal score; when distinct, the green outline marks the modal scoreline. The balanced example uses the default \(G=8\) grid, while the extreme-favourite example is displayed on the larger diagnostic grid to show high-margin tail mass.}
 \label{fig:probability-matrices}
 \end{figure}
 
@@ -551,7 +560,7 @@ totals calibration should be read at the half-line level.
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.62\textwidth]{figures/calibration_1x2.png}
+\includegraphics[width=0.62\textwidth]{calibration_1x2.png}
 \caption{Reliability of the 1X2 probabilities on the combined 2018+2022 group stages. Predicted
 probability bucket means are plotted against realised frequencies for favourite, draw, and underdog
 outcomes, with marker area scaled by bucket sample size. Points lie close to the diagonal; the
@@ -561,7 +570,7 @@ remaining scatter is within sampling noise at $n=96$.}
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.7\textwidth]{figures/expected_vs_actual_goals.png}
+\includegraphics[width=0.7\textwidth]{expected_vs_actual_goals.png}
 \caption{Expected versus realised mean total goals per match, by tournament and combined. The
 expected goal mean tracks the realised mean closely, with a combined bias of $+0.047$ goals.}
 \label{fig:goals}

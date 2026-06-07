@@ -94,7 +94,7 @@ def select_example_rows(predictions: pd.DataFrame) -> dict[str, pd.Series]:
     """Select an extreme favourite and a balanced match from historical outputs.
 
     Extreme favourite: highest market-implied favourite win probability.
-    Balanced: smallest absolute gap between home/team-A and away/team-B win
+    Balanced: smallest absolute gap between Team A and Team B win
     probabilities, with favourite probability as the deterministic tie-breaker.
     This chooses the most symmetric 1X2 profile available in the reconstructed
     baseline universe.
@@ -107,12 +107,12 @@ def select_example_rows(predictions: pd.DataFrame) -> dict[str, pd.Series]:
     ).iloc[0]
 
     balanced_candidates = rep.copy()
-    balanced_candidates["home_away_gap"] = (
+    balanced_candidates["team_a_team_b_gap"] = (
         balanced_candidates["market_a_win"].astype(float)
         - balanced_candidates["market_b_win"].astype(float)
     ).abs()
     balanced = balanced_candidates.sort_values(
-        ["home_away_gap", "favourite_probability", "tournament", "match_id"],
+        ["team_a_team_b_gap", "favourite_probability", "tournament", "match_id"],
         ascending=[True, True, True, True],
     ).iloc[0]
 
@@ -164,9 +164,9 @@ def _summary_text(example: MatrixExample) -> str:
     row = example.row
     return "\n".join(
         [
-            f"P(home) {float(row['market_a_win']):.1%}   "
+            f"P(Team A) {float(row['market_a_win']):.1%}   "
             f"P(draw) {float(row['market_draw']):.1%}   "
-            f"P(away) {float(row['market_b_win']):.1%}",
+            f"P(Team B) {float(row['market_b_win']):.1%}",
             f"xG: {row['team_a']} {float(row['lambda_a']):.2f}, "
             f"{row['team_b']} {float(row['lambda_b']):.2f}",
             f"Modal: {_score_label(example.modal_score)}   "
@@ -209,8 +209,8 @@ def plot_matrix(example: MatrixExample, out_path: Path) -> None:
 
     ax.set_xticks(np.arange(max_goals + 1))
     ax.set_yticks(np.arange(max_goals + 1))
-    ax.set_xlabel("Away goals")
-    ax.set_ylabel("Home goals")
+    ax.set_xlabel("Team B goals")
+    ax.set_ylabel("Team A goals")
     ax.set_title(
         f"{row['team_a']} vs {row['team_b']} - {_tournament_label(str(row['tournament']))} "
         f"({row['match_id']})",
@@ -223,12 +223,12 @@ def plot_matrix(example: MatrixExample, out_path: Path) -> None:
     ax.grid(which="minor", color="white", linewidth=0.75, alpha=0.75)
     ax.tick_params(which="minor", bottom=False, left=False)
 
-    for home_goals, away_goals in sorted(_annotated_cells(probabilities, highlights)):
-        probability = probabilities[home_goals, away_goals]
+    for team_a_goals, team_b_goals in sorted(_annotated_cells(probabilities, highlights)):
+        probability = probabilities[team_a_goals, team_b_goals]
         text_color = "white" if probability > probabilities.max() * 0.50 else "0.15"
         ax.text(
-            away_goals,
-            home_goals,
+            team_b_goals,
+            team_a_goals,
             f"{probability:.1%}",
             ha="center",
             va="center",
@@ -237,10 +237,10 @@ def plot_matrix(example: MatrixExample, out_path: Path) -> None:
         )
 
     if example.ev_score == example.modal_score:
-        home_goals, away_goals = example.ev_score
+        team_a_goals, team_b_goals = example.ev_score
         ax.add_patch(
             Rectangle(
-                (away_goals - 0.5, home_goals - 0.5),
+                (team_b_goals - 0.5, team_a_goals - 0.5),
                 1,
                 1,
                 fill=False,
@@ -250,11 +250,11 @@ def plot_matrix(example: MatrixExample, out_path: Path) -> None:
         )
         legend_handles = [Patch(facecolor="none", edgecolor="#d62728", label="Modal and EV-optimal")]
     else:
-        modal_home, modal_away = example.modal_score
-        ev_home, ev_away = example.ev_score
+        modal_team_a, modal_team_b = example.modal_score
+        ev_team_a, ev_team_b = example.ev_score
         ax.add_patch(
             Rectangle(
-                (modal_away - 0.5, modal_home - 0.5),
+                (modal_team_b - 0.5, modal_team_a - 0.5),
                 1,
                 1,
                 fill=False,
@@ -264,7 +264,7 @@ def plot_matrix(example: MatrixExample, out_path: Path) -> None:
         )
         ax.add_patch(
             Rectangle(
-                (ev_away - 0.5, ev_home - 0.5),
+                (ev_team_b - 0.5, ev_team_a - 0.5),
                 1,
                 1,
                 fill=False,
@@ -301,22 +301,22 @@ def build_summary(examples: dict[str, MatrixExample]) -> pd.DataFrame:
     rows = []
     for label, example in examples.items():
         row = example.row
-        home_win = float(row["market_a_win"])
-        away_win = float(row["market_b_win"])
-        favourite_side = "home" if home_win >= away_win else "away"
-        underdog_probability = min(home_win, away_win)
+        team_a_win = float(row["market_a_win"])
+        team_b_win = float(row["market_b_win"])
+        favourite_side = "team_a" if team_a_win >= team_b_win else "team_b"
+        underdog_probability = min(team_a_win, team_b_win)
         rows.append(
             {
                 "example": label,
                 "tournament": row["tournament"],
                 "match_id": row["match_id"],
                 "fixture": f"{row['team_a']} vs {row['team_b']}",
-                "favourite_team": row["team_a"] if favourite_side == "home" else row["team_b"],
-                "favourite_probability": max(home_win, away_win),
+                "favourite_team": row["team_a"] if favourite_side == "team_a" else row["team_b"],
+                "favourite_probability": max(team_a_win, team_b_win),
                 "draw_probability": float(row["market_draw"]),
                 "underdog_probability": underdog_probability,
-                "home_expected_goals": float(row["lambda_a"]),
-                "away_expected_goals": float(row["lambda_b"]),
+                "team_a_expected_goals": float(row["lambda_a"]),
+                "team_b_expected_goals": float(row["lambda_b"]),
                 "most_likely_scoreline": _score_label(example.modal_score),
                 "ev_optimal_scoreline": _score_label(example.ev_score),
                 "ev_expected_points": example.ev_expected_points,
