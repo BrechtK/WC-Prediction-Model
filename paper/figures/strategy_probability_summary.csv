@@ -1,11 +1,4 @@
-# Power devig and correct-score blend were points-tested in the paper but are absent from the probabilistic backtest outputs (margin method was normalised_inverse_odds throughout and correct-score blend weight was 1.0), so they have no probability-quality row here.
-config,strategy,matches,brier_1x2,rps_1x2,average_realised_points,total_points,label
-baseline_ev,most_likely,96,0.5779581579862342,0.21081331738662737,4.291666666666667,412,Modal / most-likely
-mc_with_ah,most_likely,96,0.5779581579862342,0.21081331738662737,4.291666666666667,412,mc_with_ah/most_likely
-mc_with_ah,market_consistent,96,0.5773581873301207,0.21115347379871305,4.15625,399,MC+AH
-baseline_ev,baseline_poisson,96,0.5779581579862342,0.21081331738662737,4.072916666666667,391,baseline_ev/baseline_poisson
-baseline_ev,dixon_coles,96,0.5779581579862342,0.21081331738662737,4.072916666666667,391,baseline_ev/dixon_coles
-mc_with_ah,baseline_poisson,96,0.5779581579862342,0.21081331738662737,4.072916666666667,391,mc_with_ah/baseline_poisson
-baseline_ev,ev_default,96,0.5779581579862342,0.21081331738662737,4.072916666666667,391,EV default
-mc_with_ah,ev_default,96,0.5779581579862342,0.21081331738662737,4.072916666666667,391,mc_with_ah/ev_default
-mc_with_ah,dixon_coles,96,0.577423087116922,0.2107241389084087,4.010416666666667,385,Dixon-Coles
+strategy,matches,total_points,brier_1x2,rps_1x2,label
+most_likely_poisson,144,607,0.5704848754958051,0.13799032609897405,Modal / most-likely
+ev_optimal_1x2,144,594,0.5704848754958051,0.13799032609897405,EV 1X2
+ev_optimal_1x2_over_under,144,594,0.5704848754958051,0.13799032609897405,EV 1X2 + O/U slot

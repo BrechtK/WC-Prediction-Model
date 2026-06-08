@@ -157,26 +157,84 @@ All of these leave `recommended_score` unchanged.
 
 ## Validation Highlights
 
-The model is validated on two complementary layers over the combined 2018 and
-2022 World Cup group stages (96 matches):
+Consistently available historical inputs differ by tournament, so validation is
+split into two layers:
+
+- The extended Football-Data layer uses the available 2014, 2018, and 2022
+  World Cup group-stage sheets with average 1X2 odds only. The workbook does
+  not contain a 2010 sheet, so this extension covers 144 matches rather than
+  192: 48 matches in each loaded tournament.
+- The richer 2018/2022 diagnostic layer uses auxiliary-market inputs from the
+  live-paste historical runs. It supports challenger governance, but it is not
+  part of the headline 144-match Football-Data table.
 
 - **Realised pool points** evaluate the *decision rule* under the Sporza
   `10/7/5/1` scoring system.
 - **Probabilistic scoring rules** evaluate the *quality and calibration of the
-  scoreline probability distribution*, independently of the discrete payoff.
+  1X2-implied scoreline probability distribution*, independently of the
+  discrete payoff.
 
-Headline combined figures:
+This validation is 1X2-only. It uses Football-Data average market odds
+(`H-Avg`, `D-Avg`, `A-Avg`), which are available for all loaded rows. Each
+loaded match carries complete average 1X2 odds. Realised scores are read from
+`HGFT` and `AGFT` only.
+Asian-handicap, correct-score, and MC+AH logic is not applied to this extension.
 
-- 1X2 Brier = 0.578, log loss = 0.987, RPS = 0.211.
-- Expected total goals 2.567 vs realised 2.521 (essentially unbiased).
-- BTTS 0.445 predicted vs 0.438 realised (well calibrated).
+Realised pool points:
 
-The probability vectors are broadly stable across strategies, so realised-points
-differences arise mainly from the scoring-rule decision layer rather than from
-materially different probability estimates. Favourite/draw/underdog probabilities
-show a mild, directionally classic favourite-longshot pattern that is not
-statistically significant at this sample size, so it is a watch-note rather than
-an actionable edge.
+| Strategy | 2014 | 2018 | 2022 | Combined |
+|---|---:|---:|---:|---:|
+| `most_likely_poisson` | 190 | 227 | 190 | 607 |
+| `ev_optimal_1x2` | 193 | 222 | 179 | 594 |
+| `ev_optimal_1x2_over_under` | 193 | 222 | 179 | 594 |
+
+Probabilistic validation:
+
+| Sample | Matches | Brier | Log loss | RPS |
+|---|---:|---:|---:|---:|
+| 2014 | 48 | 0.563 | 0.951 | 0.135 |
+| 2018 | 48 | 0.547 | 0.931 | 0.131 |
+| 2022 | 48 | 0.601 | 1.032 | 0.149 |
+| Combined | 144 | 0.570 | 0.971 | 0.138 |
+
+The 1X2-only score matrix is somewhat conservative on total goals. Using the
+renormalised score matrix expectation `sum(pi[a,b] * (a + b))`, the combined
+mean expected total is 2.387 versus 2.625 realised, a +0.238 realised-minus-model
+gap, about 10.0% relative to the model expectation. The same reduced-input
+diagnostic is mildly draw-heavy: mean implied draw probability is 0.245 versus
+0.194 realised draw frequency. This is treated as a limitation of inferring a
+full scoreline distribution from 1X2 odds alone, not as a failure of the
+expected-points decision rule. The expected-goals figure therefore uses two
+panels: the full 2014/2018/2022 Football-Data extension, and an apples-to-apples
+2018/2022 comparison across validation layers. On that common 96-match subset,
+Football-Data 1X2-only is 2.346 expected versus 2.521 realised; the richer
+live-paste layer with explicit total-goals inputs is 2.567 expected versus 2.521
+realised. The richer layer is closer to realised total-goal intensity, so the
+gap is treated as reduced-input information loss rather than a general failure
+of the score-matrix idea.
+
+The modal strategy scores higher than the EV-style strategies in realised
+points over this specific 144-match sample. That does not change the model
+policy: EV remains the ex-ante expected-points rule under the scoring function,
+while modal remains a manual-review challenger. The probability vectors are the
+same across these strategies, so realised-points differences arise from the
+scoreline-selection layer rather than materially different probability
+estimates.
+
+Richer 2018/2022 diagnostic layer, not the headline Football-Data extension:
+
+| Strategy / diagnostic | Points | Governance interpretation |
+|---|---:|---|
+| EV-optimal default | 391 | Live default benchmark |
+| Modal / most-likely | 412 | Manual-review challenger; realised gain does not overturn EV policy |
+| Market-consistent + AH | 399 | Gated challenger; small fit-dependent gain |
+| Correct-score blend | 400 | Research-only; not promoted to default |
+| Power devig | 386 | Underperforms; not recommended for serious live use |
+| Dixon-Coles / larger grid | 391 | Inert relative to default on this combined diagnostic layer |
+
+These richer-layer rows use auxiliary-market research outputs from the 2018 and
+2022 group stages. They inform challenger governance only and do not establish
+betting alpha.
 
 Figures (generated by `scripts/generate_validation_figures.py` into
 `paper/figures/`):
@@ -192,8 +250,7 @@ Figures (generated by `scripts/generate_validation_figures.py` into
 Each prediction starts from a full scoreline probability matrix: home/team-A
 goals on the vertical axis, away/team-B goals on the horizontal axis, and colour
 as the probability of that exact score. The heatmaps below show the contrast
-between an extreme-favourite match and a genuinely balanced one selected from
-the combined 2018+2022 historical backtest.
+between an extreme-favourite match and a genuinely balanced historical match.
 
 ![Extreme-favourite exact-score probability matrix](paper/figures/probability_matrix_extreme_favourite.png)
 
@@ -248,11 +305,13 @@ Additional research diagnostics include optional Shin margin removal,
 market-estimated Dixon-Coles rho from low correct-score cells, and a historical
 World Cup backtest harness.
 
-Current 2026 policy from the combined 2018+2022 review:
+Current 2026 policy after the 144-match Football-Data 1X2 extension and the
+separate richer challenger diagnostics:
 
 - EV remains the live default; diagnostics do not override `recommended_score`.
-- Combined evidence is 96 group-stage matches. Modal/most-likely was strong in
-  2022 and weak in 2018, so it is not robust enough to promote.
+- In the Football-Data 1X2-only extension, modal/most-likely scores higher than
+  EV-style strategies over the specific 144-match realised-points sample, but
+  this is not robust enough to promote over the ex-ante expected-points rule.
 - Do not promote modal/most-likely, MC+AH, correct-score blend-weight changes,
   power devig, global draw boosts, or AH favourite-under-cover adjustments to
   the live default.
@@ -268,7 +327,7 @@ Current 2026 policy from the combined 2018+2022 review:
   expected-goals estimate.
 - Realised pool points evaluate the contest decision. Proper scoring rules and
   calibration evaluate probability quality. Both are needed because realised
-  points are high variance at the current 96-match combined sample.
+  points are high variance even at the current 144-match combined sample.
 
 An opt-in advanced modelling layer is also available, all diagnostic-first and
 off by default (see [docs/mathematical_basis.md](docs/mathematical_basis.md)):
@@ -300,6 +359,38 @@ Then run:
 ```powershell
 python scripts/run_historical_world_cup_backtest.py --input input/historical/2022/world_cup_matches.csv
 ```
+
+For the extended Football-Data World Cup workbook path, place the downloaded
+`World Cup XLSX NEW` file somewhere local such as:
+
+```text
+input/historical/football-data/world-cup.xlsx
+```
+
+Then run the common 1X2-market validation across the available group-stage
+sheets:
+
+```powershell
+python scripts/run_historical_world_cup_backtest.py `
+  --football-data-xlsx input/historical/football-data/world-cup.xlsx `
+  --years 2014 2018 2022 `
+  --odds-source avg
+```
+
+This mode uses `H-Avg`, `D-Avg`, and `A-Avg` by default because average odds
+are a better consensus-market input than max odds. If average odds are missing
+for a row, Bet365 1X2 odds are used as an explicit fallback and reported. In
+the available workbook, the 2014/2018/2022 sheets each load 48 group-stage
+matches, all loaded rows have valid `H-Avg`/`D-Avg`/`A-Avg`, and no Bet365
+fallback rows are used. There is no 2010 sheet in that workbook, so the
+extended validation covers 144 matches, not 192.
+
+This extension is intentionally limited to the common 1X2 input: it reconstructs
+an independent-Poisson score matrix, compares modal versus EV-optimal
+scorelines, scores realised pool points using `HGFT`/`AGFT`, and exports 1X2
+probability-quality summaries. It does not force Asian handicap, correct-score
+blend, or MC+AH diagnostics onto tournaments where comparable inputs are not
+available, and it does not establish betting alpha.
 
 No real historical odds are tracked in the repository. Historical odds quality,
 timing, and coverage matter, so treat results as validation evidence rather

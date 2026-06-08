@@ -1,0 +1,3 @@
+sample,validation_layer,matches,expected_total_goals,actual_total_goals,bias,realised_minus_expected
+2018/2022 Football-Data 1X2-only,Football-Data 1X2-only,96,2.346312695435636,2.5208333333333335,-0.17452063789769756,0.17452063789769756
+2018/2022 richer live-paste,Richer live-paste + totals,96,2.5674255626946754,2.5208333333333335,0.046592229361341886,-0.046592229361341886

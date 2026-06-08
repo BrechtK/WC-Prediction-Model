@@ -11,10 +11,6 @@
 \usepackage{subcaption}
 \hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
 
-\title{A Market-Implied Expected-Points Model for\\ World Cup Exact-Score Prediction}
-\author{}
-\date{}
-
 \newcommand{\Prob}{\mathbb{P}}
 \newcommand{\E}{\mathbb{E}}
 \newcommand{\sgn}{\operatorname{sign}}
@@ -23,6 +19,7 @@
 \begin{document}
 \author{Brecht Kerckhove\thanks{Personal project. The views expressed in this paper are solely those of the author and do not represent the views of any employer or affiliated organisation.}}
 \date{\today}
+\title{A Market-Implied Expected-Points Model for\\ World Cup Exact-Score Prediction}
 \maketitle
 
 \begin{abstract}
@@ -35,13 +32,15 @@ Bookmaker odds are treated as market-implied information. Decimal odds are conve
 into devigged probabilities, which calibrate a scoreline probability matrix over
 football scores; auxiliary markets (total goals, both-teams-to-score, Asian handicap,
 correct score) supply additional structure. Predictions are then chosen by maximising
-expected points over the matrix. We validate the approach on the $96$ group-stage
-matches of the 2018 and 2022 World Cups and report a deliberately conservative final
-policy: the expected-points-optimal prediction is the live default, while modal,
+expected points over the matrix. We report an extended validation over $144$
+group-stage matches from the 2014, 2018, and 2022 World Cups using a common 1X2
+input set, alongside a richer 2018/2022 diagnostic layer with explicit
+auxiliary-market inputs. The final policy is deliberately conservative: the
+expected-points-optimal prediction is the live default, while modal,
 market-consistent, Asian-handicap, and correct-score variants are retained as
-challenger diagnostics or gated alternatives rather than automatic overrides. This is
-a decision model for a scoring-rule contest, not a betting strategy, and we make no
-claim of market-beating returns.
+challenger diagnostics or gated alternatives rather than automatic overrides. This
+is a decision model for a scoring-rule contest, not a betting strategy, and we make
+no claim of market-beating returns.
 \end{abstract}
 
 \textbf{Keywords:} prediction pool, expected-points optimisation, exact-score prediction, Poisson score model, market-implied probabilities, bookmaker odds
@@ -52,13 +51,19 @@ claim of market-beating returns.
 \section{Introduction}
 
 Prediction pools are a familiar part of major sports tournaments such as the FIFA World Cup. Participants submit predictions for a sequence of matches and receive points according to how close those predictions are to the realised outcomes. One common format is an exact-score pool, where the participant predicts the final score of each match. At first sight, this looks like a simple forecasting problem: find the most likely scoreline and submit it. That instinct is not always correct.
+
 The reason is that an exact-score pool is governed by a payoff table. A score such as 1-0, 1-1, or 2-1 may be the single most likely outcome, but the prediction that maximises expected pool points depends on the full scoring rule. If the pool awards partial credit for the correct winner or the correct goal difference, then a prediction should be judged by the points it earns across all possible outcomes, not only by the probability of hitting the exact score.
+
 This turns exact-score prediction into a decision problem. The model still needs a probability distribution over scorelines, but the final prediction is chosen by passing that distribution through the pool's payoff function. In that sense, the problem is closer to pricing a payoff than to producing a simple point forecast: the same probability model can lead to different optimal predictions under different scoring rules.
+
 The next question is where the scoreline probabilities should come from. In this project, the information backbone is the betting market. Bookmaker odds are useful because they compress a large amount of information into one price: historical team strength, current form, injuries, team news, trader judgement, market competition, risk management and betting flow. 
 
-This approach is consistent with the broader quantitative evolution of football, where data-driven methods have become increasingly embedded in both sporting decisions and betting markets. In football specifically, odds-setters have been studied as forecasters, with bookmaker prices interpreted as implicit probabilistic forecasts of match outcomes \cite{forrest2005}. The same quantitative shift is visible in the betting industry itself: specialist firms such as Starlizard analyse large-scale sporting and betting-market data to produce betting probabilities and compare their real-time prediction systems with market prices.\footnote{Starlizard Integrity Services describes Starlizard's core business as analysing large amounts of sporting and betting-market data, converting this information into betting probabilities, and comparing betting markets with real-time prediction modelling systems.} 
+This approach is consistent with the broader quantitative evolution of football, where data-driven methods have become increasingly embedded in both sporting decisions and betting markets. In football specifically, odds-setters have been studied as forecasters, with bookmaker prices interpreted as implicit probabilistic forecasts of match outcomes \cite{forrest2005}. The same quantitative shift is visible in the betting industry itself: specialist firms such as Starlizard analyse large-scale sporting and betting-market data to produce betting probabilities and compare their real-time prediction systems with market prices.\footnote{Starlizard Integrity Services describes Starlizard's core business as analysing large amounts of sporting and betting-market data, converting this information into betting probabilities, and comparing betting markets with real-time prediction modelling systems.}
+
 Therefore, after \emph{devigging}, meaning the removal of the bookmaker margin, bookmaker odds can be interpreted as market-implied probabilities. This does not mean that these probabilities are identical to the true physical probabilities of the match. Like prices in financial markets, they aggregate information but may also contain risk premia, liquidity effects, customer-demand effects and behavioural biases.
+
 This finance analogy also guides the modelling pipeline: infer probabilities from market prices, calibrate a model to those prices, and optimise a decision under an explicit payoff function. In the present setting, the calibrated object is a scoreline distribution. The football literature has long used Poisson-type count models for this purpose \cite{maher1982,dixoncoles1997}, and has also studied both the information content and possible inefficiencies of betting markets \cite{dixoncoles1997}.
+
 The aim of this model is to build a disciplined prediction-pool decision model and does not claim a betting edge. In a market where odds are already highly informative, the realistic source of improvement is not necessarily superior probability estimation, but the consistent translation of market-implied probabilities into decisions under the scoring rule.
 
 
@@ -69,8 +74,8 @@ scoreline. (ii) It describes a market-implied scoreline probability matrix calib
 liquid bookmaker markets rather than to historical goal counts. (iii) It catalogues a set of
 challenger views --- modal, market-consistent / entropy-projected, Asian-handicap, and
 correct-score --- as explainable diagnostics rather than automatic overrides. (iv) It
-reports historical validation on the 2018 and 2022 World Cup group stages and distils it into
-a conservative governance policy for live use.
+reports historical validation on the 2014, 2018, and 2022 World Cup group stages and
+distils it into a conservative governance policy for live use.
 
 \paragraph{Conceptual pipeline.} The model is a short chain in which each stage has a single
 responsibility:
@@ -216,9 +221,9 @@ how they redistribute margin between favourites and longshots.
 We prefer robust, conservative devigging for two reasons. First, the markets differ
 structurally: two- and three-way markets (result, BTTS, totals) behave very differently
 from many-outcome correct-score markets, which are sparse and carry large overrounds, so a
-method tuned for one can distort another. Second, in our historical validation the more
-aggressive power method did not improve realised pool points and is not recommended for
-serious live use. Per-market devigging therefore defaults to normalised inverse odds, with
+method tuned for one can distort another. Second, diagnostic backtests did not support
+promoting the more aggressive power method for serious live use. Per-market devigging
+therefore defaults to normalised inverse odds, with
 a safe fallback when a diagnostic method fails to produce a valid probability vector for a
 given market.
 
@@ -259,15 +264,15 @@ result, totals, and BTTS identities in closed form, and it is straightforward to
 known limitation --- mild dependence between the two scores, especially in low-scoring games
 --- motivates the Dixon--Coles challenger discussed in Section~\ref{sec:challengers}.
 
-Figure~\ref{fig:probability-matrices} shows two reconstructed baseline matrices from the combined 2018--2022 historical backtest. In the extreme-favourite example, probability mass is concentrated in one-sided, mostly clean-sheet Germany wins. In the balanced example, the distribution is more symmetric and concentrated around draws and narrow margins. The modal scoreline is \(1\)-\(1\), while the expected-points optimum is \(1\)-\(0\), illustrating that the optimal prediction is shaped by the pool payoff and not only by the most likely scoreline.
+Figure~\ref{fig:probability-matrices} shows two reconstructed baseline matrices from the historical backtest data. In the extreme-favourite example, probability mass is concentrated in one-sided, mostly clean-sheet Germany wins. In the balanced example, the distribution is more symmetric and concentrated around draws and narrow margins. The modal scoreline is \(1\)-\(1\), while the expected-points optimum is \(1\)-\(0\), illustrating that the optimal prediction is shaped by the pool payoff and not only by the most likely scoreline.
 
 \begin{figure}[htbp]
 \centering
-\begin{minipage}{0.49\textwidth}
+\begin{minipage}{0.5\textwidth}
 \centering
 \includegraphics[width=\textwidth]{probability_matrix_extreme_favourite.png}
 \end{minipage}\hfill
-\begin{minipage}{0.49\textwidth}
+\begin{minipage}{0.5\textwidth}
 \centering
 \includegraphics[width=\textwidth]{probability_matrix_balanced.png}
 \end{minipage}
@@ -300,6 +305,15 @@ where $f_k$ is a model functional from~\eqref{eq:1x2}--\eqref{eq:bttsou}, $m_k$ 
 market target, and $\omega_k$ is a reliability weight that prioritises the most liquid
 markets (result first, then totals and BTTS).
 
+\paragraph{Why 1X2 alone does not identify total-goal intensity.} The 1X2 market fixes only
+three aggregate result probabilities: team A win, draw, and team B win. Many different
+scoreline matrices can share the same three result probabilities while having different
+expected total goals, BTTS probabilities, and high-score tail mass. Even within an independent
+Poisson family, the result probabilities mostly constrain relative team strength and the
+draw mass; total-goal intensity is then inferred indirectly rather than observed from a
+direct totals price. A 1X2-only calibration is therefore useful as a common-information
+baseline, but it does not fully identify the level or shape of the score distribution.
+
 The fit is deliberately \emph{overidentified}: the two intensities
 $(\lambda_X,\lambda_Y)$ are calibrated against many more market constraints than there are
 parameters (result, several total-goals lines, BTTS, and indirectly margin and
@@ -314,6 +328,9 @@ low-parameter model is a smooth, internally consistent interpolation of it that 
 and generally will not, fit every quoted instrument perfectly. Closer agreement with several
 markets at once is one role of the market-consistent projection of
 Section~\ref{sec:entropy}, which relaxes the strict two-parameter form.
+
+Richer markets such as totals, BTTS, correct score, and Asian handicap therefore constrain
+dimensions of the scoreline distribution that 1X2 probabilities do not pin down.
 
 \section{Correct-score market information}
 
@@ -330,9 +347,9 @@ where $\pi^{\mathrm{CS}}$ is the devigged, renormalised correct-score matrix ove
 cells. Equation~\eqref{eq:blend} is conceptual: the actual treatment handles the quoted cells
 and the unquoted tail / ``Other'' mass with more care, but the modelling idea --- shrinking the
 model matrix toward direct correct-score evidence by a trust weight $w$ --- is captured by it.
-The live policy keeps $w=1$ (model only). In historical validation the blend was researched
-across several weights; the evidence did not justify changing the default, so correct-score
-blending remains a research diagnostic.
+The live policy keeps $w=1$ (model only). In diagnostic sweeps the blend was researched across
+several weights; the evidence did not justify changing the default, so correct-score blending
+remains a research diagnostic.
 
 \section{Asian handicap and margin information}
 
@@ -408,9 +425,9 @@ soft-constraint version~\eqref{eq:entropy} is a reliability-weighted, regularise
 this projection: finite weights $\omega_k$ play the role of soft multipliers, trading exact
 moment matching for robustness to noisy or mutually inconsistent market targets. 
 
-In historical validation the market-consistent matrix \emph{including} Asian-handicap
-constraints was mildly positive in both tournaments, but the gains were small and depended on
-the optimiser reaching an acceptable fit. It is therefore used as a \emph{gated} challenger,
+Prior challenger diagnostics found the market-consistent matrix \emph{including}
+Asian-handicap constraints worth monitoring, but any gains were small and depended on the
+optimiser reaching an acceptable fit. It is therefore used as a \emph{gated} challenger,
 surfaced only when its fit status is acceptable, and never as the silent default.
 
 \section{Challenger models and diagnostics}
@@ -436,58 +453,99 @@ probability and a close BTTS-compatible alternative; a difficulty note only.
 \item \textbf{Round-3 favourite-fade note:} a review note motivated by group-stage
 qualification incentives, not an automatic adjustment.
 \end{itemize}
-The governance is intentional. With a validation sample of fewer than one hundred matches, a
-diagnostic that looks helpful can easily be a small-sample artefact, so challengers are kept
-as explainable signals rather than promoted to overrides without robust, cross-tournament
-evidence.
+The governance is intentional. With a small historical validation sample, a diagnostic that
+looks helpful can easily be a small-sample artefact, so challengers are kept as explainable
+signals rather than promoted to overrides without robust, cross-tournament evidence.
 
 \section{Historical validation}
 \label{sec:validation}
 
-We validate on the group stages of the 2018 and 2022 World Cups, a combined
+Consistently available historical inputs differ by tournament. The validation therefore
+separates two layers: an extended 2014/2018/2022 Football-Data layer restricted to average
+1X2 odds, and a richer 2018/2022 diagnostic layer using auxiliary-market inputs. The former
+expands the sample for the core decision-layer comparison; the latter supports the governance
+status of auxiliary-market challengers.
+
+The extended layer uses the available Football-Data World Cup workbook as the source for
+the 2014, 2018, and 2022 validation extension.\footnote{Historical odds and results from
+Football-Data, \url{https://www.football-data.co.uk}.} The workbook contains sheets for the
+2014, 2018, and 2022 World Cups, but no 2010 sheet. The reported extension therefore covers
 \[
-96\ \text{group-stage matches}\ (48+48),
+144\ \text{group-stage matches}\ (48+48+48),
 \]
-scoring every strategy's prediction against the realised result under the rule
-of~\eqref{eq:scoring} and reporting realised pool points alongside exact-score,
-goal-difference, and result hit rates. Table~\ref{tab:results} summarises the headline
-comparison; figures are realised pool points over the relevant matches and should be read as
-indicative rather than statistically significant at this sample size.
+not 192. This is a deliberately common-input validation: only the 1X2 market is used, with
+Football-Data's average odds columns \(H\)-Avg, \(D\)-Avg, and \(A\)-Avg available for every
+loaded row. Each loaded match carried complete average 1X2 odds. Realised scores are taken
+from the full-time score columns HGFT and AGFT only.
+
+This Football-Data extension reconstructs an independent-Poisson score matrix from the
+average 1X2 probabilities, scores each prediction under~\eqref{eq:scoring}, and compares the
+modal scoreline with the expected-points scoreline. Asian-handicap, correct-score, and
+market-consistent-with-Asian-handicap (MC+AH) logic is not applied in this extension because
+comparable inputs are not present for these tournaments. Table~\ref{tab:results} summarises
+the realised pool points and should be read as descriptive validation evidence rather than as
+a statistically decisive ranking.
 
 \begin{table}[htbp]
 \centering
 \small
-\begin{tabular}{lcccl}
+\begin{tabular}{lrrrr}
 \toprule
-Strategy / diagnostic & 2018 & 2022 & Combined & Interpretation \\
+Strategy & 2014 & 2018 & 2022 & Combined \\
 \midrule
-EV-optimal (default)        & 211 & 180 & 391 & Stable; defensible default \\
-Modal / most-likely         & 197 & 215 & 412 & Strong 2022, weak 2018; not robust \\
-Market-consistent $+$ AH    & 217 & 182 & 399 & Small positive in both; gated \\
-Correct-score blend         & 220 & 180 & 400 & Edge from very few matches; research \\
-Power devig                 & 208 & 178 & 386 & Underperforms; not recommended \\
-Dixon--Coles / larger grid  & 211 & 180 & 391 & Inert on tested data \\
+Most likely / modal          & 190 & 227 & 190 & 607 \\
+EV-optimal 1X2               & 193 & 222 & 179 & 594 \\
+EV-optimal 1X2 + O/U slot    & 193 & 222 & 179 & 594 \\
 \bottomrule
 \end{tabular}
-\caption{Realised group-stage pool points by strategy across the 2018 and 2022 World Cups.
-Differences are small relative to sampling variability; the table motivates a conservative
-policy rather than a ranking to be exploited.}
+\caption{Realised group-stage pool points in the Football-Data 1X2-only validation across
+the 2014, 2018, and 2022 World Cups (\(n=144\)). The modal scoreline has the highest realised
+total over this specific sample, but realised points are high variance and do not by
+themselves overturn the ex-ante expected-points decision rule. The O/U-slot variant matches
+the plain EV-optimal row because the Football-Data extension provides no totals market for
+the slot to act on.}
 \label{tab:results}
 \end{table}
 
-The salient findings are as follows. The expected-points-optimal prediction is stable across
-both tournaments and is the defensible default. The modal prediction outscored the default in
-2022 but \emph{underperformed} it in 2018; its apparent combined advantage is driven by how
-draws fell in a single tournament and is therefore not a robust edge, consistent with the
-expected-points decomposition of equations~\eqref{eq:decisive}--\eqref{eq:draw}. The
-market-consistent matrix with Asian handicap was a small positive in both tournaments but
-depends on optimiser fit, so it is gated. The correct-score blend's combined gain traced to a
-very small number of matches and did not justify changing the default weight. Power devig
-underperformed. The Dixon--Coles and larger-grid diagnostics did not change recommendations on
-the tested data. A separately examined favourite-under-cover tendency in Asian-handicap
-markets was weak once the real quoted main line was used, and a round-3 favourite-fade pattern,
-while football-plausible, is treated as a review note only. We do not interpret any of these as
-statistically established at $n=96$.
+The modal scoreline outscored the EV-style predictions over this particular 144-match sample,
+with a combined realised total of 607 points versus 594. This is an empirical outcome of the
+sample, not a change in the decision rule. Equations~\eqref{eq:decisive}--\eqref{eq:draw}
+define the ex-ante expected-points objective under the pool payoff; the EV-optimal prediction
+remains the rule that maximises expected points conditional on the estimated scoreline
+distribution. The modal prediction remains useful as a manual-review challenger, especially
+in balanced or draw-prone matches, but the realised 144-match ranking is not strong enough to
+promote it to the live default. The existing governance of richer challengers is unchanged:
+MC+AH remains a gated challenger when its inputs and optimiser fit are acceptable,
+correct-score blending remains research-only, and no betting-alpha claim is made.
+
+Table~\ref{tab:richer-diagnostics} records the richer 2018/2022 diagnostic layer separately.
+These rows use auxiliary-market inputs and research configurations that are not available in
+the Football-Data extension, so they should not be read as part of the \(n=144\) headline
+comparison. They re-ground the challenger policy: small realised gains from MC+AH and
+correct-score blending are monitored, power devig is not promoted, and Dixon--Coles /
+larger-grid diagnostics remain inert on the tested combined sample.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrp{0.48\textwidth}}
+\toprule
+Strategy / diagnostic & Points & Governance interpretation \\
+\midrule
+EV-optimal default        & 391 & Live default benchmark \\
+Modal / most-likely       & 412 & Manual-review challenger; realised gain does not overturn EV policy \\
+Market-consistent $+$ AH  & 399 & Gated challenger; small fit-dependent gain \\
+Correct-score blend       & 400 & Research-only; not promoted to default \\
+Power devig               & 386 & Underperforms; not recommended for serious live use \\
+Dixon--Coles / larger grid & 391 & Inert relative to default on this combined diagnostic layer \\
+\bottomrule
+\end{tabular}
+\caption{Richer 2018/2022 diagnostic layer, not the headline Football-Data extension. These
+realised pool-point totals use auxiliary-market research outputs from the 2018 and 2022
+group stages (\(n=96\)) and inform challenger governance only; they do not establish a
+betting edge or override the ex-ante expected-points default.}
+\label{tab:richer-diagnostics}
+\end{table}
 
 \subsection*{Probabilistic validation as a complementary layer}
 
@@ -495,7 +553,7 @@ Realised pool points measure the right thing --- the quality of the \emph{contes
 but they are a high-variance estimator. A single match contributes a discrete payoff in
 $\{1,5,7,10\}$, an exact hit is rare, and a tournament's worth of draws or upsets can move a
 strategy's total by more than any plausible model edge. Ranking strategies on points alone at
-$n=96$ therefore risks rewarding luck. We treat realised points as the headline contest metric
+\(n=144\) still risks rewarding luck. We treat realised points as the headline contest metric
 and recommend, as a complementary layer, evaluating the quality of the implied distribution
 $\pi$ with \emph{proper scoring rules} and calibration analysis, which are far less sensitive to
 the discrete payoff:
@@ -515,92 +573,108 @@ distribution from which that decision was derived. A variant can improve calibra
 improving realised points, or win points through variance while being no better calibrated; only
 the combination distinguishes signal from luck.
 
-\paragraph{Reported probability quality.} This layer is now implemented, and we report it on the
-same $96$ group-stage matches. Table~\ref{tab:prob} summarises the proper-score and calibration
-results. The combined 1X2 Brier score is $0.578$, log loss $0.987$, and RPS $0.211$. The model is
-sharper in 2018 (Brier $0.546$, RPS $0.195$) than in 2022 (Brier $0.610$, RPS $0.227$): 2018 was
-the easier, more chalk-following tournament, while 2022 was more upset-heavy. Across the combined
-sample the market-implied probabilities are reasonably calibrated within the resolving power of
-$96$ matches.
+\paragraph{Reported probability quality.} This layer is implemented for the same Football-Data
+1X2-only validation. Table~\ref{tab:prob} summarises the proper-score results by tournament
+and combined sample. The combined 1X2 Brier score is \(0.570\), log loss \(0.971\), and RPS
+\(0.138\). The 2022 tournament is the least favourable of the three by these metrics, with
+Brier \(0.601\), log loss \(1.032\), and RPS \(0.149\). At this sample size the figures are
+best read as a sanity check that the average 1X2 market probabilities are plausible inputs,
+not as evidence of a market-beating probability model.
 
 \begin{table}[htbp]
 \centering
 \small
-\begin{tabular}{lccccccc}
+\begin{tabular}{lcccc}
 \toprule
-Sample & Brier & Log loss & RPS & $\E[\text{goals}]$ & Actual goals & BTTS pred. & BTTS real. \\
+Sample & Matches & Brier & Log loss & RPS \\
 \midrule
-2018     & 0.546 & 0.927 & 0.195 & 2.524 & 2.542 & 0.436 & 0.458 \\
-2022     & 0.610 & 1.046 & 0.227 & 2.611 & 2.500 & 0.454 & 0.417 \\
-Combined & 0.578 & 0.987 & 0.211 & 2.567 & 2.521 & 0.445 & 0.438 \\
+2014     & 48  & 0.563 & 0.951 & 0.135 \\
+2018     & 48  & 0.547 & 0.931 & 0.131 \\
+2022     & 48  & 0.601 & 1.032 & 0.149 \\
+Combined & 144 & 0.570 & 0.971 & 0.138 \\
 \bottomrule
 \end{tabular}
-\caption{Probabilistic validation on the 2018 and 2022 group stages and their combined sample
-($n=48+48=96$). 1X2 proper scores (Brier, log loss, RPS), mean expected versus realised total
-goals, and pooled both-teams-to-score (BTTS) probability versus realised frequency. All
-differences are small relative to sampling variability at this sample size.}
+\caption{Probabilistic validation for the Football-Data 1X2-only extension on the 2014, 2018,
+and 2022 group stages and their combined sample (\(n=144\)). The reported quantities are 1X2
+proper scores only: Brier score, clipped log loss, and Ranked Probability Score (RPS).}
 \label{tab:prob}
 \end{table}
 
-\paragraph{Calibration of result classes.} Favourite, draw, and underdog probabilities are not
-significantly miscalibrated at $n=96$. There is a directionally classic favourite--longshot
-pattern --- favourites and draws are mildly overstated (predicted minus realised of $+0.042$ and
-$+0.033$ respectively) and underdogs mildly understated ($-0.075$) --- but a paired bootstrap over
-matches yields confidence intervals that include zero for all three classes. We therefore treat
-this pattern as a watch-note rather than an actionable edge. Both-teams-to-score is well
-calibrated, with a pooled predicted probability of $0.445$ against a realised frequency of $0.438$;
-this supports keeping the BTTS-conflict signal as a narrow per-match difficulty note rather than
-promoting it to a broad rule. Expected total goals are essentially unbiased ($2.567$ predicted
-versus $2.521$ realised, a mean bias of $+0.047$), and clean half-line totals are reasonably
-calibrated; aggregates built across integer push lines can introduce definitional artefacts, so
-totals calibration should be read at the half-line level.
+Figures~\ref{fig:calibration} and~\ref{fig:goals} give complementary visual checks on the
+validation layers. The reliability plot buckets the Football-Data average-odds 1X2
+probabilities into favourite, draw, and underdog classes. The goals plot compares realised
+mean total goals with the mean total implied by the renormalised score matrix, computed as
+\(\sum_{a,b}\pi_{ab}(a+b)\). The Football-Data extension is intentionally restricted to
+average 1X2 odds, which are available consistently across the 2014, 2018, and 2022
+tournaments. This restriction is useful for sample-size expansion, but it also reduces the
+information available for scoreline calibration: total-goal intensity must be inferred
+indirectly from win/draw/loss probabilities.
+
+The 1X2-only matrix is somewhat conservative on total goals in this sample. The combined
+expected mean is \(2.387\) goals per match versus \(2.625\) realised, a realised-minus-model
+gap of \(0.238\) goals, or about \(10.0\%\) relative to the model expectation. The gap is
+positive in all three tournaments, largest in 2014 and smaller in 2022, but the sample is too
+small to read the tournament-by-tournament pattern as a trend. A simple draw diagnostic points
+in the same direction: the average implied draw probability is \(0.245\), while the realised
+draw frequency is \(0.194\). This is interpreted as a limitation of inferring a full scoreline
+distribution from 1X2 odds alone, rather than as a failure of the expected-points decision
+rule. Figure~\ref{fig:goals} therefore also includes an apples-to-apples 2018/2022 comparison
+against the richer live-paste validation layer, which includes explicit total-goals market
+inputs. On that common 96-match subset, the Football-Data 1X2-only layer has expected mean
+total goals of \(2.346\) versus \(2.521\) realised, while the richer layer has \(2.567\)
+expected versus \(2.521\) realised. This supports treating the Football-Data extension as a
+decision-layer robustness check rather than as a full replacement for the richer
+market-input calibration.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.62\textwidth]{calibration_1x2.png}
-\caption{Reliability of the 1X2 probabilities on the combined 2018+2022 group stages. Predicted
-probability bucket means are plotted against realised frequencies for favourite, draw, and underdog
-outcomes, with marker area scaled by bucket sample size. Points lie close to the diagonal; the
-remaining scatter is within sampling noise at $n=96$.}
+\caption{Reliability of the 1X2 probabilities in the Football-Data average-odds extension
+over the 2014, 2018, and 2022 group stages (\(n=144\)). Predicted probability bucket means
+are plotted against realised frequencies for favourite, draw, and underdog outcomes, with
+marker area scaled by bucket sample size.}
 \label{fig:calibration}
 \end{figure}
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.7\textwidth]{expected_vs_actual_goals.png}
-\caption{Expected versus realised mean total goals per match, by tournament and combined. The
-expected goal mean tracks the realised mean closely, with a combined bias of $+0.047$ goals.}
+\includegraphics[width=\textwidth]{expected_vs_actual_goals.png}
+\caption{Expected versus realised mean total goals. Panel A reports the Football-Data
+extension, which uses only average 1X2 odds and therefore infers total-goal intensity
+indirectly from win/draw/loss probabilities. Panel B compares the 2018/2022 subset across
+validation layers. The richer validation layer, which includes explicit total-goals market
+inputs, is much closer to realised mean total goals. The difference illustrates the
+information loss in the 1X2-only extension and is not interpreted as a failure of the
+expected-points decision rule.}
 \label{fig:goals}
 \end{figure}
 
+The two panels should therefore be read together: Panel A diagnoses what is lost when the
+validation is expanded using only consistently available 1X2 odds, while Panel B shows that
+the richer market-input layer largely removes that total-goals bias on the years where both
+layers are available.
+
 \paragraph{Distribution quality versus decision governance.} The probabilistic layer makes a
 structural point that realised points alone obscure. The probability vectors are almost invariant
-across strategies: \texttt{baseline\_poisson}, \texttt{ev\_default}, \texttt{most\_likely} and
-most baseline configurations produce identical or near-identical distributions, so their
-realised-points differences arise entirely from \emph{scoreline choice and decision rule}, not
-from different probability estimates. Only Dixon--Coles and the market-consistent matrix perturb
-the distribution at all, and their movements in Brier and RPS are negligible. The market-consistent
-matrix with Asian handicap (MC$+$AH) slightly improves realised points but does not materially
-improve probability quality, reinforcing its status as a gated challenger rather than a new
-probability default; the modal/most-likely prediction does not improve probability quality either
-and is a scoreline-selection and variance alternative, consistent with its manual-review role. The
-overall conclusion is that the probabilistic backtest reinforces the main modelling
-interpretation: market-implied probabilities are broadly calibrated, and the main differences
-between strategies arise from decision governance under the payoff function rather than from
-materially superior probability estimation.
+across the modal and EV-style strategies in the Football-Data extension: they are different
+scoreline-selection rules applied to the same 1X2-calibrated distribution. Their realised-points
+differences therefore arise from \emph{decision governance under the payoff function}, not from
+different probability estimates. The probabilistic table does not evaluate Asian-handicap,
+correct-score, BTTS, or total-goals information, because those inputs are not used in this
+extension.
 
-\paragraph{Scope caveat.} Two strategies discussed under realised points are \emph{not} covered by
-this probabilistic analysis. Correct-score blend weights were not exercised in the probabilistic
-outputs used here, and power devig was likewise absent from them. The paper's statements about the
-correct-score blend and power devig therefore rest on realised pool-points backtests only and are
-not claimed as probabilistically validated, so as not to overstate the calibration evidence.
+\paragraph{Scope caveat.} The 144-match extension is intentionally narrower than the live
+prediction pipeline. It validates the common 1X2 baseline using average Football-Data odds and
+HGFT/AGFT realised scores. Correct-score blend weights, MC+AH, Asian-handicap margin signals,
+BTTS conflict flags, and total-goals diagnostics are not exercised in these results and are not
+claimed as validated by Table~\ref{tab:results} or Table~\ref{tab:prob}.
 
 \subsection*{Statistical uncertainty}
 
-The combined sample of $n=96$ group-stage matches is useful but small, and the realised-points
+The combined sample of \(n=144\) group-stage matches is useful but small, and the realised-points
 gaps in Table~\ref{tab:results} are well within sampling noise: the standard error of a
 strategy's mean points per match is of order $0.3$, so totals separated by ten or twenty points
-over $96$ matches are not distinguishable with confidence. The appropriate inference tool for
+over this sample are not distinguishable with confidence. The appropriate inference tool for
 such strategy gaps is a paired bootstrap over matches, which yields confidence intervals on the
 difference in realised points rather than a point estimate. Small apparent edges that do not
 survive such intervals --- or that appear in only one tournament --- should not be promoted to
@@ -625,16 +699,18 @@ short history --- rather than aggressive model complexity.
 
 \section{Limitations}
 
-The validation covers only the 2018 and 2022 World Cup group stages; the combined sample of
-$96$ matches is informative but small, and earlier tournaments such as 2014 and 2010 have not
-yet been added. The data lack qualification-state metadata that would let the round-3 effect be
-tested properly, and the odds used are not guaranteed to be synchronised closing prices.
-Historical odds collection is manual. The market-consistent optimiser requires fit monitoring;
-the baseline assumes conditional independence of the two scores, corrected only mildly by the
-Dixon--Coles term; and there is no player-availability or news model. The public-field /
-leaderboard objective is also outside the main recommendation: maximising expected points is
-not the same as maximising the probability of finishing first in a large public pool, where
-correlation with the field and deliberately contrarian choices matter.
+The Football-Data validation covers only the 2014, 2018, and 2022 World Cup group stages; the
+combined sample of \(144\) matches is informative but still small, and the available workbook
+does not contain a 2010 sheet. This extension is also 1X2-only: it uses average result odds and
+does not exercise Asian-handicap, correct-score, BTTS, total-goals, or MC+AH logic. The data
+lack qualification-state metadata that would let the round-3 effect be tested properly, and
+the odds used are not guaranteed to be synchronised closing prices. Historical odds collection
+is manual. The market-consistent optimiser requires fit monitoring; the baseline assumes
+conditional independence of the two scores, corrected only mildly by the Dixon--Coles term; and
+there is no player-availability or news model. The public-field / leaderboard objective is also
+outside the main recommendation: maximising expected points is not the same as maximising the
+probability of finishing first in a large public pool, where correlation with the field and
+deliberately contrarian choices matter.
 
 A natural second-version extension is to collect synchronised opening and closing odds and
 measure \emph{closing-line value} --- whether the model's implied probabilities systematically
@@ -652,16 +728,16 @@ Exact-score prediction can be posed rigorously as expected-points optimisation u
 scoring rule. Devigged bookmaker odds provide a market-implied probability backbone; a
 calibrated, transparent scoreline distribution turns those prices into a coherent matrix; and
 the prediction is chosen by maximising expected points rather than by reporting the most likely
-score. Historical validation on the 2018 and 2022 World Cups supports a conservative, gated
-policy: the expected-points-optimal prediction is the live default, while modal,
-market-consistent, Asian-handicap, and correct-score variants serve as challenger diagnostics
-or gated alternatives. The most durable conclusion is methodological --- in a near-efficient
-market with a small validation sample, careful decision governance is worth more than
-additional model machinery.
+score. Historical validation on the 2014, 2018, and 2022 World Cup group stages supports a
+conservative, gated policy: the expected-points-optimal prediction is the live default, while
+modal, market-consistent, Asian-handicap, and correct-score variants serve as challenger
+diagnostics or gated alternatives. The most durable conclusion is methodological --- in a
+near-efficient market with a small validation sample, careful decision governance is worth more
+than additional model machinery.
 
 \section*{AI assistance statement}
 
-Generative AI tools, including ChatGPT, Claude and Codex, were used as assistants during the development of this project. Their use included code drafting, debugging support, documentation review, and editorial suggestions for this manuscript. All modelling choices, empirical checks, interpretation of results, and final text are the responsibility of the author.
+Generative AI tools, including ChatGPT, Claude and Codex, were used as assistants during the development of this project. Their use included mainly code drafting, debugging support, and documentation review. All modelling choices, empirical checks, interpretation of results, and final text are the responsibility of the author.
 
 \bibliographystyle{plain}
 \bibliography{references}
