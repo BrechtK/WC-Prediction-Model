@@ -1,14 +1,26 @@
 # WC Predictor
 
-## What The Project Does
+## Project Summary
 
-`wc-predictor` turns pasted OddsPortal football markets into World Cup
-prediction-pool score recommendations. The live workflow parses a schedule,
-splits one combined odds file per match, runs the established EV recommendation
-logic, and writes a submission sheet plus a detailed diagnostics workbook.
+`wc-predictor` treats World Cup exact-score prediction as a payoff-aware
+decision problem. Instead of selecting only the modal scoreline, it chooses the
+score that maximises expected points under a tiered prediction-pool scoring
+rule.
+
+The pipeline uses devigged bookmaker odds as market-implied probabilities,
+calibrates a full scoreline matrix, and evaluates candidate scores through the
+pool payoff function. Historical validation covers 144 World Cup group-stage
+matches from 2014, 2018, and 2022, using both a richer market-input layer
+(1X2, totals, BTTS, correct score, Asian handicap) and a matched 1X2-only
+contrast layer.
 
 This is a scoring-rule decision model and validation project, not a betting
 strategy. It makes no market-beating or betting-alpha claim.
+
+For matchday use, the live workflow turns pasted OddsPortal football markets
+into World Cup prediction-pool score recommendations. It parses a schedule,
+splits one combined odds file per match, runs the established EV recommendation
+logic, and writes a submission sheet plus a detailed diagnostics workbook.
 
 The default live recommendation remains the existing pure-EV model. Research
 diagnostics can challenge or explain a pick, but they do not silently change the
