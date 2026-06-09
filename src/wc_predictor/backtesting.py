@@ -9,7 +9,7 @@ and the private-pool group scoring rule.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import monotonic
 from typing import Protocol
@@ -49,6 +49,47 @@ def _validate_optional_positive_integer(value: int | None, name: str) -> None:
         raise ValueError(f"{name} must be a positive integer")
 
 
+def _actual_outcome_index(goals_a: int, goals_b: int) -> int:
+    if goals_a > goals_b:
+        return 0
+    if goals_a == goals_b:
+        return 1
+    return 2
+
+
+def _clip_probability(value: float, epsilon: float = 1e-15) -> float:
+    return float(np.clip(value, epsilon, 1.0 - epsilon))
+
+
+def _probability_score_diagnostics(
+    probabilities: tuple[float, float, float],
+    actual_index: int,
+) -> dict[str, float]:
+    values = np.asarray(probabilities, dtype=float)
+    if values.shape != (3,) or not np.all(np.isfinite(values)) or np.any(values < 0) or values.sum() <= 0:
+        return {"brier_score_1x2": np.nan, "log_loss_1x2": np.nan, "rps_1x2": np.nan}
+    values = values / values.sum()
+    realised = np.zeros(3)
+    realised[actual_index] = 1.0
+    return {
+        "brier_score_1x2": float(np.sum((values - realised) ** 2)),
+        "log_loss_1x2": float(-np.log(_clip_probability(values[actual_index]))),
+        "rps_1x2": float(np.mean((np.cumsum(values) - np.cumsum(realised)) ** 2)),
+    }
+
+
+def _mean_numeric(frame: pd.DataFrame, column: str) -> float:
+    return float(pd.to_numeric(frame[column], errors="coerce").mean()) if column in frame else np.nan
+
+
+def _matrix_expected_total_goals(matrix: ScoreProbabilityMatrix) -> float:
+    scores_a, scores_b = np.indices(matrix.probabilities.shape)
+    mass = float(matrix.probabilities.sum())
+    if mass <= 0:
+        return np.nan
+    return float(np.sum((scores_a + scores_b) * matrix.probabilities) / mass)
+
+
 @dataclass(frozen=True)
 class OddsSourceColumns:
     """Football-Data-like source columns for one bookmaker or average market."""
@@ -71,6 +112,34 @@ DEFAULT_ODDS_SOURCES = (
     OddsSourceColumns("WilliamHill", "WHH", "WHD", "WHA"),
     OddsSourceColumns("VCBet", "VCH", "VCD", "VCA"),
 )
+
+WORLD_CUP_GROUP_STAGE_WINDOWS: dict[int, tuple[str, str]] = {
+    2010: ("2010-06-11", "2010-06-25"),
+    2014: ("2014-06-12", "2014-06-26"),
+    2018: ("2018-06-14", "2018-06-28"),
+    2022: ("2022-11-20", "2022-12-02"),
+}
+
+FOOTBALL_DATA_WORLD_CUP_ODDS_ALIASES: dict[str, tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
+    "avg": (
+        "Average",
+        ("H-Avg", "H Avg", "H_Avg", "AvgH"),
+        ("D-Avg", "D Avg", "D_Avg", "AvgD"),
+        ("A-Avg", "A Avg", "A_Avg", "AvgA"),
+    ),
+    "betfair_exchange": (
+        "Betfair Exchange",
+        ("Betfair_Exch-H", "Betfair Exch H", "BetfairExchH", "BFExchH"),
+        ("Betfair_Exch-D", "Betfair Exch D", "BetfairExchD", "BFExchD"),
+        ("Betfair_Exch-A", "Betfair Exch A", "BetfairExchA", "BFExchA"),
+    ),
+    "bet365": (
+        "Bet365",
+        ("bet365-H", "Bet365-H", "B365H", "bet365H"),
+        ("bet365-D", "Bet365-D", "B365D", "bet365D"),
+        ("bet365-A", "Bet365-A", "B365A", "bet365A"),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -181,6 +250,291 @@ class FootballDataCSVLoader:
 
 
 @dataclass(frozen=True)
+class FootballDataWorldCupXLSXLoader:
+    """Load Football-Data's multi-sheet World Cup workbook for 1X2-only validation.
+
+    The workbook has one worksheet per tournament. Average 1X2 odds (H-Avg,
+    D-Avg, A-Avg) are the default source because they are the closest available
+    consensus market view. If a selected source is missing for a row, Bet365 is
+    used as an explicit fallback when available.
+    """
+
+    path: str | Path
+    years: tuple[int, ...] = (2010, 2014, 2018, 2022)
+    odds_source: str = "avg"
+    group_stage_windows: dict[int, tuple[str, str]] = field(
+        default_factory=lambda: dict(WORLD_CUP_GROUP_STAGE_WINDOWS)
+    )
+
+    def load(self) -> HistoricalBacktestData:
+        workbook = pd.ExcelFile(self.path)
+        matches: list[dict[str, object]] = []
+        results: list[dict[str, object]] = []
+        odds: list[dict[str, object]] = []
+        for year in self.years:
+            sheet_name = self._sheet_for_year(workbook.sheet_names, year)
+            if sheet_name is None:
+                print(f"Warning: no Football-Data World Cup sheet found for {year}")
+                continue
+            frame = pd.read_excel(self.path, sheet_name=sheet_name)
+            year_matches, year_results, year_odds, diagnostics = self._normalise_year(
+                frame,
+                year=year,
+                sheet_name=sheet_name,
+            )
+            matches.extend(year_matches)
+            results.extend(year_results)
+            odds.extend(year_odds)
+            if len(year_matches) != 48:
+                print(f"Warning: {year} group-stage match count is {len(year_matches)}, expected 48")
+            if diagnostics["dropped_rows"]:
+                print(f"Warning: {year} dropped {diagnostics['dropped_rows']} rows with missing essential fields")
+            if diagnostics["fallback_rows"]:
+                print(f"Warning: {year} used Bet365 fallback odds for {diagnostics['fallback_rows']} rows")
+        return HistoricalBacktestData(pd.DataFrame(matches), pd.DataFrame(odds), pd.DataFrame(results))
+
+    @staticmethod
+    def _normalise_name(value: object) -> str:
+        return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+    @classmethod
+    def _column_lookup(cls, frame: pd.DataFrame) -> dict[str, str]:
+        return {cls._normalise_name(column): str(column) for column in frame.columns}
+
+    @classmethod
+    def _find_column(cls, lookup: dict[str, str], aliases: tuple[str, ...]) -> str | None:
+        for alias in aliases:
+            column = lookup.get(cls._normalise_name(alias))
+            if column is not None:
+                return column
+        return None
+
+    @classmethod
+    def _sheet_for_year(cls, sheet_names: list[str], year: int) -> str | None:
+        year_text = str(year)
+        for sheet_name in sheet_names:
+            if str(sheet_name).strip() == year_text:
+                return sheet_name
+        for sheet_name in sheet_names:
+            if year_text in str(sheet_name):
+                return sheet_name
+        return None
+
+    @staticmethod
+    def _canonical_odds_source(value: str) -> str:
+        key = value.strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "average": "avg",
+            "avg": "avg",
+            "betfair": "betfair_exchange",
+            "betfair_exchange": "betfair_exchange",
+            "exchange": "betfair_exchange",
+            "bet365": "bet365",
+            "b365": "bet365",
+        }
+        if key not in aliases:
+            raise ValueError(f"Unsupported Football-Data odds source: {value!r}")
+        return aliases[key]
+
+    @classmethod
+    def _parse_odds(cls, value: object) -> float | None:
+        if pd.isna(value):
+            return None
+        text = str(value).strip().replace(",", ".")
+        try:
+            odds = float(text)
+        except ValueError:
+            return None
+        if not np.isfinite(odds) or odds <= 1.0:
+            return None
+        return odds
+
+    @staticmethod
+    def _parse_goals(value: object) -> int | None:
+        if pd.isna(value):
+            return None
+        try:
+            goals = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(goals) or goals < 0 or not goals.is_integer():
+            return None
+        return int(goals)
+
+    def _normalise_year(
+        self,
+        frame: pd.DataFrame,
+        *,
+        year: int,
+        sheet_name: str,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], dict[str, int]]:
+        lookup = self._column_lookup(frame)
+        home_col = self._find_column(lookup, ("Home", "HomeTeam", "Home Team"))
+        away_col = self._find_column(lookup, ("Away", "AwayTeam", "Away Team"))
+        date_col = self._find_column(lookup, ("Date",))
+        hg_col = self._find_column(lookup, ("HGFT", "FTHG", "HomeGoalsFT"))
+        ag_col = self._find_column(lookup, ("AGFT", "FTAG", "AwayGoalsFT"))
+        if any(column is None for column in (home_col, away_col, date_col, hg_col, ag_col)):
+            raise NonFootballDataCSVError(
+                f"Football-Data World Cup sheet {sheet_name!r} is missing required match/result columns"
+            )
+
+        start_text, end_text = self.group_stage_windows.get(year, (None, None))
+        if start_text is None or end_text is None:
+            raise ValueError(f"No group-stage date window configured for {year}")
+        start = pd.Timestamp(start_text)
+        end = pd.Timestamp(end_text)
+
+        matches: list[dict[str, object]] = []
+        results: list[dict[str, object]] = []
+        odds_rows: list[dict[str, object]] = []
+        diagnostics = {"dropped_rows": 0, "fallback_rows": 0}
+        match_number = 0
+        for _, row in frame.iterrows():
+            date = pd.to_datetime(row[date_col], dayfirst=True, errors="coerce")
+            if pd.isna(date) or date < start or date > end:
+                continue
+            team_a = str(row[home_col]).strip()
+            team_b = str(row[away_col]).strip()
+            goals_a = self._parse_goals(row[hg_col])
+            goals_b = self._parse_goals(row[ag_col])
+            odds_source, odds_values, used_fallback = self._odds_for_row(row, lookup)
+            if (
+                not team_a
+                or not team_b
+                or team_a.lower() == "nan"
+                or team_b.lower() == "nan"
+                or goals_a is None
+                or goals_b is None
+                or odds_values is None
+            ):
+                diagnostics["dropped_rows"] += 1
+                continue
+            match_number += 1
+            match_id = f"WC{year}_{match_number:03d}"
+            date_text = pd.Timestamp(date).date().isoformat()
+            matches.append(
+                {
+                    "match_id": match_id,
+                    "year": year,
+                    "tournament": f"wc{year}",
+                    "date": date_text,
+                    "stage": "group stage",
+                    "team_a": team_a,
+                    "team_b": team_b,
+                    "home_team": team_a,
+                    "away_team": team_b,
+                    "source": "Football-Data World Cup XLSX",
+                    "sheet_name": sheet_name,
+                    "odds_source": odds_source,
+                }
+            )
+            results.append(
+                {
+                    "match_id": match_id,
+                    "team_a_goals_90": goals_a,
+                    "team_b_goals_90": goals_b,
+                }
+            )
+            odds_rows.append(
+                {
+                    "match_id": match_id,
+                    "bookmaker": odds_source,
+                    "odds_source": odds_source,
+                    "odds_a_win": odds_values[0],
+                    "odds_draw": odds_values[1],
+                    "odds_b_win": odds_values[2],
+                }
+            )
+            diagnostics["fallback_rows"] += int(used_fallback)
+        return matches, results, odds_rows, diagnostics
+
+    def _odds_for_row(
+        self,
+        row: pd.Series,
+        lookup: dict[str, str],
+    ) -> tuple[str, tuple[float, float, float] | None, bool]:
+        source_key = self._canonical_odds_source(self.odds_source)
+        primary = self._odds_from_source(row, lookup, source_key)
+        if primary is not None:
+            return primary[0], primary[1], False
+        if source_key != "bet365":
+            fallback = self._odds_from_source(row, lookup, "bet365")
+            if fallback is not None:
+                return fallback[0], fallback[1], True
+        return FOOTBALL_DATA_WORLD_CUP_ODDS_ALIASES[source_key][0], None, False
+
+    def _odds_from_source(
+        self,
+        row: pd.Series,
+        lookup: dict[str, str],
+        source_key: str,
+    ) -> tuple[str, tuple[float, float, float]] | None:
+        label, home_aliases, draw_aliases, away_aliases = FOOTBALL_DATA_WORLD_CUP_ODDS_ALIASES[source_key]
+        columns = (
+            self._find_column(lookup, home_aliases),
+            self._find_column(lookup, draw_aliases),
+            self._find_column(lookup, away_aliases),
+        )
+        if any(column is None for column in columns):
+            return None
+        values = tuple(self._parse_odds(row[column]) for column in columns)
+        if any(value is None for value in values):
+            return None
+        return label, (float(values[0]), float(values[1]), float(values[2]))
+
+
+@dataclass(frozen=True)
+class HistoricalWorldCupCSVLoader:
+    """Load clean historical World Cup rows from the project template format."""
+
+    path: str | Path
+
+    def load(self) -> HistoricalBacktestData:
+        source = load_tabular_data(self.path)
+        required = {
+            "match_id",
+            "date",
+            "stage",
+            "team_a",
+            "team_b",
+            "actual_score_a",
+            "actual_score_b",
+            "odds_a_win",
+            "odds_draw",
+            "odds_b_win",
+        }
+        missing = required - set(source.columns)
+        if missing:
+            raise NonFootballDataCSVError(f"Historical World Cup data is missing required columns: {sorted(missing)}")
+        optional_columns = [column for column in ("group", "tournament", "correct_score_odds_ref") if column in source]
+        matches = source[
+            ["match_id", "date", "stage", *optional_columns, "team_a", "team_b"]
+        ].copy()
+        if "group" not in matches:
+            matches["group"] = ""
+        results = source[["match_id", "actual_score_a", "actual_score_b"]].rename(
+            columns={"actual_score_a": "team_a_goals_90", "actual_score_b": "team_b_goals_90"}
+        )
+        odds_rows: list[dict[str, object]] = []
+        for _, row in source.iterrows():
+            odds_rows.append(
+                {
+                    "match_id": row["match_id"],
+                    "bookmaker": row.get("bookmaker", "Historical"),
+                    "odds_a_win": row["odds_a_win"],
+                    "odds_draw": row["odds_draw"],
+                    "odds_b_win": row["odds_b_win"],
+                    "odds_over_2_5": row.get("odds_over_2_5", np.nan),
+                    "odds_under_2_5": row.get("odds_under_2_5", np.nan),
+                    "odds_btts_yes": row.get("odds_btts_yes", np.nan),
+                    "odds_btts_no": row.get("odds_btts_no", np.nan),
+                }
+            )
+        return HistoricalBacktestData(matches, pd.DataFrame(odds_rows), results)
+
+
+@dataclass(frozen=True)
 class BacktestSettings:
     """Settings for the first group-stage historical backtest."""
 
@@ -202,6 +556,221 @@ class BacktestReport:
         path = Path(path)
         ensure_parent_directory(path)
         self.summary.to_csv(path, index=False)
+
+
+@dataclass(frozen=True)
+class WorldCupResearchBacktestSettings:
+    """Output paths and diagnostic grids for historical World Cup backtests."""
+
+    summary_output_path: Path = Path("output/research/world_cup_backtest_summary.csv")
+    predictions_output_path: Path = Path("output/research/world_cup_backtest_predictions.csv")
+    skipped_output_path: Path = Path("output/research/world_cup_backtest_skipped.csv")
+    yearly_summary_output_path: Path = Path("output/research/world_cup_backtest_summary_by_year.csv")
+    probabilistic_summary_output_path: Path = Path("output/research/world_cup_backtest_probabilistic_summary.csv")
+    excel_output_path: Path = Path("output/research/world_cup_backtest.xlsx")
+    blend_weights: tuple[float, ...] = (0.0, 0.25, 0.50, 0.75, 0.85, 1.0)
+    margin_methods: tuple[str, ...] = ("normalised_inverse_odds", "power", "shin")
+
+
+@dataclass(frozen=True)
+class WorldCupResearchBacktestReport:
+    """World Cup research backtest outputs with strategy ranks and skip diagnostics."""
+
+    summary: pd.DataFrame
+    predictions: pd.DataFrame
+    skipped: pd.DataFrame
+    yearly_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
+    probabilistic_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+    def export(self, settings: WorldCupResearchBacktestSettings) -> None:
+        for path in (
+            settings.summary_output_path,
+            settings.predictions_output_path,
+            settings.skipped_output_path,
+            settings.yearly_summary_output_path,
+            settings.probabilistic_summary_output_path,
+            settings.excel_output_path,
+        ):
+            ensure_parent_directory(path)
+        self.summary.to_csv(settings.summary_output_path, index=False)
+        self.predictions.to_csv(settings.predictions_output_path, index=False)
+        self.skipped.to_csv(settings.skipped_output_path, index=False)
+        self.yearly_summary.to_csv(settings.yearly_summary_output_path, index=False)
+        self.probabilistic_summary.to_csv(settings.probabilistic_summary_output_path, index=False)
+        with pd.ExcelWriter(settings.excel_output_path) as writer:
+            self.summary.to_excel(writer, index=False, sheet_name="summary")
+            self.predictions.to_excel(writer, index=False, sheet_name="predictions")
+            self.skipped.to_excel(writer, index=False, sheet_name="skipped")
+            self.yearly_summary.to_excel(writer, index=False, sheet_name="summary_by_year")
+            self.probabilistic_summary.to_excel(writer, index=False, sheet_name="probabilistic_summary")
+
+
+def _strategy_summary_from_predictions(
+    predictions: pd.DataFrame,
+    group_columns: list[str],
+) -> pd.DataFrame:
+    if predictions.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for keys, group in predictions.groupby(group_columns, dropna=False, sort=True):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        row = dict(zip(group_columns, keys, strict=True))
+        row.update(
+            {
+                "matches_used": int(group["match_id"].nunique()),
+                "total_points": int(group["realised_points"].sum()),
+                "average_realised_points": _mean_numeric(group, "realised_points"),
+                "exact_score_hit_rate": _mean_numeric(group, "is_exact_score"),
+                "correct_goal_difference_hit_rate": _mean_numeric(group, "is_correct_goal_difference"),
+                "correct_result_hit_rate": _mean_numeric(group, "is_correct_result"),
+            }
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _build_yearly_strategy_summary(predictions: pd.DataFrame) -> pd.DataFrame:
+    group_columns = [
+        column
+        for column in ("config_name", "margin_removal_method", "year", "tournament", "strategy")
+        if column in predictions
+    ]
+    if not group_columns:
+        return pd.DataFrame()
+    return _strategy_summary_from_predictions(predictions, group_columns)
+
+
+def _probabilistic_summary_row(group: pd.DataFrame, extra: dict[str, object]) -> dict[str, object]:
+    return {
+        **extra,
+        "matches_used": int(group["match_id"].nunique()),
+        "mean_brier_score_1x2": _mean_numeric(group, "brier_score_1x2"),
+        "mean_log_loss_1x2": _mean_numeric(group, "log_loss_1x2"),
+        "mean_rps_1x2": _mean_numeric(group, "rps_1x2"),
+        "mean_predicted_team_a_win": _mean_numeric(group, "predicted_probability_team_a_win"),
+        "mean_predicted_draw": _mean_numeric(group, "predicted_probability_draw"),
+        "mean_predicted_team_b_win": _mean_numeric(group, "predicted_probability_team_b_win"),
+    }
+
+
+def _build_historical_probabilistic_summary(predictions: pd.DataFrame) -> pd.DataFrame:
+    required = {"brier_score_1x2", "log_loss_1x2", "rps_1x2"}
+    if predictions.empty or not required.issubset(predictions.columns):
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    group_columns = [column for column in ("config_name", "margin_removal_method", "strategy") if column in predictions]
+    combined_groups = (
+        predictions.groupby(group_columns, dropna=False, sort=True)
+        if group_columns
+        else [((), predictions)]
+    )
+    for keys, group in combined_groups:
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        rows.append(
+            _probabilistic_summary_row(
+                group,
+                dict(zip(group_columns, keys, strict=True)) | {"aggregation_level": "combined"},
+            )
+        )
+    yearly_columns = [
+        column
+        for column in ("config_name", "margin_removal_method", "year", "tournament", "strategy")
+        if column in predictions
+    ]
+    if "year" in yearly_columns or "tournament" in yearly_columns:
+        for keys, group in predictions.groupby(yearly_columns, dropna=False, sort=True):
+            if not isinstance(keys, tuple):
+                keys = (keys,)
+            rows.append(
+                _probabilistic_summary_row(
+                    group,
+                    dict(zip(yearly_columns, keys, strict=True)) | {"aggregation_level": "year"},
+                )
+            )
+    return pd.DataFrame(rows)
+
+
+class WorldCupResearchBacktestRunner:
+    """Compare diagnostic historical World Cup strategies without requiring real local data."""
+
+    def __init__(
+        self,
+        loader: HistoricalOddsLoader,
+        config: ProjectConfig | None = None,
+        settings: WorldCupResearchBacktestSettings | None = None,
+        fast: bool = True,
+    ) -> None:
+        self.loader = loader
+        self.config = config or ProjectConfig(enable_margin_method_comparison=False)
+        self.settings = settings or WorldCupResearchBacktestSettings()
+        self.fast = fast
+
+    def run(self, export: bool = True) -> WorldCupResearchBacktestReport:
+        summary_frames: list[pd.DataFrame] = []
+        prediction_frames: list[pd.DataFrame] = []
+        skipped_frames: list[pd.DataFrame] = []
+        for method in self.settings.margin_methods:
+            method_config = replace(self.config, margin_removal_method=method)
+            try:
+                report = BacktestRunner(self.loader, config=method_config, fast=self.fast).run(export=False)
+            except ValueError as error:
+                skipped_frames.append(
+                    pd.DataFrame([{"config_name": f"margin_{method}", "strategy": "all", "reason": str(error)}])
+                )
+                continue
+            summary = report.summary.copy()
+            summary["config_name"] = f"margin_{method}"
+            summary["margin_removal_method"] = method
+            summary_frames.append(summary)
+            predictions = report.predictions.copy()
+            predictions["config_name"] = f"margin_{method}"
+            prediction_frames.append(predictions)
+            if not report.skipped.empty:
+                skipped = report.skipped.copy()
+                skipped["config_name"] = f"margin_{method}"
+                skipped_frames.append(skipped)
+
+        if isinstance(self.loader, FootballDataWorldCupXLSXLoader):
+            has_correct_score_refs = True
+        else:
+            loaded = self.loader.load()
+            has_correct_score_refs = (
+                "correct_score_odds_ref" in loaded.matches and loaded.matches["correct_score_odds_ref"].notna().any()
+            )
+        if not has_correct_score_refs:
+            skipped_frames.append(
+                pd.DataFrame(
+                    [
+                        {
+                            "config_name": f"correct_score_blend_w={weight:g}",
+                            "strategy": "correct_score_blend",
+                            "reason": "missing optional correct-score odds; blend-weight validation skipped",
+                        }
+                        for weight in self.settings.blend_weights
+                    ]
+                )
+            )
+        summary_all = pd.concat(summary_frames, ignore_index=True) if summary_frames else pd.DataFrame()
+        if not summary_all.empty:
+            summary_all["rank_by_average_points"] = (
+                summary_all["average_realised_points"].rank(method="min", ascending=False).astype("Int64")
+            )
+        predictions_all = pd.concat(prediction_frames, ignore_index=True) if prediction_frames else pd.DataFrame()
+        skipped_all = pd.concat(skipped_frames, ignore_index=True) if skipped_frames else pd.DataFrame()
+        yearly_summary = _build_yearly_strategy_summary(predictions_all)
+        probabilistic_summary = _build_historical_probabilistic_summary(predictions_all)
+        report = WorldCupResearchBacktestReport(
+            summary_all,
+            predictions_all,
+            skipped_all,
+            yearly_summary,
+            probabilistic_summary,
+        )
+        if export:
+            report.export(self.settings)
+        return report
 
 
 @dataclass(frozen=True)
@@ -271,6 +840,8 @@ class _MarketContext:
     fair_b_win: float
     favourite_probability: float
     favourite_bucket: str
+    expected_total_goals_1x2: float
+    expected_total_goals_1x2_over_under: float
     matrix_1x2: ScoreProbabilityMatrix
     matrix_1x2_over_under: ScoreProbabilityMatrix
     used_over_under: bool
@@ -425,12 +996,16 @@ class BacktestRunner:
         )
         matrix_1x2_over_under = self._calibrate(targets_with_over_under) if used_over_under else matrix_1x2
         favourite_probability = max(targets_1x2.a_win, targets_1x2.b_win)
+        expected_total_goals_1x2 = _matrix_expected_total_goals(matrix_1x2)
+        expected_total_goals_1x2_over_under = _matrix_expected_total_goals(matrix_1x2_over_under)
         return _MarketContext(
             targets_1x2.a_win,
             targets_1x2.draw,
             targets_1x2.b_win,
             favourite_probability,
             favourite_strength_bucket(favourite_probability),
+            expected_total_goals_1x2,
+            expected_total_goals_1x2_over_under,
             matrix_1x2,
             matrix_1x2_over_under,
             used_over_under,
@@ -528,6 +1103,13 @@ class BacktestRunner:
         return {
             "favourite_probability": market.favourite_probability if market is not None else np.nan,
             "favourite_bucket": market.favourite_bucket if market is not None else pd.NA,
+            "predicted_probability_team_a_win": market.fair_a_win if market is not None else np.nan,
+            "predicted_probability_draw": market.fair_draw if market is not None else np.nan,
+            "predicted_probability_team_b_win": market.fair_b_win if market is not None else np.nan,
+            "expected_total_goals_1x2": market.expected_total_goals_1x2 if market is not None else np.nan,
+            "expected_total_goals_1x2_over_under": (
+                market.expected_total_goals_1x2_over_under if market is not None else np.nan
+            ),
         }
 
     @staticmethod
@@ -539,15 +1121,32 @@ class BacktestRunner:
         used_over_under: bool = False,
         favourite_probability: float = np.nan,
         favourite_bucket: object = pd.NA,
+        predicted_probability_team_a_win: float = np.nan,
+        predicted_probability_draw: float = np.nan,
+        predicted_probability_team_b_win: float = np.nan,
+        expected_total_goals_1x2: float = np.nan,
+        expected_total_goals_1x2_over_under: float = np.nan,
     ) -> None:
         pred_a, pred_b = prediction
         actual_a, actual_b = actual
+        probabilities = (
+            predicted_probability_team_a_win,
+            predicted_probability_draw,
+            predicted_probability_team_b_win,
+        )
+        actual_index = _actual_outcome_index(actual_a, actual_b)
+        probability_scores = _probability_score_diagnostics(probabilities, actual_index)
         accumulator.predictions.append(
             {
                 "source_file": accumulator.source_file,
                 "strategy": accumulator.name,
                 "match_id": match["match_id"],
                 "date": match["date"],
+                "year": match.get("year", pd.NA),
+                "tournament": match.get("tournament", pd.NA),
+                "stage": match.get("stage", pd.NA),
+                "source": match.get("source", pd.NA),
+                "odds_source": match.get("odds_source", pd.NA),
                 "team_a": match["team_a"],
                 "team_b": match["team_b"],
                 "predicted_team_a_goals": pred_a,
@@ -561,6 +1160,15 @@ class BacktestRunner:
                 "used_over_under_2_5": used_over_under,
                 "favourite_probability": favourite_probability,
                 "favourite_bucket": favourite_bucket,
+                "predicted_probability_team_a_win": predicted_probability_team_a_win,
+                "predicted_probability_draw": predicted_probability_draw,
+                "predicted_probability_team_b_win": predicted_probability_team_b_win,
+                "expected_total_goals_1x2": expected_total_goals_1x2,
+                "expected_total_goals_1x2_over_under": expected_total_goals_1x2_over_under,
+                "actual_total_goals": actual_a + actual_b,
+                "realised_outcome": ("team_a_win" if actual_index == 0 else "draw" if actual_index == 1 else "team_b_win"),
+                "realised_outcome_index": actual_index,
+                **probability_scores,
             }
         )
 

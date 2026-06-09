@@ -185,7 +185,7 @@ def compare_dixon_coles_rhos(
     base_config = config or ProjectConfig(correct_score_poisson_weight=0.85)
     rows: list[dict[str, object]] = []
     for rho in validate_rho_grid(rhos):
-        rho_config = replace(base_config, dixon_coles_rho=rho)
+        rho_config = replace(base_config, dixon_coles_rho=rho, enable_dixon_coles_rho_estimation=False)
         workflow = run_prediction_workflow(
             odds,
             config=rho_config,

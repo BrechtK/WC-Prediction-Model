@@ -129,7 +129,7 @@ def evaluate_knockout_prediction(
     qualifier_probabilities: dict[str, float],
     config: KnockoutScoringConfig | None = None,
 ) -> KnockoutPredictionEvaluation:
-    """Calculate additive knockout EV using score and qualifier components separately."""
+    """Calculate knockout EV using the configured scoring interpretation."""
 
     config = config or KnockoutScoringConfig()
     _require_complete_distribution(matrix)
@@ -139,15 +139,22 @@ def evaluate_knockout_prediction(
     exact_probability = matrix.exact_score_probability(pred_a, pred_b)
     difference_probability = matrix.goal_difference_probability(goal_difference(pred_a, pred_b))
     qualifier_probability = qualifier_probabilities[predicted_qualifier]
-    if config.additive:
+    if config.knockout_scoring_mode in {"additive", "unverified"}:
         expected_points = (
             config.participation_points
             + config.qualifier_points * qualifier_probability
             + config.exact_score_points * exact_probability
             + config.goal_difference_points * difference_probability
         )
+    elif config.knockout_scoring_mode == "hierarchical":
+        expected_points = (
+            config.participation_points
+            + config.qualifier_points * qualifier_probability
+            + config.exact_score_points * exact_probability
+            + config.goal_difference_points * max(0.0, difference_probability - exact_probability)
+        )
     else:
-        raise NotImplementedError("Non-additive knockout EV requires joint component probabilities")
+        raise ValueError(f"Unsupported knockout scoring mode: {config.knockout_scoring_mode}")
     return KnockoutPredictionEvaluation(
         (pred_a, pred_b),
         predicted_qualifier,

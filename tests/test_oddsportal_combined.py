@@ -62,6 +62,37 @@ def test_clean_combined_paste_filename_is_supported(tmp_path: Path) -> None:
     assert (output_folder / "M001_1x2.txt").exists()
 
 
+def test_match_section_is_accepted_when_it_matches_schedule(tmp_path: Path) -> None:
+    input_folder = tmp_path / "input" / "odds"
+    output_folder = tmp_path / "cache" / "split_pastes"
+    _write_combined(
+        input_folder / "M001.txt",
+        [("MATCH", "Mexico vs South Africa"), ("1X2", "one x two")],
+    )
+    schedule = pd.DataFrame([{"match_id": "M001", "team_a": "Mexico", "team_b": "South Africa"}])
+
+    result = split_combined_oddsportal_pastes(input_folder, output_folder, schedule=schedule)
+
+    assert result.files_processed == 1
+    assert not any("unknown_section_marker:MATCH" in warning for warning in result.warnings)
+    assert (output_folder / "M001_1x2.txt").exists()
+
+
+def test_match_section_conflict_with_schedule_fails_clearly(tmp_path: Path) -> None:
+    input_folder = tmp_path / "input" / "odds"
+    _write_combined(
+        input_folder / "M001.txt",
+        [("MATCH", "Australia vs Turkey"), ("1X2", "one x two")],
+    )
+    schedule = pd.DataFrame([{"match_id": "M001", "team_a": "Mexico", "team_b": "South Africa"}])
+
+    with pytest.raises(
+        CombinedOddsPortalPasteError,
+        match=r"M001\.txt ### MATCH says 'Australia vs Turkey'.*M001 \| Mexico vs South Africa",
+    ):
+        split_combined_oddsportal_pastes(input_folder, tmp_path / "pastes", schedule=schedule)
+
+
 def test_missing_optional_section_warns_but_succeeds(tmp_path: Path) -> None:
     input_folder = tmp_path / "combined"
     output_folder = tmp_path / "pastes"

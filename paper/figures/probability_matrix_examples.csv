@@ -1,0 +1,3 @@
+example,tournament,match_id,fixture,favourite_team,favourite_probability,draw_probability,underdog_probability,team_a_expected_goals,team_b_expected_goals,most_likely_scoreline,ev_optimal_scoreline,ev_expected_points,grid_max_goals,matrix_source
+extreme_favourite,wc2022,M044,Costa Rica vs Germany,Germany,0.8746456401163797,0.0859074966243287,0.0394468632592915,0.4955692318088894,3.234735291511909,0-3,0-3,5.360464255983479,12,baseline_ev/baseline_poisson independent Poisson
+balanced,wc2018,M045,Japan vs Poland,Japan,0.3447547076947083,0.3109475756337483,0.3442977166715432,1.245382024678035,1.2444822347747158,1-1,1-0,3.182990490800875,8,baseline_ev/baseline_poisson independent Poisson

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -86,6 +87,162 @@ class DixonColesScoreModel(ChallengerScoreModel):
             if score_a <= max_goals and score_b <= max_goals:
                 probabilities[score_a, score_b] *= correction
         represented_mass = float(probabilities.sum())
+        tail_probability = max(0.0, 1.0 - represented_mass)
+        if self.renormalise:
+            probabilities = probabilities / represented_mass
+        return ScoreProbabilityMatrix(
+            probabilities,
+            tail_probability=tail_probability,
+            renormalised=self.renormalise,
+            lambda_a=self.lambda_a,
+            lambda_b=self.lambda_b,
+        )
+
+
+@dataclass(frozen=True)
+class DixonColesRhoEstimate:
+    """Estimated Dixon-Coles rho and diagnostics."""
+
+    rho: float
+    source: str
+    fit_error: float
+    warning: str = ""
+
+
+LOW_SCORE_CELLS = ((0, 0), (1, 0), (0, 1), (1, 1))
+
+
+def estimate_dixon_coles_rho_from_market(
+    *,
+    lambda_a: float,
+    lambda_b: float,
+    market_matrix: ScoreProbabilityMatrix | None,
+    max_goals: int,
+    fallback_rho: float = 0.0,
+    rho_min: float = -0.20,
+    rho_max: float = 0.20,
+    grid_size: int = 81,
+    renormalise: bool = True,
+) -> DixonColesRhoEstimate:
+    """Estimate rho by fitting Dixon-Coles low-score cells to market score odds."""
+
+    if market_matrix is None:
+        return DixonColesRhoEstimate(
+            fallback_rho,
+            "fallback",
+            float("nan"),
+            "Dixon-Coles rho not estimated: insufficient correct-score market data.",
+        )
+    if grid_size < 2:
+        raise ValueError("grid_size must be at least two")
+    if rho_min >= rho_max:
+        raise ValueError("rho_min must be below rho_max")
+    if min(market_matrix.probabilities.shape) < 2:
+        return DixonColesRhoEstimate(
+            fallback_rho,
+            "fallback",
+            float("nan"),
+            "Dixon-Coles rho not estimated: insufficient correct-score market data.",
+        )
+    targets = np.array([float(market_matrix.probabilities[cell]) for cell in LOW_SCORE_CELLS], dtype=float)
+    if not np.all(np.isfinite(targets)) or np.any(targets <= 0):
+        return DixonColesRhoEstimate(
+            fallback_rho,
+            "fallback",
+            float("nan"),
+            "Dixon-Coles rho not estimated: insufficient correct-score market data.",
+        )
+
+    best_rho = float(fallback_rho)
+    best_error = float("inf")
+    for rho in np.linspace(rho_min, rho_max, int(grid_size)):
+        try:
+            matrix = DixonColesScoreModel(lambda_a, lambda_b, float(rho), renormalise).predict_score_matrix(
+                Match("_rho_estimation", "diagnostic", "A", "B"),
+                max_goals,
+            )
+        except ValueError:
+            continue
+        values = np.array([float(matrix.probabilities[cell]) for cell in LOW_SCORE_CELLS], dtype=float)
+        error = float(np.mean((values - targets) ** 2))
+        if error < best_error:
+            best_error = error
+            best_rho = float(rho)
+    if not np.isfinite(best_error):
+        return DixonColesRhoEstimate(
+            fallback_rho,
+            "fallback",
+            float("nan"),
+            "Dixon-Coles rho not estimated: no valid rho candidate.",
+        )
+    return DixonColesRhoEstimate(best_rho, "market_estimated", best_error)
+
+
+def conservative_bivariate_covariance(lambda_a: float, lambda_b: float, requested: float) -> float:
+    """Clamp a requested bivariate covariance into a numerically safe range.
+
+    The shared component ``lambda_3`` must stay strictly below both marginal
+    means, otherwise one independent component becomes non-positive. A small
+    safety cap keeps the prior stable for extreme favourites where one mean is
+    tiny.
+    """
+
+    requested = float(requested)
+    if not np.isfinite(requested) or requested <= 0:
+        return 0.0
+    cap = 0.9 * min(float(lambda_a), float(lambda_b))
+    if cap <= 0:
+        return 0.0
+    return float(min(requested, cap))
+
+
+@dataclass(frozen=True)
+class BivariatePoissonScoreModel(ChallengerScoreModel):
+    """Bivariate Poisson with a shared covariance component ``lambda_3``.
+
+    With ``X = Y1 + Y3`` and ``Y = Y2 + Y3`` for independent Poisson parts,
+    the marginals are ``X ~ Poisson(lambda_a)`` and ``Y ~ Poisson(lambda_b)``
+    while ``Cov(X, Y) = lambda_3``. ``covariance = 0`` reduces exactly to the
+    independent-Poisson baseline.
+    """
+
+    lambda_a: float
+    lambda_b: float
+    covariance: float = 0.0
+    renormalise: bool = True
+
+    @property
+    def name(self) -> str:
+        return "bivariate_poisson"
+
+    def predict_score_matrix(self, match: Match, max_goals: int) -> ScoreProbabilityMatrix:
+        del match
+        if max_goals < 0:
+            raise ValueError("max_goals must be non-negative")
+        lambda_3 = float(self.covariance)
+        if not np.isfinite(lambda_3) or lambda_3 < 0:
+            raise ValueError("Bivariate Poisson covariance must be finite and non-negative")
+        lambda_1 = float(self.lambda_a) - lambda_3
+        lambda_2 = float(self.lambda_b) - lambda_3
+        if not np.isfinite(lambda_1) or not np.isfinite(lambda_2) or lambda_1 <= 0 or lambda_2 <= 0:
+            raise ValueError("Bivariate Poisson covariance must be below both marginal means")
+        base = math.exp(-(lambda_1 + lambda_2 + lambda_3))
+        ratio = lambda_3 / (lambda_1 * lambda_2)
+        probabilities = np.zeros((max_goals + 1, max_goals + 1), dtype=float)
+        for x in range(max_goals + 1):
+            for y in range(max_goals + 1):
+                shared = 0.0
+                for k in range(min(x, y) + 1):
+                    shared += math.comb(x, k) * math.comb(y, k) * math.factorial(k) * (ratio**k)
+                probabilities[x, y] = (
+                    base
+                    * (lambda_1**x / math.factorial(x))
+                    * (lambda_2**y / math.factorial(y))
+                    * shared
+                )
+        represented_mass = float(probabilities.sum())
+        if represented_mass <= 0:
+            raise ValueError("Bivariate Poisson produced no positive mass")
         tail_probability = max(0.0, 1.0 - represented_mass)
         if self.renormalise:
             probabilities = probabilities / represented_mass

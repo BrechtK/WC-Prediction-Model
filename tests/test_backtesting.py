@@ -1,6 +1,7 @@
 from pathlib import Path
 from shutil import copyfile
 
+import numpy as np
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
@@ -12,7 +13,13 @@ from wc_predictor.backtesting import (
     BacktestRunner,
     BacktestSettings,
     FootballDataCSVLoader,
+    FootballDataWorldCupXLSXLoader,
+    HistoricalWorldCupCSVLoader,
+    WORLD_CUP_GROUP_STAGE_WINDOWS,
+    WorldCupResearchBacktestRunner,
+    WorldCupResearchBacktestSettings,
 )
+from wc_predictor.odds import process_bookmaker_odds
 from wc_predictor.calibration import SINGLE_START_CALIBRATION_POINTS
 from wc_predictor.strategies import PredictionStrategy
 from wc_predictor.utils import favourite_strength_bucket
@@ -54,6 +61,109 @@ def test_football_data_loader_falls_back_to_bookmaker_columns(tmp_path: Path) ->
     data = FootballDataCSVLoader(history).load()
     assert data.odds.loc[0, "bookmaker"] == "Bet365"
     assert data.odds.loc[0, "odds_under_2_5"] == pytest.approx(1.85)
+
+
+def _world_cup_xlsx_rows(year: int, count: int = 48) -> list[dict[str, object]]:
+    start, end = (pd.Timestamp(value) for value in WORLD_CUP_GROUP_STAGE_WINDOWS[year])
+    days = pd.date_range(start, end, freq="D")
+    rows: list[dict[str, object]] = []
+    for index in range(count):
+        rows.append(
+            {
+                "Competition": f"World Cup {year}",
+                "Home": f"Team {year} A{index:02d}",
+                "Away": f"Team {year} B{index:02d}",
+                "Date": days[index % len(days)].strftime("%d/%m/%Y"),
+                "Time": "20:00",
+                "HGFT": index % 4,
+                "AGFT": (index + 1) % 3,
+                "H-Avg": "1,80" if index != 0 else pd.NA,
+                "D-Avg": "3,40" if index != 0 else pd.NA,
+                "A-Avg": "4,80" if index != 0 else pd.NA,
+                "bet365-H": "1.85",
+                "bet365-D": "3.30",
+                "bet365-A": "4.60",
+                "Betfair_Exch-H": "1.90",
+                "Betfair_Exch-D": "3.50",
+                "Betfair_Exch-A": "4.70",
+            }
+        )
+    rows.append(
+        {
+            "Competition": f"World Cup {year}",
+            "Home": "Knockout A",
+            "Away": "Knockout B",
+            "Date": (end + pd.Timedelta(days=1)).strftime("%d/%m/%Y"),
+            "HGFT": 1,
+            "AGFT": 0,
+            "H-Avg": "1.80",
+            "D-Avg": "3.40",
+            "A-Avg": "4.80",
+        }
+    )
+    return rows
+
+
+def _write_world_cup_xlsx(path: Path, years: tuple[int, ...], count: int = 48) -> None:
+    with pd.ExcelWriter(path) as writer:
+        for year in years:
+            pd.DataFrame(_world_cup_xlsx_rows(year, count=count)).to_excel(
+                writer,
+                sheet_name=f"World Cup {year}",
+                index=False,
+            )
+
+
+def test_football_data_world_cup_xlsx_loader_filters_group_stage_and_validates_odds(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workbook = tmp_path / "world_cup.xlsx"
+    _write_world_cup_xlsx(workbook, (2010, 2014, 2018, 2022))
+
+    data = FootballDataWorldCupXLSXLoader(workbook).load()
+
+    assert len(data.matches) == 192
+    assert data.matches.groupby("year")["match_id"].nunique().to_dict() == {
+        2010: 48,
+        2014: 48,
+        2018: 48,
+        2022: 48,
+    }
+    assert data.results[["team_a_goals_90", "team_b_goals_90"]].ge(0).all().all()
+    assert data.odds[["odds_a_win", "odds_draw", "odds_b_win"]].gt(1.0).all().all()
+    assert "Bet365" in set(data.odds["odds_source"])
+
+    processed = process_bookmaker_odds(data.odds)
+    fair_sum = processed[["fair_a_win", "fair_draw", "fair_b_win"]].sum(axis=1)
+    assert np.allclose(fair_sum, 1.0)
+    assert "used Bet365 fallback odds" in capsys.readouterr().out
+
+
+def test_world_cup_xlsx_backtest_exports_yearly_and_probabilistic_summaries(tmp_path: Path) -> None:
+    workbook = tmp_path / "world_cup_small.xlsx"
+    _write_world_cup_xlsx(workbook, (2010, 2014), count=2)
+    settings = WorldCupResearchBacktestSettings(
+        summary_output_path=tmp_path / "summary.csv",
+        predictions_output_path=tmp_path / "predictions.csv",
+        skipped_output_path=tmp_path / "skipped.csv",
+        yearly_summary_output_path=tmp_path / "summary_by_year.csv",
+        probabilistic_summary_output_path=tmp_path / "probabilistic_summary.csv",
+        excel_output_path=tmp_path / "backtest.xlsx",
+        margin_methods=("normalised_inverse_odds",),
+    )
+
+    report = WorldCupResearchBacktestRunner(
+        FootballDataWorldCupXLSXLoader(workbook, years=(2010, 2014)),
+        settings=settings,
+        fast=True,
+    ).run(export=True)
+
+    assert report.predictions["match_id"].nunique() == 4
+    assert set(report.yearly_summary["year"]) == {2010, 2014}
+    assert not report.probabilistic_summary.empty
+    assert (tmp_path / "summary_by_year.csv").exists()
+    assert (tmp_path / "probabilistic_summary.csv").exists()
 
 
 def test_backtest_runner_calculates_summary_metrics_and_skip_reasons(tmp_path: Path) -> None:
@@ -298,3 +408,55 @@ def test_favourite_strength_bucket_summary_aggregates_strategy_points() -> None:
 
 def test_strategy_interface_exists() -> None:
     assert PredictionStrategy.__doc__
+
+
+def test_historical_world_cup_loader_and_research_backtest_run_on_synthetic_data(tmp_path: Path) -> None:
+    history = tmp_path / "world_cup_matches.csv"
+    pd.DataFrame(
+        [
+            {
+                "match_id": "WC1",
+                "date": "2022-11-20",
+                "tournament": "World Cup 2022",
+                "stage": "group stage",
+                "group": "A",
+                "team_a": "Alpha",
+                "team_b": "Beta",
+                "actual_score_a": 2,
+                "actual_score_b": 0,
+                "bookmaker": "Historical",
+                "odds_a_win": 1.80,
+                "odds_draw": 3.60,
+                "odds_b_win": 5.00,
+                "odds_btts_yes": 2.05,
+                "odds_btts_no": 1.75,
+                "odds_over_2_5": 1.95,
+                "odds_under_2_5": 1.85,
+            },
+            {
+                "match_id": "WC2",
+                "date": "2022-11-21",
+                "tournament": "World Cup 2022",
+                "stage": "group stage",
+                "group": "B",
+                "team_a": "Gamma",
+                "team_b": "Delta",
+                "actual_score_a": 1,
+                "actual_score_b": 1,
+                "bookmaker": "Historical",
+                "odds_a_win": 2.40,
+                "odds_draw": 3.10,
+                "odds_b_win": 3.20,
+            },
+        ]
+    ).to_csv(history, index=False)
+
+    loaded = HistoricalWorldCupCSVLoader(history).load()
+    assert loaded.results.loc[0, "team_a_goals_90"] == 2
+
+    report = WorldCupResearchBacktestRunner(HistoricalWorldCupCSVLoader(history)).run(export=False)
+
+    assert not report.summary.empty
+    assert "rank_by_average_points" in report.summary
+    assert not report.predictions.empty
+    assert report.skipped["reason"].astype(str).str.contains("blend-weight validation skipped").any()

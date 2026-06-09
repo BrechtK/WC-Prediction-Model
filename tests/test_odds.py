@@ -3,10 +3,12 @@ import pandas as pd
 import pytest
 
 from wc_predictor.odds import (
+    MARGIN_REMOVAL_FALLBACK_WARNING,
     aggregate_bookmaker_probabilities,
     decimal_odds_to_implied_probabilities,
     process_bookmaker_odds,
     process_correct_score_odds,
+    process_total_goals_odds,
 )
 
 
@@ -106,3 +108,120 @@ def test_correct_score_odds_are_margin_adjusted() -> None:
     assert processed["common_scoreline_coverage"].unique().tolist() == pytest.approx([0.25])
     assert not processed["has_other_bucket"].any()
     assert processed["suspicious_overround_warning"].str.contains("below").all()
+
+
+def test_correct_score_shin_below_one_overround_falls_back_with_warning() -> None:
+    odds = pd.DataFrame(
+        [
+            {"match_id": "M1", "bookmaker": "Book", "score_a": 0, "score_b": 0, "decimal_odds": 3.0},
+            {"match_id": "M1", "bookmaker": "Book", "score_a": 1, "score_b": 0, "decimal_odds": 4.0},
+        ]
+    )
+
+    processed = process_correct_score_odds(odds, margin_method="shin")
+
+    assert processed["fair_score_probability"].sum() == pytest.approx(1.0)
+    assert processed["margin_removal_requested_method"].eq("shin").all()
+    assert processed["margin_removal_actual_method"].eq("normalised_inverse_odds").all()
+    assert processed["warnings"].str.contains(MARGIN_REMOVAL_FALLBACK_WARNING).all()
+
+
+def test_correct_score_shin_high_overround_falls_back_with_warning() -> None:
+    odds = pd.DataFrame(
+        [
+            {"match_id": "M1", "bookmaker": "Book", "score_a": 0, "score_b": 0, "decimal_odds": 1.20},
+            {"match_id": "M1", "bookmaker": "Book", "score_a": 1, "score_b": 0, "decimal_odds": 1.20},
+            {"match_id": "M1", "bookmaker": "Book", "score_a": 0, "score_b": 1, "decimal_odds": 1.20},
+        ]
+    )
+
+    processed = process_correct_score_odds(odds, margin_method="shin")
+
+    assert processed["fair_score_probability"].sum() == pytest.approx(1.0)
+    assert processed["margin_removal_actual_method"].eq("normalised_inverse_odds").all()
+    assert processed["margin_removal_failure_message"].str.contains("high overround").all()
+    assert processed["warnings"].str.contains(MARGIN_REMOVAL_FALLBACK_WARNING).all()
+
+
+def test_bookmaker_and_total_goals_margin_failures_record_fallback() -> None:
+    bookmaker_odds = pd.DataFrame(
+        [
+            {
+                "match_id": "M1",
+                "bookmaker": "Book",
+                "odds_a_win": 3.0,
+                "odds_draw": 4.0,
+                "odds_b_win": 6.0,
+                "odds_btts_yes": 3.0,
+                "odds_btts_no": 4.0,
+            }
+        ]
+    )
+    total_goals = pd.DataFrame(
+        [
+            {
+                "match_id": "M1",
+                "bookmaker": "Book",
+                "line": 2.5,
+                "odds_over": 3.0,
+                "odds_under": 4.0,
+            }
+        ]
+    )
+
+    processed_bookmaker = process_bookmaker_odds(bookmaker_odds, margin_method="shin")
+    processed_totals = process_total_goals_odds(total_goals, margin_method="shin")
+
+    assert processed_bookmaker.loc[0, "1x2_margin_removal_actual_method"] == "normalised_inverse_odds"
+    assert processed_bookmaker.loc[0, "btts_margin_removal_actual_method"] == "normalised_inverse_odds"
+    assert MARGIN_REMOVAL_FALLBACK_WARNING in processed_bookmaker.loc[0, "warnings"]
+    assert processed_totals.loc[0, "margin_removal_actual_method"] == "normalised_inverse_odds"
+    assert MARGIN_REMOVAL_FALLBACK_WARNING in processed_totals.loc[0, "warnings"]
+
+
+def test_devig_config_resolves_methods_per_market() -> None:
+    from wc_predictor.config import DevigConfig
+
+    devig = DevigConfig(one_x_two_method="power", btts_method="shin")
+
+    assert devig.method_for("1x2") == "power"
+    assert devig.method_for("btts") == "shin"
+    # Unset markets fall back to the default method.
+    assert devig.method_for("total_goals") == "normalised_inverse_odds"
+    assert devig.method_for("asian_handicap") == "normalised_inverse_odds"
+    # Correct score keeps its own conservative default, not default_method.
+    aggressive = DevigConfig(default_method="power")
+    assert aggressive.method_for("1x2") == "power"
+    assert aggressive.method_for("correct_score") == "normalised_inverse_odds"
+
+
+def test_devig_config_rejects_unknown_method() -> None:
+    from wc_predictor.config import DevigConfig
+
+    with pytest.raises(ValueError, match="one_x_two_method"):
+        DevigConfig(one_x_two_method="nonsense")
+
+
+def test_process_bookmaker_odds_applies_market_specific_methods() -> None:
+    bookmaker_odds = pd.DataFrame(
+        [
+            {
+                "match_id": "M1",
+                "bookmaker": "Book",
+                "odds_a_win": 2.2,
+                "odds_draw": 3.4,
+                "odds_b_win": 3.6,
+                "odds_btts_yes": 1.9,
+                "odds_btts_no": 1.9,
+            }
+        ]
+    )
+
+    processed = process_bookmaker_odds(
+        bookmaker_odds,
+        margin_method="normalised_inverse_odds",
+        market_methods={"1x2": "power", "btts": "normalised_inverse_odds"},
+    )
+
+    assert processed.loc[0, "1x2_margin_removal_actual_method"] == "power"
+    assert processed.loc[0, "btts_margin_removal_actual_method"] == "normalised_inverse_odds"

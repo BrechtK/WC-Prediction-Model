@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-from wc_predictor.config import KnockoutScoringConfig
+from wc_predictor.config import GroupScoringConfig, KnockoutScoringConfig
 from wc_predictor.utils import goal_difference, result_sign
+
+DEFAULT_GROUP_SCORING = GroupScoringConfig()
 
 
 def score_group_prediction(pred_a: int, pred_b: int, actual_a: int, actual_b: int) -> int:
     """Score a group-stage prediction according to the private-pool rules."""
 
+    config = DEFAULT_GROUP_SCORING
     if (pred_a, pred_b) == (actual_a, actual_b):
-        return 10
+        return config.exact_score_points
     if goal_difference(pred_a, pred_b) == goal_difference(actual_a, actual_b):
-        return 7
+        return config.goal_difference_points
     if result_sign(pred_a, pred_b) == result_sign(actual_a, actual_b):
-        return 5
-    return 1
+        return config.result_points
+    return config.participation_points
 
 
 def score_knockout_prediction(
@@ -27,20 +30,28 @@ def score_knockout_prediction(
     actual_qualifier: str,
     config: KnockoutScoringConfig | None = None,
 ) -> int:
-    """Score knockout components independently under the configurable baseline interpretation."""
+    """Score a knockout prediction under the configured interpretation."""
 
     config = config or KnockoutScoringConfig()
     points = config.participation_points
     qualifier_correct = predicted_qualifier == actual_qualifier
     exact_score = (pred_a, pred_b) == (actual_a, actual_b)
     correct_difference = goal_difference(pred_a, pred_b) == goal_difference(actual_a, actual_b)
-    if config.additive:
+    if config.knockout_scoring_mode in {"additive", "unverified"}:
         return (
             points
             + config.qualifier_points * qualifier_correct
             + config.exact_score_points * exact_score
             + config.goal_difference_points * correct_difference
         )
+    if config.knockout_scoring_mode == "hierarchical":
+        if qualifier_correct:
+            points += config.qualifier_points
+        if exact_score:
+            return points + config.exact_score_points
+        if correct_difference:
+            return points + config.goal_difference_points
+        return points
     if qualifier_correct:
         points += config.qualifier_points
     if exact_score:
@@ -48,4 +59,3 @@ def score_knockout_prediction(
     if correct_difference:
         return points + config.goal_difference_points
     return points
-

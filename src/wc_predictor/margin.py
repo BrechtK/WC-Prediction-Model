@@ -8,7 +8,7 @@ from typing import Protocol, Sequence
 import numpy as np
 from scipy.optimize import brentq
 
-IMPLEMENTED_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive")
+IMPLEMENTED_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive", "shin")
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class MarginRemovalResult:
     overround: float
     method: str
     warnings: tuple[str, ...] = ()
+    diagnostics: dict[str, float | str | bool] | None = None
 
 
 class MarginRemover(Protocol):
@@ -29,6 +30,11 @@ class MarginRemover(Protocol):
 
     def remove(self, raw_probabilities: np.ndarray) -> np.ndarray:
         """Convert positive raw implied probabilities into probabilities summing to one."""
+
+    def diagnostics(self) -> dict[str, float | str | bool]:
+        """Return method-specific diagnostics from the most recent removal."""
+
+        return {}
 
 
 class NormalisedInverseOddsMarginRemover:
@@ -65,16 +71,53 @@ class PowerMarginRemover:
 
 
 class ShinMarginRemover:
-    """Placeholder for Shin's insider-trading margin-removal model."""
+    """Remove margin using Shin's insider-trading model."""
 
     name = "shin"
 
+    def __init__(self) -> None:
+        self._shin_z: float | None = None
+
     def remove(self, raw_probabilities: np.ndarray) -> np.ndarray:
-        raise NotImplementedError("Shin margin removal is reserved for a later release")
+        overround = float(raw_probabilities.sum())
+        if len(raw_probabilities) < 2:
+            raise ValueError("Shin margin removal requires at least two outcomes")
+        if overround <= 1.0:
+            raise ValueError("Shin margin removal requires an overround above one")
+        if overround > 1.75:
+            raise ValueError("Shin margin removal rejected unusually high overround")
+
+        def probabilities_for_z(z: float) -> np.ndarray:
+            denominator = 2.0 * (1.0 - z)
+            if denominator <= 0:
+                raise ValueError("Invalid Shin z denominator")
+            adjusted = (
+                np.sqrt(z * z + 4.0 * (1.0 - z) * (raw_probabilities * raw_probabilities) / overround)
+                - z
+            ) / denominator
+            return adjusted
+
+        def objective(z: float) -> float:
+            return float(probabilities_for_z(z).sum() - 1.0)
+
+        lower = 0.0
+        upper = 1.0 - 1e-12
+        lower_value = objective(lower)
+        upper_value = objective(upper)
+        if lower_value < 0 or upper_value > 0:
+            raise ValueError("Shin margin removal could not bracket a valid z solution")
+        z = brentq(objective, lower, upper, xtol=1e-12, rtol=1e-12, maxiter=100)
+        fair = probabilities_for_z(z)
+        if np.any(fair <= 0) or not np.all(np.isfinite(fair)):
+            raise ValueError("Shin margin removal produced invalid probabilities")
+        self._shin_z = float(z)
+        return fair / fair.sum()
+
+    def diagnostics(self) -> dict[str, float | str | bool]:
+        return {"shin_z": self._shin_z} if self._shin_z is not None else {}
 
 
-# TODO: Add odds-ratio and tested Shin margin removal only when their numerical
-# safeguards are clear for both two-way and three-way markets.
+# TODO: Add odds-ratio margin removal only when numerical safeguards are clear.
 def get_margin_remover(method: str) -> MarginRemover:
     """Return a configured margin remover."""
 
@@ -117,4 +160,6 @@ def remove_margin(
     fair = remover.remove(raw)
     if np.any(fair <= 0) or not np.isclose(fair.sum(), 1.0, atol=1e-9):
         raise ValueError("Margin removal must produce positive probabilities summing to one")
-    return MarginRemovalResult(raw, fair, overround, remover.name, tuple(warnings))
+    diagnostics_method = getattr(remover, "diagnostics", None)
+    diagnostics = diagnostics_method() if diagnostics_method is not None else {}
+    return MarginRemovalResult(raw, fair, overround, remover.name, tuple(warnings), diagnostics)

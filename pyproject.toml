@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4"]
+dev = ["pytest>=7.4", "matplotlib>=3.7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -24,4 +24,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-
+markers = [
+    "unit: fast isolated tests",
+    "integration: multi-module workflow tests",
+    "slow: slower tests that are safe to skip during quick local iterations",
+    "backtest: historical backtest workflow tests",
+    "optimisation: numerical optimisation tests",
+]

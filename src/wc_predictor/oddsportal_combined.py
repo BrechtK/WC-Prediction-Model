@@ -18,11 +18,13 @@ SECTION_FILENAMES = {
     "over_under": "over_under",
     "btts": "btts",
     "correct_score": "correct_score",
+    "asian_handicap": "asian_handicap",
 }
 OPTIONAL_SECTIONS = ("over_under", "btts", "correct_score")
 _FILENAME_PATTERN = re.compile(r"^(?P<match_id>.+?)(?:_all_odds)?\.txt$", re.IGNORECASE)
 _SECTION_PATTERN = re.compile(r"^\s*###\s*(?P<header>.*?)\s*$")
 _SECTION_ALIASES = {
+    "MATCH": "match",
     "1X2": "1x2",
     "MATCH ODDS": "1x2",
     "FULL TIME RESULT": "1x2",
@@ -31,6 +33,8 @@ _SECTION_ALIASES = {
     "BTTS": "btts",
     "BOTH TEAMS TO SCORE": "btts",
     "CORRECT SCORE": "correct_score",
+    "ASIAN HANDICAP": "asian_handicap",
+    "HANDICAP": "asian_handicap",
 }
 
 
@@ -116,6 +120,19 @@ def _normalise_team_name(value: object) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).split())
 
 
+def _extract_match_section(text: str) -> str:
+    lines: list[str] = []
+    in_match_section = False
+    for raw_line in text.splitlines():
+        marker = _SECTION_PATTERN.fullmatch(raw_line)
+        if marker:
+            in_match_section = _canonical_section(marker.group("header")) == "match"
+            continue
+        if in_match_section:
+            lines.append(raw_line)
+    return " ".join(line.strip() for line in lines if line.strip())
+
+
 def validate_combined_pastes_against_schedule(
     input_folder: str | Path,
     schedule: pd.DataFrame,
@@ -142,9 +159,24 @@ def validate_combined_pastes_against_schedule(
             raise CombinedOddsPortalPasteError(
                 f"{path.name} was found, but {match_id} is not present in the parsed schedule."
             )
-        text = _normalise_team_name(path.read_text(encoding="utf-8-sig"))
-        detected = sorted(team for team, normalised in known_teams.items() if normalised and normalised in text)
+        raw_text = path.read_text(encoding="utf-8-sig")
         expected = {str(fixtures.loc[match_id, "team_a"]), str(fixtures.loc[match_id, "team_b"])}
+        expected_label = f"{fixtures.loc[match_id, 'team_a']} vs {fixtures.loc[match_id, 'team_b']}"
+        match_section = _extract_match_section(raw_text)
+        if match_section:
+            normalised_match_section = _normalise_team_name(match_section)
+            missing_expected = [
+                team
+                for team in expected
+                if _normalise_team_name(team) not in normalised_match_section
+            ]
+            if missing_expected:
+                raise CombinedOddsPortalPasteError(
+                    f"{path.name} ### MATCH says {match_section!r}, but the parsed schedule expects "
+                    f"{match_id} | {expected_label}."
+                )
+        text = _normalise_team_name(raw_text)
+        detected = sorted(team for team, normalised in known_teams.items() if normalised and normalised in text)
         unexpected = sorted(set(detected) - expected)
         if unexpected:
             warnings.append(
@@ -177,12 +209,15 @@ def split_combined_oddsportal_paste_file(
                 _append_warning(warnings, f"unknown_section_marker:{header.strip()}")
                 current_section = None
                 continue
+            if canonical == "match":
+                current_section = "match"
+                continue
             if canonical in sections:
                 _append_warning(warnings, f"duplicate_section_marker:{canonical}")
             sections.setdefault(canonical, [])
             current_section = canonical
             continue
-        if current_section is not None:
+        if current_section is not None and current_section != "match":
             sections[current_section].append(raw_line)
 
     if "1x2" not in sections:

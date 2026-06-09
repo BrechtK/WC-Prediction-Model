@@ -1,10 +1,22 @@
 # Future Model Roadmap
 
+This is the compact long-horizon roadmap. The active detailed roadmap is
+`docs/model_roadmap.md`; keep both files consistent when modelling assumptions
+change.
+
 ## Version 1
 
 Use margin-adjusted bookmaker odds, aggregate bookmakers, calibrate an
 independent-Poisson score distribution, optimise private-pool expected points,
-and track friend submissions and standings.
+and track friend submissions and standings. Live margin removal defaults to
+`normalised_inverse_odds`; Shin is optional research diagnostics with safe
+fallback warnings. Group-stage scoring assumes the central `10/7/5/1` config
+unless confirmed rules differ.
+
+2026 freeze policy: the EV-optimal score remains the live default. Modal/draw,
+MC+AH, correct-score blend changes, power devig, global draw boosts, and AH
+favourite-under-cover adjustments are not promoted to default. They remain
+manual-review or research diagnostics as described in `docs/model_roadmap.md`.
 
 ## Version 1.5
 
@@ -20,13 +32,24 @@ interface.
 ## Version 2.5
 
 Evaluate market/model blending at the probability-distribution or expected-goals
-level.
+level. Asian handicap ladders remain diagnostic inputs: parse broadly, constrain
+only stable near-money lines, and treat orientation warnings as paste-quality
+diagnostics.
 
 ## Version 3
 
 Validate the diagnostic Dixon-Coles challenger and test bivariate-Poisson
 extensions. Consider negative-binomial count models where overdispersion is
 material.
+
+Several of these are now implemented as diagnostic-first, opt-in options
+(market-type-specific devig, dynamic larger grids for extreme favourites,
+Dixon-Coles and bivariate-Poisson priors for the KL projection, a Skellam
+margin model fitted to Asian handicap, and group-level constraint weights with a
+correlation/double-counting scaffold). See `docs/model_roadmap.md` and
+`docs/mathematical_basis.md`. The remaining work is out-of-sample validation
+under the pool scoring rules and, eventually, a data-driven correlated-error
+covariance model for market constraints.
 
 ## Later Research
 

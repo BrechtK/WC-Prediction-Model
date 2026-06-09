@@ -1,0 +1,17 @@
+### MATCH
+Team A vs Team B
+
+### 1X2
+<paste OddsPortal 1X2 table here>
+
+### OVER_UNDER
+<paste OddsPortal totals table here>
+
+### BTTS
+<paste OddsPortal BTTS table here>
+
+### CORRECT_SCORE
+<paste OddsPortal correct-score table here>
+
+### ASIAN_HANDICAP
+<optional: paste OddsPortal Asian handicap table here>

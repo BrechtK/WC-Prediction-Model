@@ -1,0 +1,4 @@
+strategy,matches,total_points,brier_1x2,rps_1x2,label
+most_likely_poisson,144,607,0.5704848754958051,0.13799032609897405,Modal / most-likely
+ev_optimal_1x2,144,594,0.5704848754958051,0.13799032609897405,EV 1X2
+ev_optimal_1x2_over_under,144,594,0.5704848754958051,0.13799032609897405,EV 1X2 + O/U slot
