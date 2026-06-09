@@ -292,9 +292,9 @@ draw_vs_decisive_gap = EV(best_draw_score) - EV(best_decisive_score)
 ```
 
 The WC 2022 group-stage backtest suggested the EV rule may over-select narrow
-decisive no-BTTS scores in balanced draw regimes. The combined 2018+2022
-96-match review did not make modal/most-likely robust enough to promote, so the
-challenger only updates diagnostic/manual-review fields; `recommended_score`
+decisive no-BTTS scores in balanced draw regimes. The combined 2014/2018/2022
+144-match review did not make modal/most-likely robust enough to promote, so
+the challenger only updates diagnostic/manual-review fields; `recommended_score`
 remains `argmax_s EV(s)`.
 
 The BTTS conflict diagnostic similarly flags no-BTTS EV picks when market or
@@ -460,9 +460,9 @@ Best odds for individual scorelines are not enough to recover fair
 probabilities: the best prices may come from different bookmakers and do not
 form one coherent market with a meaningful overround.
 
-As of the combined 2018+2022 group-stage review, correct-score blend sweeps are
-still research-only. The live default remains `w=1.0`; observed blend gains were
-not strong enough to justify changing the default score matrix.
+As of the combined 2014/2018/2022 group-stage review, correct-score blend
+sweeps are still research-only. The live default remains `w=1.0`; observed
+blend gains were not strong enough to justify changing the default score matrix.
 
 All supplied correct-score odds contribute to each bookmaker's overround and
 fair probabilities, including long-shot scores beyond the configured finite
@@ -476,7 +476,7 @@ These additions are configurable and default to the existing conservative
 behaviour. None of them changes the default live EV recommendation unless
 explicitly enabled.
 
-Final 2026 governance after the combined 2018+2022 96-match review:
+Final 2026 governance after the combined 2014/2018/2022 144-match review:
 EV optimisation remains the live default. MC+AH is a gated challenger only when
 the optimiser status is acceptable. Modal/draw, round-3 fade, blowout risk, and
 narrow BTTS conflict flags are manual-review notes. Power devig, Dixon-Coles,
@@ -593,7 +593,7 @@ tail outcomes.
 
 Realised pool points evaluate the action chosen under the contest scoring rule.
 They are the correct objective for the entry sheet, but they are noisy at small
-sample sizes such as the combined 2018+2022 group-stage set of 96 matches.
+sample sizes such as the combined 2014/2018/2022 group-stage set of 144 matches.
 Probability-quality validation therefore reports proper scoring rules and
 calibration diagnostics alongside realised points.
 

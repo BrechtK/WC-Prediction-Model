@@ -16,6 +16,7 @@ EXPECTED_OUTPUTS = [
     "probability_matrix_extreme_favourite.png",
     "probability_matrix_balanced.png",
     "probability_matrix_examples.csv",
+    "probability_matrix_combined.png"
 ]
 
 pytest.importorskip("matplotlib")

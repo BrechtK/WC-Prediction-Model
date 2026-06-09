@@ -8,6 +8,11 @@
 *.egg-info/
 .ipynb_checkpoints/
 .env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # Temporary Excel files created while a workbook is open
 ~$*.xlsx

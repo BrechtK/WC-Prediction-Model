@@ -78,23 +78,24 @@ def _prediction_rows() -> list[dict[str, object]]:
 
 
 def _richer_prediction_rows() -> list[dict[str, object]]:
+    rows = [
+        ("R2014A", "wc2014", 2.1, 3),
+        ("R2014B", "wc2014", 2.3, 2),
+        ("R2018A", "wc2018", 2.5, 2),
+        ("R2018B", "wc2018", 2.7, 4),
+        ("R2022A", "wc2022", 2.9, 1),
+        ("R2022B", "wc2022", 3.1, 3),
+    ]
     return [
         {
             "config": "baseline_ev",
             "strategy": "baseline_poisson",
-            "tournament": "wc2018",
-            "match_id": "R2018A",
-            "matrix_expected_total_goals": 2.5,
-            "actual_total_goals": 3,
-        },
-        {
-            "config": "baseline_ev",
-            "strategy": "baseline_poisson",
-            "tournament": "wc2022",
-            "match_id": "R2022A",
-            "matrix_expected_total_goals": 2.7,
-            "actual_total_goals": 2,
-        },
+            "tournament": tournament,
+            "match_id": match_id,
+            "matrix_expected_total_goals": expected_total_goals,
+            "actual_total_goals": actual_total_goals,
+        }
+        for match_id, tournament, expected_total_goals, actual_total_goals in rows
     ]
 
 
@@ -139,10 +140,10 @@ def test_summary_tables_match_staged_predictions(tmp_path: Path) -> None:
     assert set(layers["validation_layer"]) == {"Football-Data 1X2-only", "Richer live-paste + totals"}
     fd = layers.loc[layers["validation_layer"] == "Football-Data 1X2-only"].iloc[0]
     richer = layers.loc[layers["validation_layer"] == "Richer live-paste + totals"].iloc[0]
-    assert int(fd["matches"]) == 4
-    assert round(fd["expected_total_goals"], 3) == 2.650
-    assert round(fd["actual_total_goals"], 3) == 2.250
-    assert int(richer["matches"]) == 2
+    assert int(fd["matches"]) == 6
+    assert round(fd["expected_total_goals"], 3) == 2.500
+    assert round(fd["actual_total_goals"], 3) == 2.333
+    assert int(richer["matches"]) == 6
     assert round(richer["expected_total_goals"], 3) == 2.600
     assert round(richer["actual_total_goals"], 3) == 2.500
 

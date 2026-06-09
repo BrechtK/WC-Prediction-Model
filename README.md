@@ -7,11 +7,17 @@ prediction-pool score recommendations. The live workflow parses a schedule,
 splits one combined odds file per match, runs the established EV recommendation
 logic, and writes a submission sheet plus a detailed diagnostics workbook.
 
+This is a scoring-rule decision model and validation project, not a betting
+strategy. It makes no market-beating or betting-alpha claim.
+
 The default live recommendation remains the existing pure-EV model. Research
 diagnostics can challenge or explain a pick, but they do not silently change the
 default submitted score.
 The live margin-removal default is `normalised_inverse_odds`; Shin remains
 available as an explicit research diagnostic.
+
+The accompanying paper source is
+[paper/world_cup_prediction_model.tex](paper/world_cup_prediction_model.tex).
 
 ## Quick Start / Matchday Use
 
@@ -463,6 +469,8 @@ src/wc_predictor/        package code
 scripts/                 live, debugging, and research entry points
 tests/fixtures/          tracked parser fixtures
 docs/                    workflow and methodology notes
+paper/                   LaTeX paper source and generated publication figures
+notebooks/               exploratory notebooks
 ```
 
 ## Install And Test
@@ -481,7 +489,8 @@ Useful test commands:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Quick combined historical smoke run:
+Quick combined historical smoke run, when you have the ignored local historical
+OddsPortal paste folders in `input/historical/`:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_live_backtest.py

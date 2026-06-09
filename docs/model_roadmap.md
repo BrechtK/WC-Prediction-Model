@@ -73,7 +73,7 @@ goal-difference tier in the scoring rule and is especially useful for strong
 favourites and blowout-tail choices such as `3-0`, `4-0`, and `5-0`. It remains
 diagnostic/challenger input, not a direct override of the default EV
 recommendation.
-The combined 2018+2022 review found only weak monitor-only evidence for
+The combined 2014/2018/2022 review found only weak monitor-only evidence for
 favourite under-cover on the real quoted AH main line. The stronger earlier
 pattern came from interpolated/representative lines and should not be used as a
 prediction rule.
@@ -112,8 +112,8 @@ Backtesting should answer:
 
 The live-paste historical backtest also exports probability-quality validation.
 Realised pool points remain the contest objective, but they are high variance at
-the current combined 2018+2022 sample of 96 matches. Proper scoring rules and
-calibration diagnostics therefore sit beside, not above, the realised-points
+the current combined 2014/2018/2022 sample of 144 matches. Proper scoring rules
+and calibration diagnostics therefore sit beside, not above, the realised-points
 tables:
 
 - 1X2 Brier score, clipped log loss, and Ranked Probability Score;
@@ -194,15 +194,15 @@ The second-pass pattern review narrowed the practical flags:
 - `blowout_risk_flag` is diagnostic-only for strong-favourite, high-total
   matches where higher-margin alternatives deserve review.
 
-Correct-score blend value remains research-only: the combined 96-match review
+Correct-score blend value remains research-only: the combined 144-match review
 did not justify changing the live default weight, and the most favourable result
-was not strong enough to separate signal from a lucky exact hit. MC+AH is the
-only challenger that was positive in both 2018 and 2022, but the effect was
-small and must stay gated by optimiser reliability; the final recommendation
-remains EV.
+was not strong enough to separate signal from sampling noise. Raw MC+AH was the
+top richer diagnostic and positive across all three tournaments, but the
+implemented policy must stay gated by optimiser reliability; the final
+recommendation remains EV.
 
 Dixon-Coles is retained as a diagnostic and prior option, but currently has no
-observed recommendation effect on the combined 2018+2022 group-stage data.
+observed recommendation effect on the combined 2014/2018/2022 group-stage data.
 Larger-grid diagnostics are retained for extreme cases and hidden-tail checks,
 but the sweep was inert on the same combined sample. Power devig should be
 dropped from serious live-decision consideration unless future data reverses
@@ -219,9 +219,9 @@ Final 2026 policy:
 - do not promote modal/most-likely, MC+AH, correct-score blend-weight changes,
   power devig, global draw boosts, or AH favourite-under-cover adjustments.
 
-Future validation should replay the same diagnostics on 2014 World Cup
-group-stage odds and monitor live 2026 matches before any default strategy
-change is considered.
+Future validation should monitor live 2026 matches and replay the same
+diagnostics on any additional legally usable historical odds before any default
+strategy change is considered.
 
 ## Priority 6: Own Challenger Models
 

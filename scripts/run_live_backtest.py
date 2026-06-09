@@ -126,7 +126,7 @@ EXPORT_CSV_ONLY = True
 
 # Per-match progress is noisy for combined smoke runs. Turn it on only when
 # debugging a specific tournament or parse issue.
-SHOW_PROGRESS = True
+SHOW_PROGRESS = False
 
 # Output paths (relative to project root). Combined runs write below
 # output/research/combined_backtest/.

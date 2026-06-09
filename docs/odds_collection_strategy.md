@@ -351,8 +351,8 @@ The weight-sensitivity table is especially valuable. If the recommendation is
 stable from `w=1.0` through `w=0.5`, the correct-score enhancement confirms the
 baseline. If it flips repeatedly, manual review matters more than selecting one
 apparently precise weight.
-The combined 2018+2022 backtest did not provide enough evidence to change the
-live default from `w=1.0`; blend sweeps remain research-only.
+The combined 2014/2018/2022 backtest did not provide enough evidence to change
+the live default from `w=1.0`; blend sweeps remain research-only.
 
 For O/U diagnostics, use `expected_total_goals` when judging low-total draw
 prone matches or high-total blowout risk. `ou_ladder_median_line` describes the
