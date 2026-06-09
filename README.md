@@ -157,36 +157,58 @@ All of these leave `recommended_score` unchanged.
 
 ## Validation Highlights
 
-Consistently available historical inputs differ by tournament, so validation is
-split into two layers:
+Validation runs over the **same 144 group-stage matches** (2014, 2018, 2022; 48
+each) through two layers that differ only in their market inputs:
 
-- The extended Football-Data layer uses the available 2014, 2018, and 2022
-  World Cup group-stage sheets with average 1X2 odds only. The workbook does
-  not contain a 2010 sheet, so this extension covers 144 matches rather than
-  192: 48 matches in each loaded tournament.
-- The richer 2018/2022 diagnostic layer uses auxiliary-market inputs from the
-  live-paste historical runs. It supports challenger governance, but it is not
-  part of the headline 144-match Football-Data table.
+- The **richer layer** (headline) uses the full set of manually collected
+  OddsPortal markets (1X2, totals, BTTS, correct score, Asian handicap) through
+  the complete live pipeline and all challengers. With 2014 OddsPortal odds now
+  collected, it covers all three tournaments (previously 2018/2022 only).
+- The **1X2-only contrast layer** restricts inputs to Football-Data average 1X2
+  odds (`H-Avg`, `D-Avg`, `A-Avg`) over the same 144 matches, with realised
+  scores from `HGFT`/`AGFT`. It is a deliberately degraded control: it isolates
+  the decision-rule effect (modal and EV act on identical probabilities) and
+  quantifies what the extra markets add. The Football-Data workbook has no 2010
+  sheet, so the control covers 144 matches, not 192. Asian-handicap,
+  correct-score, and MC+AH logic is not applied in this layer.
+
+Two metric families are reported:
 
 - **Realised pool points** evaluate the *decision rule* under the Sporza
   `10/7/5/1` scoring system.
 - **Probabilistic scoring rules** evaluate the *quality and calibration of the
   1X2-implied scoreline probability distribution*, independently of the
-  discrete payoff.
+  discrete payoff (reported on the 1X2-only contrast layer).
 
-This validation is 1X2-only. It uses Football-Data average market odds
-(`H-Avg`, `D-Avg`, `A-Avg`), which are available for all loaded rows. Each
-loaded match carries complete average 1X2 odds. Realised scores are read from
-`HGFT` and `AGFT` only.
-Asian-handicap, correct-score, and MC+AH logic is not applied to this extension.
-
-Realised pool points:
+Realised pool points (1X2-only contrast layer; modal and EV act on identical
+probabilities here, so this isolates the decision rule):
 
 | Strategy | 2014 | 2018 | 2022 | Combined |
 |---|---:|---:|---:|---:|
 | `most_likely_poisson` | 190 | 227 | 190 | 607 |
 | `ev_optimal_1x2` | 193 | 222 | 179 | 594 |
-| `ev_optimal_1x2_over_under` | 193 | 222 | 179 | 594 |
+
+An over/under-aware EV variant (`ev_optimal_1x2_over_under`) was also run; with no
+totals market in the 1X2-only inputs it reduces exactly to `ev_optimal_1x2`
+(same 193/222/179/594), so it is not listed as a separate row.
+
+Modal-versus-EV decision divergence, over the same 144 matches under each input set:
+
+| Sample | Matches | Modal = EV | Modal differs from EV | Divergence |
+|---|---:|---:|---:|---:|
+| 2014 1X2-only | 48 | 33 | 15 | 31.3% |
+| 2018 1X2-only | 48 | 43 | 5 | 10.4% |
+| 2022 1X2-only | 48 | 40 | 8 | 16.7% |
+| 2014/2018/2022 1X2-only | 144 | 116 | 28 | 19.4% |
+| 2014 richer layer | 48 | 23 | 25 | 52.1% |
+| 2018 richer layer | 48 | 34 | 14 | 29.2% |
+| 2022 richer layer | 48 | 36 | 12 | 25.0% |
+| 2014/2018/2022 richer layer | 144 | 93 | 51 | 35.4% |
+
+This measures how often the expected-points decision rule selects a different
+scoreline from the modal scoreline; it does not show that EV empirically
+dominates modal picks in realised points. The richer inputs move the EV pick off
+the mode more often (most strongly in 2014).
 
 Probabilistic validation:
 
@@ -205,15 +227,15 @@ diagnostic is mildly draw-heavy: mean implied draw probability is 0.245 versus
 0.194 realised draw frequency. This is treated as a limitation of inferring a
 full scoreline distribution from 1X2 odds alone, not as a failure of the
 expected-points decision rule. The expected-goals figure therefore uses two
-panels: the full 2014/2018/2022 Football-Data extension, and an apples-to-apples
-2018/2022 comparison across validation layers. On that common 96-match subset,
-Football-Data 1X2-only is 2.346 expected versus 2.521 realised; the richer
-live-paste layer with explicit total-goals inputs is 2.567 expected versus 2.521
-realised. The richer layer is closer to realised total-goal intensity, so the
-gap is treated as reduced-input information loss rather than a general failure
-of the score-matrix idea.
+panels: the full 2014/2018/2022 1X2-only contrast layer, and an apples-to-apples
+comparison over the same 144 matches across validation layers. On that matched
+set, the 1X2-only layer is 2.387 expected versus 2.625 realised (gap +0.238);
+the richer OddsPortal layer with explicit total-goals inputs is 2.616 expected
+versus 2.625 realised (gap +0.009). The richer layer almost exactly matches
+realised total-goal intensity, so the 1X2-only gap is reduced-input information
+loss rather than a general failure of the score-matrix idea.
 
-The modal strategy scores higher than the EV-style strategies in realised
+The modal strategy scores higher than the EV-optimal strategy in realised
 points over this specific 144-match sample. That does not change the model
 policy: EV remains the ex-ante expected-points rule under the scoring function,
 while modal remains a manual-review challenger. The probability vectors are the
@@ -221,20 +243,36 @@ same across these strategies, so realised-points differences arise from the
 scoreline-selection layer rather than materially different probability
 estimates.
 
-Richer 2018/2022 diagnostic layer, not the headline Football-Data extension:
+A paired bootstrap confirms the gap is within noise: the 95% confidence interval
+on the modal-minus-EV difference is `[-25, +56]` points over the 144 matches (it
+contains zero). Reproduce it with `python scripts/compute_modal_ev_bootstrap.py`,
+which pairs per-match realised points from
+`output/research/world_cup_backtest_predictions.csv` and writes
+`output/research/modal_ev_bootstrap_summary.csv`.
+
+Headline richer challenger layer over the full 2014/2018/2022 group stage (n=144):
 
 | Strategy / diagnostic | Points | Governance interpretation |
 |---|---:|---|
-| EV-optimal default | 391 | Live default benchmark |
-| Modal / most-likely | 412 | Manual-review challenger; realised gain does not overturn EV policy |
-| Market-consistent + AH | 399 | Gated challenger; small fit-dependent gain |
-| Correct-score blend | 400 | Research-only; not promoted to default |
-| Power devig | 386 | Underperforms; not recommended for serious live use |
-| Dixon-Coles / larger grid | 391 | Inert relative to default on this combined diagnostic layer |
+| EV-optimal default | 576 | Live default benchmark |
+| Modal / most-likely | 589 | Manual-review challenger; gain is 2022-only and high variance |
+| Market-consistent + AH (raw) | 596 | Raw diagnostic, MC+AH on every match; highest total and positive in all three tournaments, but optimiser never fully converges |
+| Gated MC+AH policy | 587 | Implemented rule: MC+AH only when fit acceptable, else EV default |
+| Correct-score blend sweep | 589 | Best tested blend-weight diagnostic; mildly positive, research-only |
+| Power devig | 571 | Underperforms in every tournament; not for serious live use |
+| Dixon-Coles / larger grid | 576 | Inert relative to default on this combined layer |
 
-These richer-layer rows use auxiliary-market research outputs from the 2018 and
-2022 group stages. They inform challenger governance only and do not establish
-betting alpha.
+These rows use the full live pipeline with all additional betting markets across
+2014/2018/2022. Per-tournament totals (2014/2018/2022): EV `185/211/180`, raw
+MC+AH `197/217/182`, gated MC+AH `192/215/180`, modal `177/197/215`. The
+correct-score row is the best tested blend weight (`0.5`; the `0.75` and `0.85`
+weights each scored 587). The raw MC+AH row uses MC+AH on every match; the gated
+MC+AH row is the actually-implemented policy, adopting MC+AH only on the 110/144
+matches with an acceptable optimiser fit (33 severe, 1 poor) and falling back to
+EV otherwise. The gated policy scores 587 — above EV (576), below the raw
+diagnostic (596), and within sampling noise — so MC+AH stays a gated challenger,
+not a promoted default. These rows inform challenger governance only and do not
+establish betting alpha.
 
 Figures (generated by `scripts/generate_validation_figures.py` into
 `paper/figures/`):
@@ -284,17 +322,18 @@ they do not change the default live recommendation by themselves.
 
 The historical live backtest has an additional `BACKTEST_PROFILE = "research"`
 mode with correct-score blend-weight sweeps, modal/draw threshold sweeps, and a
-larger-grid configuration. Correct-score blend value remains unproven until
-those sweeps are actually run on richer historical data.
+larger-grid configuration. Correct-score blend value remains a mild, unproven
+diagnostic across the 2014/2018/2022 richer sweep and is not promoted to the live
+default.
 It also exports probability-quality validation alongside realised pool points:
 `probabilistic_backtest_summary.csv`, `calibration_1x2.csv`,
 `calibration_btts.csv`, `calibration_totals.csv`, and
 `scoreline_probability_diagnostics.csv`. These use Brier score, clipped log
 loss, RPS, calibration buckets, expected-total-goals errors, and actual
 score/result/margin probability diagnostics.
-Local live-paste historical folders can follow `input/historical/wc2022/` or
-`input/historical/wc2018/`; the 2018 odds files are templates awaiting manual
-OddsPortal pastes.
+Local live-paste historical folders follow `input/historical/wc2014/`,
+`input/historical/wc2018/`, and `input/historical/wc2022/`, each with manually
+collected OddsPortal pastes for all 48 group-stage matches.
 
 Public strategy remains diagnostic. Use `PUBLIC_STRATEGY_TARGET` /
 `public_strategy_target` values such as `friends`, `balanced`, or `national`
@@ -305,13 +344,19 @@ Additional research diagnostics include optional Shin margin removal,
 market-estimated Dixon-Coles rho from low correct-score cells, and a historical
 World Cup backtest harness.
 
-Current 2026 policy after the 144-match Football-Data 1X2 extension and the
-separate richer challenger diagnostics:
+Current 2026 policy after the 144-match richer validation and its 1X2-only
+contrast layer:
 
 - EV remains the live default; diagnostics do not override `recommended_score`.
-- In the Football-Data 1X2-only extension, modal/most-likely scores higher than
-  EV-style strategies over the specific 144-match realised-points sample, but
-  this is not robust enough to promote over the ex-ante expected-points rule.
+- In the 1X2-only contrast layer, modal/most-likely scores higher than the
+  EV-optimal strategy over the specific 144-match realised-points sample, but
+  this is within noise and not robust enough to promote over the ex-ante
+  expected-points rule.
+- In the richer 144-match layer, raw MC+AH posts the top total (596) and beats EV
+  in all three tournaments. The actually-implemented gated policy (MC+AH only on
+  acceptable-fit matches, else EV) scores 587 — still above EV (576) but within
+  sampling noise and dependent on a non-converging optimiser, so MC+AH stays a
+  gated challenger rather than the default.
 - Do not promote modal/most-likely, MC+AH, correct-score blend-weight changes,
   power devig, global draw boosts, or AH favourite-under-cover adjustments to
   the live default.
@@ -442,6 +487,6 @@ Quick combined historical smoke run:
 .\.venv\Scripts\python.exe scripts\run_live_backtest.py
 ```
 
-With the checked-in runner defaults this uses the combined `wc2018` + `wc2022`
-folders, `BACKTEST_PROFILE = "quick"`, `EXPORT_CSV_ONLY = True`, and
+With the checked-in runner defaults this uses the combined `wc2014` + `wc2018` +
+`wc2022` folders, `BACKTEST_PROFILE = "quick"`, `EXPORT_CSV_ONLY = True`, and
 `SHOW_PROGRESS = False`.

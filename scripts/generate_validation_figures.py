@@ -2,7 +2,7 @@
 
 The figures are read-only with respect to the model. They consume
 ``output/research/world_cup_backtest_predictions.csv`` plus, when available,
-the richer 2018/2022 live-paste validation output in
+the richer 2014/2018/2022 live-paste validation output in
 ``output/research/combined_backtest/live_backtest_predictions.csv``. The script
 writes public-facing figures plus small summary CSVs into ``paper/figures/``.
 """
@@ -181,10 +181,13 @@ def build_goals_summary(matches: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def _football_data_2018_2022_summary(matches: pd.DataFrame) -> dict[str, object]:
-    sub = matches[matches["year"].isin([2018, 2022])]
+RICHER_TOURNAMENTS = ["wc2014", "wc2018", "wc2022"]
+
+
+def _football_data_common_years_summary(matches: pd.DataFrame) -> dict[str, object]:
+    sub = matches[matches["year"].isin([2014, 2018, 2022])]
     return {
-        "sample": "2018/2022 Football-Data 1X2-only",
+        "sample": "2014/2018/2022 Football-Data 1X2-only",
         "validation_layer": "Football-Data 1X2-only",
         "matches": int(len(sub)),
         "expected_total_goals": float(sub["expected_total_goals_1x2"].mean()),
@@ -200,22 +203,25 @@ def _representative_richer_matches(predictions: pd.DataFrame) -> pd.DataFrame:
     rep = predictions[
         predictions["config"].eq("baseline_ev")
         & predictions["strategy"].eq("baseline_poisson")
-        & predictions["tournament"].isin(["wc2018", "wc2022"])
+        & predictions["tournament"].isin(RICHER_TOURNAMENTS)
     ].copy()
     if rep.empty:
-        raise ValueError("No richer validation rows found for baseline_ev/baseline_poisson in wc2018/wc2022")
+        raise ValueError(
+            "No richer validation rows found for baseline_ev/baseline_poisson in "
+            f"{RICHER_TOURNAMENTS}"
+        )
     return rep.drop_duplicates(["tournament", "match_id"]).reset_index(drop=True)
 
 
 def build_goals_layer_comparison(matches: pd.DataFrame, richer_predictions: pd.DataFrame | None) -> pd.DataFrame:
-    """Build the 2018/2022 apples-to-apples comparison across validation layers."""
+    """Build the 2014/2018/2022 apples-to-apples comparison across validation layers."""
 
-    rows = [_football_data_2018_2022_summary(matches)]
+    rows = [_football_data_common_years_summary(matches)]
     if richer_predictions is not None:
         richer = _representative_richer_matches(richer_predictions)
         rows.append(
             {
-                "sample": "2018/2022 richer live-paste",
+                "sample": "2014/2018/2022 richer live-paste",
                 "validation_layer": "Richer live-paste + totals",
                 "matches": int(len(richer)),
                 "expected_total_goals": float(richer["matrix_expected_total_goals"].mean()),
@@ -310,7 +316,7 @@ def plot_expected_vs_actual_goals(
         title="Panel A: Football-Data 1X2-only",
         labels=football_data_summary["sample"].tolist(),
     )
-    layer_labels = ["FD 1X2\n2018/2022", "Richer + totals\n2018/2022"][: len(layer_summary)]
+    layer_labels = ["FD 1X2\n2014/2018/2022", "Richer + totals\n2014/2018/2022"][: len(layer_summary)]
     _plot_expected_actual_bars(
         axes[1],
         layer_summary,

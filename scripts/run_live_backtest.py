@@ -99,10 +99,11 @@ from wc_predictor.config import DevigConfig, MarketConsistentGroupWeights, Proje
 # reassigning it elsewhere in this file.
 TOURNAMENT_FOLDER = Path("input/historical/wc2018")
 
-# The default smoke run is the reproducible combined 2018+2022 group-stage
+# The default smoke run is the reproducible combined 2014+2018+2022 group-stage
 # backtest. Outputs are tournament-labelled so M001 from different tournaments
 # cannot collide.
 TOURNAMENT_FOLDERS = (
+    Path("input/historical/wc2014"),
     Path("input/historical/wc2018"),
     Path("input/historical/wc2022"),
 )

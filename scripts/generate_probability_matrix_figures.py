@@ -193,46 +193,55 @@ def _annotated_cells(probabilities: np.ndarray, highlights: set[tuple[int, int]]
     return cells
 
 
-def plot_matrix(example: MatrixExample, out_path: Path) -> None:
-    """Plot one exact-score probability matrix heatmap."""
+def _draw_panel(
+    ax: plt.Axes,
+    example: MatrixExample,
+    norm: matplotlib.colors.Normalize,
+    panel_label: str,
+    display_max: int | None = None,
+) -> matplotlib.image.AxesImage:
+    """Draw one heatmap panel onto ax using a pre-built shared norm; return the image."""
 
     row = example.row
     probabilities = example.matrix.probabilities
     max_goals = probabilities.shape[0] - 1
+    # visual crop: clip to display_max without altering probabilities
+    show = min(display_max, max_goals) if display_max is not None else max_goals
     highlights = {example.modal_score, example.ev_score}
 
-    fig, ax = plt.subplots(figsize=(7.4, 6.4), dpi=220)
-    image = ax.imshow(probabilities, origin="lower", cmap="YlGnBu", vmin=0)
-    cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("Probability", fontsize=9)
-    cbar.ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+    image = ax.imshow(probabilities, origin="lower", cmap="YlGnBu", norm=norm)
+    ax.set_xlim(-0.5, show + 0.5)
+    ax.set_ylim(-0.5, show + 0.5)
 
-    ax.set_xticks(np.arange(max_goals + 1))
-    ax.set_yticks(np.arange(max_goals + 1))
-    ax.set_xlabel("Team B goals")
-    ax.set_ylabel("Team A goals")
+    ax.set_xticks(np.arange(show + 1))
+    ax.set_yticks(np.arange(show + 1))
+    ax.set_xlabel("Team B goals", fontsize=9)
+    ax.set_ylabel("Team A goals", fontsize=9)
     ax.set_title(
-        f"{row['team_a']} vs {row['team_b']} - {_tournament_label(str(row['tournament']))} "
-        f"({row['match_id']})",
-        fontsize=12,
-        pad=12,
+        f"({panel_label})  {row['team_a']} vs {row['team_b']}\n"
+        f"{_tournament_label(str(row['tournament']))} ({row['match_id']})",
+        fontsize=10,
+        pad=8,
     )
 
-    ax.set_xticks(np.arange(-0.5, max_goals + 1, 1), minor=True)
-    ax.set_yticks(np.arange(-0.5, max_goals + 1, 1), minor=True)
+    ax.set_xticks(np.arange(-0.5, show + 1, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, show + 1, 1), minor=True)
     ax.grid(which="minor", color="white", linewidth=0.75, alpha=0.75)
     ax.tick_params(which="minor", bottom=False, left=False)
 
+    threshold = norm.vmax * 0.50
     for team_a_goals, team_b_goals in sorted(_annotated_cells(probabilities, highlights)):
+        if team_a_goals > show or team_b_goals > show:
+            continue
         probability = probabilities[team_a_goals, team_b_goals]
-        text_color = "white" if probability > probabilities.max() * 0.50 else "0.15"
+        text_color = "white" if probability > threshold else "0.15"
         ax.text(
             team_b_goals,
             team_a_goals,
             f"{probability:.1%}",
             ha="center",
             va="center",
-            fontsize=6.7,
+            fontsize=6.5,
             color=text_color,
         )
 
@@ -241,11 +250,7 @@ def plot_matrix(example: MatrixExample, out_path: Path) -> None:
         ax.add_patch(
             Rectangle(
                 (team_b_goals - 0.5, team_a_goals - 0.5),
-                1,
-                1,
-                fill=False,
-                edgecolor="#d62728",
-                linewidth=2.5,
+                1, 1, fill=False, edgecolor="#d62728", linewidth=2.5,
             )
         )
         legend_handles = [Patch(facecolor="none", edgecolor="#d62728", label="Modal and EV-optimal")]
@@ -255,21 +260,13 @@ def plot_matrix(example: MatrixExample, out_path: Path) -> None:
         ax.add_patch(
             Rectangle(
                 (modal_team_b - 0.5, modal_team_a - 0.5),
-                1,
-                1,
-                fill=False,
-                edgecolor="#2ca02c",
-                linewidth=2.2,
+                1, 1, fill=False, edgecolor="#2ca02c", linewidth=2.2,
             )
         )
         ax.add_patch(
             Rectangle(
                 (ev_team_b - 0.5, ev_team_a - 0.5),
-                1,
-                1,
-                fill=False,
-                edgecolor="#d62728",
-                linewidth=2.5,
+                1, 1, fill=False, edgecolor="#d62728", linewidth=2.5,
             )
         )
         legend_handles = [
@@ -277,19 +274,64 @@ def plot_matrix(example: MatrixExample, out_path: Path) -> None:
             Patch(facecolor="none", edgecolor="#d62728", label="EV-optimal score"),
         ]
 
-    ax.legend(handles=legend_handles, loc="upper right", frameon=True, fontsize=8)
+    ax.legend(handles=legend_handles, loc="upper right", frameon=True, fontsize=7.5)
     ax.text(
-        0.02,
-        0.98,
+        0.02, 0.98,
         _summary_text(example),
         transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=8.2,
-        color="0.15",
+        ha="left", va="top",
+        fontsize=7.8, color="0.15",
         bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "edgecolor": "0.75", "alpha": 0.92},
     )
 
+    return image
+
+
+def plot_combined_matrices(
+    extreme: MatrixExample,
+    balanced: MatrixExample,
+    out_path: Path,
+) -> None:
+    """Plot both probability matrices side-by-side with a shared colorbar in the middle."""
+
+    global_vmax = max(
+        extreme.matrix.probabilities.max(),
+        balanced.matrix.probabilities.max(),
+    )
+    norm = matplotlib.colors.Normalize(vmin=0, vmax=global_vmax)
+
+    fig = plt.figure(figsize=(14.5, 6.0), dpi=220)
+    gs = fig.add_gridspec(1, 3, width_ratios=[10, 0.45, 10], wspace=0.14)
+    ax_left = fig.add_subplot(gs[0])
+    ax_cbar = fig.add_subplot(gs[1])
+    ax_right = fig.add_subplot(gs[2])
+
+    _draw_panel(ax_left, extreme, norm, "A", display_max=8)
+    image = _draw_panel(ax_right, balanced, norm, "B", display_max=5)
+
+    cbar = fig.colorbar(image, cax=ax_cbar)
+    # labels on the left so the right edge of the bar cleanly meets panel B
+    cbar.ax.yaxis.set_ticks_position("left")
+    cbar.ax.yaxis.set_label_position("left")
+    cbar.set_label("Probability", fontsize=9, labelpad=6)
+    cbar.ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_matrix(example: MatrixExample, out_path: Path) -> None:
+    """Plot one exact-score probability matrix heatmap."""
+
+    norm = matplotlib.colors.Normalize(vmin=0, vmax=example.matrix.probabilities.max())
+    fig, ax = plt.subplots(figsize=(7.4, 6.4), dpi=220)
+    image = _draw_panel(ax, example, norm, "")
+    cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Probability", fontsize=9)
+    cbar.ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+    # remove the panel-label prefix from the title for the standalone version
+    current_title = ax.get_title()
+    ax.set_title(current_title.split("  ", 1)[-1], fontsize=12, pad=12)
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
@@ -337,17 +379,21 @@ def generate(root: Path) -> list[Path]:
     predictions = pd.read_csv(src / "live_backtest_predictions.csv")
     examples = build_examples(predictions)
 
-    outputs = {
+    combined_path = figures / "probability_matrix_combined.png"
+    plot_combined_matrices(examples["extreme_favourite"], examples["balanced"], combined_path)
+
+    # also keep the individual files for reference
+    individual_outputs = {
         "extreme_favourite": figures / "probability_matrix_extreme_favourite.png",
         "balanced": figures / "probability_matrix_balanced.png",
     }
-    for label, out_path in outputs.items():
+    for label, out_path in individual_outputs.items():
         plot_matrix(examples[label], out_path)
 
     summary_path = figures / "probability_matrix_examples.csv"
     build_summary(examples).to_csv(summary_path, index=False)
 
-    return [outputs["extreme_favourite"], outputs["balanced"], summary_path]
+    return [combined_path, *individual_outputs.values(), summary_path]
 
 
 def main() -> None:
