@@ -58,7 +58,7 @@ The aim of this model is to build a disciplined prediction-pool decision model a
 expected-points formulation of exact-score prediction under a tiered scoring rule, and a
 closed-form decomposition that explains why the optimal prediction can depart from the modal
 scoreline. (ii) It describes a market-implied scoreline probability matrix calibrated to
-liquid bookmaker markets rather than to historical goal counts. (iii) It catalogues a set of
+bookmaker-implied market probabilities rather than to historical goal counts. (iii) It catalogues a set of
 challenger views (i.e. modal, market-consistent/entropy-projected, Asian-handicap, and
 correct-score) as explainable challengers rather than automatic overrides. (iv) It
 reports historical validation on the 2014, 2018, and 2022 World Cup group stages and
@@ -184,7 +184,7 @@ theme we return to in Section~\ref{sec:validation}.
 \section{Market-implied probabilities}
 
 Each quoted decimal odd $O_i$ on a mutually exclusive, exhaustive set of outcomes implies
-a raw inverse-odds probability
+a raw inverse-odds probability $q_i$, with
 \[
 q_i=\frac{1}{O_i}.
 \]
@@ -217,16 +217,7 @@ Beyond the explicit margin, quoted prices can embed a favourite--longshot bias, 
 sentiment-driven flow on popular nations, and possible risk premia, so the devigged distribution
 may differ systematically from the true outcome distribution. 
 
-This mirrors the distinction between
-the risk-neutral and physical (real-world) measures in derivatives pricing. Risk-neutral
-probabilities are implied by traded option prices and are internally consistent with them, yet they
-are not the real-world probabilities of the underlying's movements: they are tilted by risk premia
-and the cost of hedging. Devigged odds play the same role here. They are a consistent,
-information-rich summary of how the market prices each outcome --- and, like a closing price, are
-hard to out-forecast --- but they need not equal the frequencies with which those outcomes actually
-occur. A model calibrated to them inherits this gap, so the validation in
-Section~\ref{sec:validation} tests the calibrated distribution against realised outcomes rather than
-assuming the devigged probabilities are the true ones.
+This mirrors the distinction between the risk-neutral and physical (real-world) measures in derivatives pricing. Risk-neutral probabilities are implied by traded option prices and are internally consistent with them, yet they are not the real-world probabilities of the underlying's movements: they are tilted by risk premia and the cost of hedging. Devigged odds play the same role here. They are a consistent, information-rich summary of how the market prices each outcome, but they do not equal per se the frequencies with which those outcomes actually occur. A model calibrated to them inherits this gap, so the validation in Section~\ref{sec:validation} tests the calibrated distribution against realised outcomes rather than assuming the devigged probabilities are the true ones.
 
 %#############################################################################################
 \section{Baseline scoreline model}
@@ -295,8 +286,9 @@ weighted squared error between these model quantities and their market-implied c
 \label{eq:calibration}
 \end{equation}
 where $f_k$ is a model functional from~\eqref{eq:1x2}--\eqref{eq:bttsou}, $m_k$ is the
-market target, and $\omega_k$ is a reliability weight that prioritises the most liquid
-markets (result first, then totals and BTTS).
+market target, and $\omega_k$ is a pre-specified reliability weight reflecting an assumed
+market-quality hierarchy (result first, then totals and BTTS), not a directly estimated
+liquidity measure.
 
 \paragraph{Why 1X2 alone leaves total-goal intensity model-dependent.} The 1X2 market fixes only
 three aggregate result probabilities: team A win, draw, and team B win. Without a parametric
@@ -316,7 +308,15 @@ correct-score information). A two-parameter independent-Poisson model therefore
 objective in~\eqref{eq:calibration} returns the best compromise, with $\omega_k$ deciding
 which markets are matched most closely when they disagree. 
 
-Any residual discrepancy between a model functional and its market target is expected and is reported as a calibration diagnostic rather than forced to zero. This is the same logic by which a parsimonious financial model is calibrated to liquid instruments: the market is the data, and the low-parameter model is a smooth, internally consistent interpolation of it that need not, and generally will not, fit every quoted instrument perfectly. Closer agreement with several markets at once is one role of the market-consistent projection of
+The calibration weights are fixed reliability hyperparameters rather than estimated liquidity
+measures. To check whether the conclusions depend materially on this choice, a robustness sweep
+was run over six reasonable 1X2, totals, and BTTS weight profiles. Across these profiles,
+EV-default realised points range from \(574\) to \(576\), expected total goals range from
+\(2.610\) to \(2.622\) against \(2.625\) realised, and at most one EV scoreline changes relative
+to the current profile. The headline governance conclusions are therefore not materially driven
+by the precise calibration-weight choice.
+
+Any residual discrepancy between a model functional and its market target is expected and is reported as a calibration diagnostic rather than forced to zero. This is the same logic by which a parsimonious financial model is calibrated to quoted instruments: the market is the data, and the low-parameter model is a smooth, internally consistent interpolation of it that need not, and generally will not, fit every quoted instrument perfectly. Closer agreement with several markets at once is one role of the market-consistent projection of
 Section~\ref{sec:entropy}, which relaxes the strict two-parameter form.
 
 A useful way to see this is by counting degrees of freedom. The 1X2 market supplies only three
@@ -423,9 +423,9 @@ so the magnitude of $\omega_k$ governs how much each market is permitted to move
 For instance, if the prior implies a $50\%$ home win while the devigged 1X2 market implies $55\%$,
 the projection raises the home-win mass toward $55\%$ by re-weighting individual scoreline cells,
 while keeping the overall shape of the distribution as close to the Poisson prior as the remaining
-constraints allow. Liquid markets such as the result line are therefore assigned large weights and
-matched closely, whereas sparse or noisy markets are assigned small weights and act only as gentle
-corrections.
+constraints allow. Market groups treated as more reliable, such as the result line, are therefore
+assigned larger weights and matched more closely, whereas sparse or noisy markets are assigned
+smaller weights and act only as gentle corrections.
 
 The soft objective in~\eqref{eq:entropy} is best understood as a relaxation of a classical
 limit, which also explains why it is the natural quantity to minimise. Consider replacing the penalties by \textit{hard} linear moment constraints $\sum_{x,y}P_{xy}f_k(x,y)=m_k$; the

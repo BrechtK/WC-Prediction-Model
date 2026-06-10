@@ -349,6 +349,19 @@ It also exports probability-quality validation alongside realised pool points:
 `scoreline_probability_diagnostics.csv`. These use Brier score, clipped log
 loss, RPS, calibration buckets, expected-total-goals errors, and actual
 score/result/margin probability diagnostics.
+
+Calibration weights are fixed modelling hyperparameters, not measured liquidity
+estimates. Use `scripts/run_calibration_weight_sensitivity.py` for the
+pre-specified robustness sweep over plausible 1X2/totals/BTTS weights. Use
+`scripts/search_calibration_weights.py` only as an in-sample exploratory search;
+its output is likely overfit and must not change live defaults without separate
+out-of-sample validation. In the six-profile robustness sweep, richer-layer EV
+stays between 574 and 576 points, gated MC+AH stays between 585 and 587, raw
+MC+AH remains 596, expected total goals stay in the 2.610-2.622 range against
+2.625 realised, and at most one EV scoreline changes relative to the current
+profile. A bounded in-sample grid search did not improve on the current EV
+realised-points total; it is retained as a research diagnostic only.
+
 Local live-paste historical folders follow `input/historical/wc2014/`,
 `input/historical/wc2018/`, and `input/historical/wc2022/`, each with manually
 collected OddsPortal pastes for all 48 group-stage matches.
