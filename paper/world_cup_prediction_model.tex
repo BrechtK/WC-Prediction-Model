@@ -46,7 +46,7 @@ The reason is that an exact-score pool is governed by a payoff table. A score su
 
 This turns exact-score prediction into a \emph{decision problem}. The model still needs a probability distribution over scorelines, but the final prediction is chosen by passing that distribution through the pool's payoff function. Therefore, the problem is closer to pricing a payoff than to producing a simple point forecast: the same probability model can lead to different optimal predictions under different scoring rules. The next question is then how to determine these scoreline probabilities.
 
-In this project, the information backbone is the betting market. Given the quantitative evolution in sports in recent years, sports analytics has become increasingly embedded in both professional sport and academia, and sports-betting market data is one of the recurring information sources studied \cite{baumer2023}. In football specifically, bookmaker odds provide a natural market-implied benchmark and have been studied as forecasts in their own right \cite{forrest2005}. Bookmaker odds are useful because they compress a large amount of information into one price: historical team strength, current form, injuries, team news, trader judgement, market competition, risk management and betting flow.
+In this project, the information backbone is the betting market. As sports analytics has become increasingly embedded in professional sport and academia, sports-betting market data has become a recurring information source in the field \cite{baumer2023}. In football specifically, bookmaker odds provide a natural market-implied benchmark and have been studied as forecasts in their own right \cite{forrest2005}. Bookmaker odds are useful because they compress a large amount of information into one price: historical team strength, current form, injuries, team news, trader judgement, market competition, risk management and betting flow.
 
 Then, after \emph{devigging}, meaning the removal of the bookmaker margin, bookmaker odds can be interpreted as market-implied probabilities. This does not mean that these probabilities are identical to the true physical probabilities of the match. Like prices in financial markets, they aggregate information but may also contain risk premia, liquidity effects, customer-demand effects and behavioural biases.
 
@@ -54,7 +54,7 @@ This finance analogy also guides the modelling pipeline: infer probabilities fro
 
 The aim of this model is to build a disciplined prediction-pool decision model and does not claim a betting edge. In a market where odds are already highly informative, the realistic source of improvement is not necessarily superior probability estimation, but the consistent translation of market-implied probabilities into decisions under the scoring rule.
 
-\paragraph{Contributions.} This note makes four contributions. (i) It gives a formal
+\paragraph{Contributions.} This paper makes four contributions. (i) It gives a formal
 expected-points formulation of exact-score prediction under a tiered scoring rule, and a
 closed-form decomposition that explains why the optimal prediction can depart from the modal
 scoreline. (ii) It describes a market-implied scoreline probability matrix calibrated to

@@ -16,6 +16,7 @@ contrast layer.
 
 This is a scoring-rule decision model and validation project, not a betting
 strategy. It makes no market-beating or betting-alpha claim.
+Validation results are summarised in Validation Highlights.
 
 For matchday use, the live workflow turns pasted OddsPortal football markets
 into World Cup prediction-pool score recommendations. It parses a schedule,
@@ -180,14 +181,13 @@ each) through two layers that differ only in their market inputs:
 
 - The **richer layer** (headline) uses the full set of manually collected
   OddsPortal markets (1X2, totals, BTTS, correct score, Asian handicap) through
-  the complete live pipeline and all challengers. With 2014 OddsPortal odds now
-  collected, it covers all three tournaments (previously 2018/2022 only).
+  the complete live pipeline and all challengers across all three tournaments.
 - The **1X2-only contrast layer** restricts inputs to Football-Data average 1X2
   odds (`H-Avg`, `D-Avg`, `A-Avg`) over the same 144 matches, with realised
   scores from `HGFT`/`AGFT`. It is a deliberately degraded control: it isolates
   the decision-rule effect (modal and EV act on identical probabilities) and
   quantifies what the extra markets add. The Football-Data workbook has no 2010
-  sheet, so the control covers 144 matches, not 192. Asian-handicap,
+  sheet, so the control covers the same 144 matches as the richer layer. Asian-handicap,
   correct-score, and MC+AH logic is not applied in this layer.
 
 Two metric families are reported:
@@ -411,7 +411,8 @@ off by default (see [docs/mathematical_basis.md](docs/mathematical_basis.md)):
 
 None of these change the default live recommendation unless explicitly enabled.
 
-To run the historical harness, create a legally safe local CSV from:
+To run the historical harness, create a local CSV (no real odds data is tracked
+in the repository) from:
 
 ```text
 templates/historical_world_cup_matches_template.csv
@@ -446,7 +447,7 @@ for a row, Bet365 1X2 odds are used as an explicit fallback and reported. In
 the available workbook, the 2014/2018/2022 sheets each load 48 group-stage
 matches, all loaded rows have valid `H-Avg`/`D-Avg`/`A-Avg`, and no Bet365
 fallback rows are used. There is no 2010 sheet in that workbook, so the
-extended validation covers 144 matches, not 192.
+control covers the same 144 matches as the richer layer.
 
 This extension is intentionally limited to the common 1X2 input: it reconstructs
 an independent-Poisson score matrix, compares modal versus EV-optimal
