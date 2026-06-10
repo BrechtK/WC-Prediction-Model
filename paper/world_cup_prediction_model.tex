@@ -836,6 +836,15 @@ future validation a market-facing version could add. Finally, an exact-score poo
 betting market --- the model optimises pool points under a fixed rule --- so none of the above
 should be read as a wagering strategy.
 
+The optimisation objective in this paper is per-match expected pool points. This is not the same 
+as maximising the probability of winning a large prediction pool. In a contest with many participants, 
+the winner is often determined by a small number of high-leverage outcomes, and an entrant may rationally 
+choose more contrarian or higher-variance scorelines to differentiate from the field. Modelling that problem 
+would require assumptions about the distribution of other participants' predictions and a tournament-level 
+rank objective. The present model should therefore be interpreted as a disciplined expected-points benchmark, 
+not as a complete strategy for maximising the probability of finishing first.
+
+
 \section{Conclusion}
 
 Exact-score prediction can be posed rigorously as expected-points optimisation under a known
