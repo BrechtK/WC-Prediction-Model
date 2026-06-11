@@ -270,15 +270,15 @@ which pairs per-match realised points from
 
 Headline richer challenger layer over the full 2014/2018/2022 group stage (n=144):
 
-| Strategy / diagnostic | Points | Governance interpretation |
+| Strategy / diagnostic | Points | Policy role |
 |---|---:|---|
-| EV-optimal default | 576 | Live default benchmark |
-| Modal / most-likely | 589 | Manual-review challenger; gain is 2022-only and high variance |
-| Market-consistent + AH (raw) | 596 | Raw diagnostic, MC+AH on every match; highest total and positive in all three tournaments, but optimiser never fully converges |
-| Gated MC+AH policy | 587 | Implemented rule: MC+AH only when fit acceptable, else EV default |
-| Correct-score blend sweep | 589 | Best tested blend-weight diagnostic; mildly positive, research-only |
-| Power devig | 571 | Underperforms in every tournament; not for serious live use |
-| Dixon-Coles / larger grid | 576 | Inert relative to default on this combined layer |
+| EV-optimal default | 576 | Live default recommendation rule |
+| Modal / most-likely | 589 | Manual-review challenger only; not a default rule |
+| Market-consistent + AH (raw) | 596 | Diagnostic only; not eligible for automatic use because optimiser fit is unreliable |
+| Gated MC+AH policy | 587 | Implemented gated challenger; used only when fit acceptable, else EV default |
+| Correct-score blend sweep | 589 | Research-only sensitivity diagnostic; live blend weight unchanged |
+| Power devig | 571 | Rejected diagnostic; not used for live policy |
+| Dixon-Coles / larger grid | 576 | Diagnostic check; no change from the default recommendation |
 
 These rows use the full live pipeline with all additional betting markets across
 2014/2018/2022. Per-tournament totals (2014/2018/2022): EV `185/211/180`, raw
