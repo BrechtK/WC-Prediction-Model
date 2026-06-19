@@ -168,4 +168,17 @@ RUN_MODE = "date"
 DATE = "14-6"
 ```
 
+To run specific known match IDs:
+
+```python
+RUN_MODE = "matches"
+MATCH_SELECTION = "M005-M008"
+```
+
+You can also combine separate picks and ranges:
+
+```python
+MATCH_SELECTION = "M005, M008-M010"
+```
+
 Every selected match needs a matching file such as `input/odds/M008.txt`.

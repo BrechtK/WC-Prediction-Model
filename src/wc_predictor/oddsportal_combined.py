@@ -23,6 +23,7 @@ SECTION_FILENAMES = {
 OPTIONAL_SECTIONS = ("over_under", "btts", "correct_score")
 _FILENAME_PATTERN = re.compile(r"^(?P<match_id>.+?)(?:_all_odds)?\.txt$", re.IGNORECASE)
 _SECTION_PATTERN = re.compile(r"^\s*###\s*(?P<header>.*?)\s*$")
+_VALIDATION_SECTION_LINE_LIMIT = 500
 _SECTION_ALIASES = {
     "MATCH": "match",
     "1X2": "1x2",
@@ -133,6 +134,32 @@ def _extract_match_section(text: str) -> str:
     return " ".join(line.strip() for line in lines if line.strip())
 
 
+def _extract_schedule_validation_text(text: str) -> str:
+    """Return the early section text that can identify the pasted fixture.
+
+    OddsPortal Ctrl+A pastes can include sidebars, previous-match blocks, and
+    upcoming-fixture lists. Those often mention other scheduled teams and are
+    useful to the odds parsers, but they are too noisy for whole-file team-name
+    validation. The fixture title appears near the start of each market section,
+    so validation scans only that bounded header area.
+    """
+
+    lines: list[str] = []
+    section_line_count: int | None = None
+    for raw_line in text.splitlines():
+        marker = _SECTION_PATTERN.fullmatch(raw_line)
+        if marker:
+            canonical = _canonical_section(marker.group("header"))
+            section_line_count = 0 if canonical is not None else None
+            continue
+        if section_line_count is None:
+            continue
+        if section_line_count < _VALIDATION_SECTION_LINE_LIMIT:
+            lines.append(raw_line)
+        section_line_count += 1
+    return " ".join(line.strip() for line in lines if line.strip())
+
+
 def validate_combined_pastes_against_schedule(
     input_folder: str | Path,
     schedule: pd.DataFrame,
@@ -175,7 +202,7 @@ def validate_combined_pastes_against_schedule(
                     f"{path.name} ### MATCH says {match_section!r}, but the parsed schedule expects "
                     f"{match_id} | {expected_label}."
                 )
-        text = _normalise_team_name(raw_text)
+        text = _normalise_team_name(_extract_schedule_validation_text(raw_text))
         detected = sorted(team for team, normalised in known_teams.items() if normalised and normalised in text)
         unexpected = sorted(set(detected) - expected)
         if unexpected:

@@ -64,6 +64,12 @@ _NOISE_FRAGMENTS = (
     "you must be logged in",
     "betting exchange",
 )
+_TERMINAL_SECTION_FRAGMENTS = (
+    "ai match predictions",
+    "previous matches:",
+    "h2h results",
+    "odds, predictions and h2h results",
+)
 _HEADER_LINES = {"handicap", "asian handicap", "home", "away", "1", "2", "odds", "payout", "back", "lay"}
 
 
@@ -83,6 +89,11 @@ def _parse_number(value: str) -> float:
 def _is_noise(line: str) -> bool:
     normalised = _normalise(line).lower()
     return normalised in _HEADER_LINES or any(fragment in normalised for fragment in _NOISE_FRAGMENTS)
+
+
+def _is_terminal_non_market_section(line: str) -> bool:
+    normalised = _normalise(line).lower()
+    return any(fragment in normalised for fragment in _TERMINAL_SECTION_FRAGMENTS)
 
 
 def _looks_like_bookmaker(line: str) -> bool:
@@ -203,6 +214,10 @@ def parse_oddsportal_asian_handicap_text(
         line = _normalise(raw_line)
         if not line:
             continue
+        if _is_terminal_non_market_section(line):
+            parsed.finish_row()
+            _append_warning(parsed.warnings, f"stopped_at_non_market_section:{line}")
+            break
         header = _HANDICAP_HEADER_PATTERN.search(line)
         if header:
             parsed.finish_row()

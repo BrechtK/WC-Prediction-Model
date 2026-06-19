@@ -892,6 +892,95 @@ def test_live_runner_script_date_mode_reports_missing_odds_files(
         runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
 
 
+def test_live_runner_script_runs_selected_match_range(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+            ("15 Jun 2026", "06:00", "Australia", "Turkey"),
+        ],
+    )
+    _write_combined_paste(tmp_path / "input/odds", "M001", clean_filename=True)
+    _write_combined_paste(tmp_path / "input/odds", "M002", clean_filename=True)
+    _write_combined_paste(tmp_path / "input/odds", "M003", clean_filename=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_live_prediction.py", "--match-ids", "M001-M002", "--skip-weight-sensitivity"],
+    )
+
+    runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    output = capsys.readouterr().out
+    parsed_odds = pd.read_csv(tmp_path / "cache/parsed/core_odds.csv")
+    assert parsed_odds["match_id"].astype(str).unique().tolist() == ["M001", "M002"]
+    assert "M001 Brazil vs Morocco:" in output
+    assert "M002 Haiti vs Scotland:" in output
+    assert "M003 Australia vs Turkey:" not in output
+
+
+def test_live_runner_script_runs_selected_match_range_from_settings_block(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+            ("15 Jun 2026", "06:00", "Australia", "Turkey"),
+        ],
+    )
+    _write_combined_paste(tmp_path / "input/odds", "M001", clean_filename=True)
+    _write_combined_paste(tmp_path / "input/odds", "M002", clean_filename=True)
+    _write_combined_paste(tmp_path / "input/odds", "M003", clean_filename=True)
+    module = _load_run_live_module()
+    monkeypatch.setattr(module, "RUN_MODE", "matches")
+    monkeypatch.setattr(module, "MATCH_SELECTION", "M001-M002")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--skip-weight-sensitivity"])
+
+    module.main()
+
+    output = capsys.readouterr().out
+    parsed_odds = pd.read_csv(tmp_path / "cache/parsed/core_odds.csv")
+    assert parsed_odds["match_id"].astype(str).unique().tolist() == ["M001", "M002"]
+    assert "M001 Brazil vs Morocco:" in output
+    assert "M002 Haiti vs Scotland:" in output
+    assert "M003 Australia vs Turkey:" not in output
+
+
+def test_live_runner_script_match_range_reports_missing_odds_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_timed_schedule(
+        tmp_path / "input/schedule.txt",
+        [
+            ("14 Jun 2026", "00:00", "Brazil", "Morocco"),
+            ("14 Jun 2026", "03:00", "Haiti", "Scotland"),
+        ],
+    )
+    _write_combined_paste(tmp_path / "input/odds", "M001", clean_filename=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["run_live_prediction.py", "--match-ids", "M001-M002"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_path(str(RUN_SCRIPT), run_name="__main__")
+
+    message = str(exc_info.value)
+    assert "Selected match fixtures with missing odds:" in message
+    assert "M002 | 2026-06-14 03:00 | Haiti vs Scotland" in message
+    assert "input\\odds\\M002.txt" in message or "input/odds/M002.txt" in message
+
+
 def test_live_runner_script_match_id_overrides_date_and_game_number(
     tmp_path: Path,
     monkeypatch,

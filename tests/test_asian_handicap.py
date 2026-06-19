@@ -96,6 +96,68 @@ def test_handicap_processing_and_aggregation() -> None:
     assert aggregated.iloc[0]["fair_team_a"] + aggregated.iloc[0]["fair_team_b"] == pytest.approx(1.0)
 
 
+def test_parser_stops_before_page_history_after_last_handicap_line() -> None:
+    text = """
+Asian Handicap +5
+Book A
++5
+2.10
+1.80
+
+AI Match Predictions
+Germany
+5.20
+4.38
+1.72
+Previous Matches: USA
+Paraguay
+2.00
+3.35
+4.00
+"""
+
+    result = parse_oddsportal_asian_handicap_text(text, "M004", source_file="M004_asian_handicap.txt")
+    processed = process_asian_handicap_odds(result.odds)
+    aggregated = aggregate_asian_handicap_probabilities(processed)
+
+    assert len(result.odds) == 1
+    assert result.odds.iloc[0]["bookmaker"] == "Book A"
+    assert aggregated.iloc[0]["handicap"] == pytest.approx(5.0)
+    assert aggregated.iloc[0]["bookmakers_count"] == 1
+    assert "Germany" not in set(result.odds["bookmaker"])
+    assert "stopped_at_non_market_section:AI Match Predictions" in result.report.iloc[0]["warnings"]
+
+
+def test_underround_asian_handicap_line_is_not_selected_for_market_consistent() -> None:
+    handicap = pd.DataFrame(
+        [
+            {
+                "match_id": "M004",
+                "handicap": 5.0,
+                "fair_team_a": 0.578,
+                "fair_team_b": 0.422,
+                "fair_odds_team_a": 1 / 0.578,
+                "fair_odds_team_b": 1 / 0.422,
+                "bookmakers_count": 7,
+                "average_asian_handicap_overround": 0.673146705,
+                "line_kind": "integer_asian",
+                "warnings": "Overround 0.6731 is below 1.0000",
+            }
+        ]
+    )
+
+    selected = select_asian_handicap_constraints(
+        handicap,
+        (9, 9),
+        {"a_win": 0.60, "draw": 0.25, "b_win": 0.15},
+    )
+
+    row = selected.iloc[0]
+    assert row["selected_for_market_consistent"] == "no"
+    assert row["selection_weight"] == pytest.approx(0.0)
+    assert "asian_handicap_overround_below_1" in row["skipped_reason"]
+
+
 def test_market_consistent_handicap_constraints_reduce_fit_error_and_shift_margin_distribution() -> None:
     prior = poisson_score_matrix(1.0, 1.0, max_goals=6)
     handicap = pd.DataFrame(

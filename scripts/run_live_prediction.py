@@ -6,6 +6,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 import time
 
 import pandas as pd
@@ -26,20 +27,25 @@ from wc_predictor.paths import ( CACHE_SPLIT_PASTES_DIR, INPUT_ODDS_DIR, INPUT_S
 # 3. Use RUN_MODE = "single_match", keep the same DATE, and set GAME_NUMBER.
 # 4. Press "Run Python File" in VS Code.
 
-RUN_MODE = "all_available"
+RUN_PROFILE = "live" #live or research. Live mode is faster and skips some diagnostics by default; research mode enables more detailed analysis and comparisons.
+RUN_MODE = "matches" #list_date, single_match, matches, date, or all_available. See below for details.
 # RUN_MODE options:
 # "list_date"      -> list the games on DATE and exit; use this first.
 # "single_match"   -> run one game from DATE, selected by GAME_NUMBER.
+# "matches"        -> run selected match IDs from MATCH_SELECTION.
 # "date"           -> run every game on DATE; each game needs input/odds/Mxxx.txt.
 # "all_available"  -> run every odds file currently in input/odds/.
 
 # DATE accepts 14-6, 14/6, 14-06, or 2026-06-14.
-DATE = "14/6"
+DATE = "12/6"
 # GAME_NUMBER comes from RUN_MODE = "list_date". It is 1 for the first listed game.
-GAME_NUMBER = 4
+GAME_NUMBER = 1
 # MATCH_ID is optional. Set it only if you already know the ID, for example "M008".
 # When MATCH_ID is set, it overrides DATE and GAME_NUMBER in single-match mode.
 MATCH_ID = None
+# MATCH_SELECTION is optional for RUN_MODE = "matches".
+# Examples: "M005-M008", "M005, M008", or "M005-M008, M012".
+MATCH_SELECTION = "M025-M028"
 
 STRATEGY_MODE = "ev"
 # Options:
@@ -74,7 +80,7 @@ DEVIG_ASIAN_HANDICAP_METHOD = "power"
 DEVIG_CORRECT_SCORE_METHOD = "normalised_inverse_odds"
 
 # Fast matchday defaults.
-RUN_PROFILE = "live"
+
 TERMINAL_VERBOSITY = "compact"
 ENABLE_MARKET_CONSISTENT_CHALLENGER = "only_if_close"
 ENABLE_MARGIN_METHOD_COMPARISON = False
@@ -122,7 +128,7 @@ NO_ODDS_INPUT_MESSAGE = (
     "Optional diagnostic section:\n"
     "### ASIAN_HANDICAP"
 )
-VALID_RUN_MODES = {"all_available", "date", "single_match", "list_date"}
+VALID_RUN_MODES = {"all_available", "date", "single_match", "matches", "list_date"}
 VALID_STRATEGY_MODES = ("ev", "balanced", "public-ranking", "aggressive-public-ranking")
 VALID_PUBLIC_STRATEGY_TARGETS = ("friends", "balanced", "national")
 VALID_MARGIN_REMOVAL_METHODS = ("normalised_inverse_odds", "power", "additive", "shin")
@@ -148,6 +154,55 @@ def _normalise_optional_text(value: str | None) -> str | None:
         return None
     stripped = str(value).strip()
     return stripped if stripped else None
+
+
+def _format_match_id(number: int) -> str:
+    return f"M{number:03d}"
+
+
+def _parse_match_id_number(value: str) -> int:
+    match = re.fullmatch(r"[Mm]?(\d+)", value.strip())
+    if match is None:
+        raise ValueError(
+            f"Invalid match selection part {value!r}. Use match IDs like M005 or ranges like M005-M008."
+        )
+    number = int(match.group(1))
+    if number < 1:
+        raise ValueError(f"Invalid match selection part {value!r}. Match numbers must be positive.")
+    return number
+
+
+def _parse_match_selection(match_selection: str | None) -> tuple[str, ...]:
+    selection = _normalise_optional_text(match_selection)
+    if selection is None:
+        raise ValueError(
+            "MATCH_SELECTION is required when RUN_MODE is 'matches'. "
+            "Use a value like 'M005-M008' or 'M005, M008'."
+        )
+    match_ids: list[str] = []
+    seen: set[str] = set()
+    parts = [part.strip() for part in re.split(r"[,;\n]+", selection) if part.strip()]
+    for part in parts:
+        range_match = re.fullmatch(r"([Mm]?\d+)\s*-\s*([Mm]?\d+)", part)
+        if range_match is not None:
+            start = _parse_match_id_number(range_match.group(1))
+            end = _parse_match_id_number(range_match.group(2))
+            if end < start:
+                raise ValueError(
+                    f"Invalid match range {part!r}. The end of the range must be greater than or equal to the start."
+                )
+            expanded = (_format_match_id(number) for number in range(start, end + 1))
+        else:
+            expanded = (_format_match_id(_parse_match_id_number(part)),)
+        for match_id in expanded:
+            if match_id not in seen:
+                seen.add(match_id)
+                match_ids.append(match_id)
+    if not match_ids:
+        raise ValueError(
+            "MATCH_SELECTION did not contain any match IDs. Use a value like 'M005-M008' or 'M005, M008'."
+        )
+    return tuple(match_ids)
 
 
 def _parse_schedule_date(date_text: str | None, schedule: pd.DataFrame) -> str:
@@ -209,6 +264,7 @@ def _resolve_run_selection(
     date: str | None,
     game_number: int | None,
     match_id: str | None,
+    match_selection: str | None,
     schedule: pd.DataFrame,
 ) -> ResolvedRunSelection:
     if run_mode not in VALID_RUN_MODES:
@@ -224,6 +280,32 @@ def _resolve_run_selection(
         parsed_date, rows = _fixtures_on_date(schedule, date)
         match_ids = tuple(rows["match_id"].astype(str))
         return ResolvedRunSelection(run_mode, parsed_date, game_number, None, match_ids, None, rows, pd.DataFrame())
+
+    if run_mode == "matches":
+        match_ids = _parse_match_selection(match_selection)
+        rows_by_match_id = {str(row["match_id"]): row for _, row in schedule.iterrows()}
+        missing_match_ids = [selected_match_id for selected_match_id in match_ids if selected_match_id not in rows_by_match_id]
+        if missing_match_ids:
+            raise ValueError(
+                "Selected match IDs were not found in the parsed schedule: "
+                f"{', '.join(missing_match_ids)}.\n\n"
+                "Set RUN_MODE = \"list_date\" and run again to see the correct match IDs."
+            )
+        rows = pd.DataFrame([rows_by_match_id[selected_match_id] for selected_match_id in match_ids]).reset_index(
+            drop=True
+        )
+        selected_dates = tuple(dict.fromkeys(rows["date"].astype(str)))
+        selected_date = selected_dates[0] if len(selected_dates) == 1 else None
+        return ResolvedRunSelection(
+            run_mode,
+            selected_date,
+            None,
+            None,
+            match_ids,
+            None,
+            rows,
+            pd.DataFrame(),
+        )
 
     selected_match_id = _normalise_optional_text(match_id)
     if selected_match_id:
@@ -268,7 +350,7 @@ def _resolve_run_selection(
 
 
 def _validate_selected_odds_file(selection: ResolvedRunSelection, combined_input_folder: Path) -> None:
-    if selection.run_mode not in {"single_match", "date"}:
+    if selection.run_mode not in {"single_match", "date", "matches"}:
         return
     missing_paths = [
         combined_input_folder / f"{match_id}.txt"
@@ -277,16 +359,21 @@ def _validate_selected_odds_file(selection: ResolvedRunSelection, combined_input
     ]
     if not missing_paths:
         return
-    if selection.run_mode == "date":
+    if selection.run_mode in {"date", "matches"}:
         fixtures = [
             _format_fixture(row, include_datetime=True)
             for _, row in selection.date_rows.iterrows()
             if combined_input_folder / f"{row['match_id']}.txt" in missing_paths
         ]
+        heading = (
+            "Selected date fixtures with missing odds:"
+            if selection.run_mode == "date"
+            else "Selected match fixtures with missing odds:"
+        )
         raise ValueError(
             "\n".join(
                 [
-                    "Selected date fixtures with missing odds:",
+                    heading,
                     *fixtures,
                     "",
                     "Missing odds files:",
@@ -340,7 +427,7 @@ def _selected_odds_file_stale_warnings(
 
     if threshold_hours <= 0:
         return {}, ()
-    if selection.run_mode in {"single_match", "date"}:
+    if selection.run_mode in {"single_match", "date", "matches"}:
         paths = tuple(combined_input_folder / f"{match_id}.txt" for match_id in selection.match_ids)
     else:
         paths = tuple(sorted(combined_input_folder.glob("*.txt")))
@@ -384,7 +471,7 @@ def _format_run_configuration(
         lines.append(f"- game number: {selection.game_number}")
     if selection.fixture is not None:
         lines.append(f"- resolved match: {_format_fixture(selection.fixture)}")
-    elif selection.run_mode == "date":
+    elif selection.run_mode in {"date", "matches"}:
         lines.append(f"- resolved matches: {', '.join(selection.match_ids)}")
     elif selection.run_mode == "all_available":
         lines.append("- resolved match: all available odds files")
@@ -419,6 +506,7 @@ def main() -> None:
     parser.add_argument("--date")
     parser.add_argument("--game-number", type=int)
     parser.add_argument("--match-id")
+    parser.add_argument("--match-ids")
     parser.add_argument("--correct-score-poisson-weight", type=float)
     parser.add_argument("--correct-score-aggregation-method")
     parser.add_argument("--margin-removal-method", choices=VALID_MARGIN_REMOVAL_METHODS)
@@ -453,8 +541,15 @@ def main() -> None:
 
     try:
         run_mode = args.run_mode if args.run_mode is not None else RUN_MODE
-        if args.run_mode is None and (args.match_id is not None or args.date is not None or args.game_number is not None):
+        match_selection = args.match_ids if args.match_ids is not None else MATCH_SELECTION
+        if args.match_ids is not None:
+            run_mode = "matches"
+        elif args.run_mode is None and (
+            args.match_id is not None or args.date is not None or args.game_number is not None
+        ):
             run_mode = "single_match"
+        elif args.run_mode is None and _normalise_optional_text(match_selection) is not None and RUN_MODE != "list_date":
+            run_mode = "matches"
         date = args.date if args.date is not None else DATE
         game_number = args.game_number if args.game_number is not None else GAME_NUMBER
         match_id = args.match_id if args.match_id is not None else MATCH_ID
@@ -592,6 +687,7 @@ def main() -> None:
             date=date,
             game_number=game_number,
             match_id=match_id,
+            match_selection=match_selection,
             schedule=prepared_schedule.schedule,
         )
         if selection.run_mode == "list_date":

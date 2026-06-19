@@ -269,3 +269,31 @@ def test_schedule_validation_warns_on_detectable_team_mismatch(tmp_path: Path) -
     result = split_combined_oddsportal_pastes(input_folder, tmp_path / "pastes", schedule=schedule)
 
     assert any("combined_paste_team_mismatch:M001_all_odds.txt" in warning for warning in result.warnings)
+
+
+def test_schedule_validation_ignores_late_oddsportal_sidebar_fixture_list(tmp_path: Path) -> None:
+    input_folder = tmp_path / "combined"
+    output_folder = tmp_path / "pastes"
+    late_sidebar = "\n".join(["Bookmaker"] * 520 + ["South Korea - Czech Republic"])
+    _write_combined(
+        input_folder / "M001.txt",
+        [
+            ("1X2", "Bookmakers\n1\nX\n2\n1.46\n4.55\n8.70"),
+            (
+                "OVER_UNDER",
+                "Home\n>\nFootball\n>\nWorld Championship 2026\n>\nMexico - South Africa\n"
+                "Mexico\nSouth Africa\n"
+                f"{late_sidebar}",
+            )
+        ],
+    )
+    schedule = pd.DataFrame(
+        [
+            {"match_id": "M001", "team_a": "Mexico", "team_b": "South Africa"},
+            {"match_id": "M002", "team_a": "South Korea", "team_b": "Czech Republic"},
+        ]
+    )
+
+    result = split_combined_oddsportal_pastes(input_folder, output_folder, schedule=schedule)
+
+    assert not any("combined_paste_team_mismatch" in warning for warning in result.warnings)

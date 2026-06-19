@@ -43,6 +43,13 @@ The accompanying paper source is
 7. Press **Run Python File** again.
 8. Read the `Final recommendations` block.
 
+To run a block of known match IDs, set:
+
+```python
+RUN_MODE = "matches"
+MATCH_SELECTION = "M005-M008"
+```
+
 For the full step-by-step version, see
 [docs/matchday_workflow.md](docs/matchday_workflow.md).
 
@@ -120,6 +127,7 @@ Use these modes:
 ```python
 RUN_MODE = "list_date"      # list games on DATE and exit
 RUN_MODE = "single_match"   # run DATE + GAME_NUMBER
+RUN_MODE = "matches"        # run MATCH_SELECTION, e.g. M005-M008
 RUN_MODE = "date"           # run every game on DATE
 RUN_MODE = "all_available"  # run every odds file in input/odds/
 ```
@@ -128,6 +136,7 @@ Command-line overrides still work for advanced use:
 
 ```powershell
 python scripts/run_live_prediction.py --date 14-6 --game-number 3
+python scripts/run_live_prediction.py --match-ids M005-M008
 python scripts/run_live_prediction.py --run-profile research --terminal-verbosity debug
 ```
 

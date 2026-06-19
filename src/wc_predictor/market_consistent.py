@@ -17,6 +17,8 @@ ACCEPTABLE_MAX_CONSTRAINT_ERROR = 0.20
 ACCEPTABLE_GROUP_FIT_ERROR = 0.05
 POOR_MAX_CONSTRAINT_ERROR = 0.20
 DEFAULT_MAX_ASIAN_HANDICAP_CONSTRAINTS = 7
+ASIAN_HANDICAP_MIN_SELECTION_OVERROUND = 1.0
+ASIAN_HANDICAP_MAX_SELECTION_OVERROUND = 1.20
 ASIAN_HANDICAP_HARD_MIN_PROBABILITY = 0.10
 ASIAN_HANDICAP_HARD_MAX_PROBABILITY = 0.90
 ASIAN_HANDICAP_DEFAULT_MIN_PROBABILITY = 0.25
@@ -134,7 +136,23 @@ def _total_goals_weight(row: pd.Series, base_weight: float) -> float:
     return base_weight * near_money_factor * kind_factor * overround_factor
 
 
+def _asian_handicap_overround_skip_reason(row: pd.Series) -> str:
+    overround = row.get("average_asian_handicap_overround", np.nan)
+    if pd.notna(overround) and np.isfinite(float(overround)):
+        value = float(overround)
+        if value < ASIAN_HANDICAP_MIN_SELECTION_OVERROUND:
+            return f"asian_handicap_overround_below_1:{value:.3f}"
+        if value > ASIAN_HANDICAP_MAX_SELECTION_OVERROUND:
+            return f"asian_handicap_overround_above_{ASIAN_HANDICAP_MAX_SELECTION_OVERROUND:.2f}:{value:.3f}"
+    warnings = str(row.get("warnings", "")).lower()
+    if "overround" in warnings and ("below" in warnings or "exceeds" in warnings):
+        return "asian_handicap_severe_overround_warning"
+    return ""
+
+
 def _asian_handicap_weight(row: pd.Series, base_weight: float) -> float:
+    if _asian_handicap_overround_skip_reason(row):
+        return 0.0
     fair_team_a = float(row["fair_team_a"])
     near_money_probability = min(fair_team_a, 1.0 - fair_team_a)
     near_money_factor = 1.0 if 0.40 <= fair_team_a <= 0.60 else max(0.35, near_money_probability / 0.40)
@@ -224,6 +242,9 @@ def select_asian_handicap_constraints(
             skipped.append(f"outside_hard_probability_range:{fair_team_a:.3f}")
         elif fair_team_a < soft_min or fair_team_a > soft_max:
             skipped.append(f"outside_stable_probability_range:{fair_team_a:.3f}")
+        overround_skip_reason = _asian_handicap_overround_skip_reason(row)
+        if overround_skip_reason:
+            skipped.append(overround_skip_reason)
         if np.isfinite(handicap):
             near_boundary, boundary_reason = _asian_handicap_grid_boundary_diagnostics(handicap, shape)
             selected.loc[index, "handicap_line_near_grid_boundary"] = "yes" if near_boundary else "no"
